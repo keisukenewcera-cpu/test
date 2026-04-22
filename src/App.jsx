@@ -132,6 +132,7 @@ function App() {
   const [csvMessage, setCsvMessage] = useState('')
   const [sortKey, setSortKey] = useState(() => savedData?.sortKey ?? 'employeeNo')
   const [sortOrder, setSortOrder] = useState(() => savedData?.sortOrder ?? 'asc')
+  const [activePage, setActivePage] = useState(() => savedData?.activePage ?? 'input')
   const [isCloudReady, setIsCloudReady] = useState(false)
   const [syncMessage, setSyncMessage] = useState(
     supabase ? 'Supabase同期を確認中...' : 'Supabase未設定（ローカル保存のみ）',
@@ -239,6 +240,11 @@ function App() {
   }
 
   const handleExportCsv = () => {
+    const csvContent = buildCsvContent()
+    downloadCsvFile(csvContent)
+  }
+
+  const buildCsvContent = () => {
     const headers = [
       '社員番号',
       '社員名',
@@ -251,7 +257,6 @@ function App() {
       '第3回目賞与',
       '備考欄',
     ]
-
     const escapeCsvValue = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`
     const rowsForExport = sortedRows.map((row) => [
       row.employeeNo,
@@ -265,11 +270,12 @@ function App() {
       row.thirdBonus,
       row.note,
     ])
-
-    const csvContent = [headers, ...rowsForExport]
+    return [headers, ...rowsForExport]
       .map((line) => line.map(escapeCsvValue).join(','))
       .join('\r\n')
+  }
 
+  const downloadCsvFile = (csvContent) => {
     const bom = '\uFEFF'
     const blob = new Blob([bom + csvContent], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
@@ -492,6 +498,9 @@ function App() {
         }
         if (typeof payload.sortKey === 'string') setSortKey(payload.sortKey)
         if (payload.sortOrder === 'asc' || payload.sortOrder === 'desc') setSortOrder(payload.sortOrder)
+        if (payload.activePage === 'input' || payload.activePage === 'calc') {
+          setActivePage(payload.activePage)
+        }
         setSyncMessage('Supabaseから復元済み')
       } else {
         setSyncMessage('Supabase同期待機中（初回保存で作成）')
@@ -522,6 +531,7 @@ function App() {
         targetSpecialCkTotal,
         sortKey,
         sortOrder,
+        activePage,
       }),
     )
   }, [
@@ -534,6 +544,7 @@ function App() {
     targetSpecialCkTotal,
     sortKey,
     sortOrder,
+    activePage,
   ])
 
   useEffect(() => {
@@ -549,6 +560,7 @@ function App() {
       targetSpecialCkTotal,
       sortKey,
       sortOrder,
+      activePage,
     }
 
     setSyncMessage('Supabaseに保存中...')
@@ -575,6 +587,7 @@ function App() {
     targetSpecialCkTotal,
     sortKey,
     sortOrder,
+    activePage,
     isCloudReady,
   ])
 
@@ -626,6 +639,244 @@ function App() {
                 <p className="description">
                   社員ごとに評価スコアを入力すると業績手当と第3回目賞与を自動計算します。
                 </p>
+              </div>
+              <button type="button" className="secondaryButton" onClick={() => setIsLoggedIn(false)}>
+                ログアウト
+              </button>
+            </div>
+            <div className="pageTabs">
+              <button
+                type="button"
+                className={`tabButton ${activePage === 'input' ? 'isActive' : ''}`}
+                onClick={() => setActivePage('input')}
+              >
+                入力ページ
+              </button>
+              <button
+                type="button"
+                className={`tabButton ${activePage === 'calc' ? 'isActive' : ''}`}
+                onClick={() => setActivePage('calc')}
+              >
+                自動計算ページ
+              </button>
+            </div>
+
+            {activePage === 'input' ? (
+              <>
+                <div className="actionRow">
+                  <div className="sortControls">
+                    <label className="sortLabel">
+                      並び替え
+                      <select value={sortKey} onChange={(event) => setSortKey(event.target.value)}>
+                        <option value="employeeNo">社員番号</option>
+                        <option value="employeeName">社員名</option>
+                        <option value="team">区分</option>
+                        <option value="grade">等級</option>
+                        <option value="score">評価スコア</option>
+                        <option value="performanceAllowance">業績手当</option>
+                        <option value="thirdBonus">第3回目賞与</option>
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      className="secondaryButton"
+                      onClick={() => setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
+                    >
+                      {sortOrder === 'asc' ? '昇順' : '降順'}
+                    </button>
+                  </div>
+                  <button type="button" className="primaryButton" onClick={addRow}>
+                    + 社員行を追加
+                  </button>
+                  <label className="csvImportButton">
+                    CSV取込
+                    <input type="file" accept=".csv" onChange={handleImportCsv} />
+                  </label>
+                  <button type="button" className="csvExportButton" onClick={handleExportCsv}>
+                    CSV掃き出し
+                  </button>
+                  <button
+                    type="button"
+                    className="csvMailButton"
+                    onClick={() => {
+                      const csvContent = buildCsvContent()
+                      downloadCsvFile(csvContent)
+                      const subject = encodeURIComponent('業績手当CSV送付')
+                      const body = encodeURIComponent(
+                        'CSVを作成しました。ダウンロードしたファイルを添付して送信してください。',
+                      )
+                      window.location.href = `mailto:keisuke.newcera@gmail.com?subject=${subject}&body=${body}`
+                    }}
+                  >
+                    CSVをメール送信
+                  </button>
+                </div>
+                <p className="syncMessage">{syncMessage}</p>
+                {csvMessage ? <p className="csvMessage">{csvMessage}</p> : null}
+
+                <div className="tableWrap">
+                  <table className="allowanceTable">
+                    <colgroup>
+                      <col className="colEmployeeInfo" />
+                      <col className="colPhoto" />
+                      <col className="colAllowanceInfo" />
+                      <col className="colNote" />
+                      <col className="colAction" />
+                    </colgroup>
+                    <thead>
+                      <tr>
+                        <th>社員情報</th>
+                        <th>顔写真 / 評価スコア</th>
+                        <th>手当情報</th>
+                        <th>備考欄</th>
+                        <th>操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sortedRows.map((row) => (
+                        <tr key={row.id}>
+                          <td>
+                            <div className="employeeInfoCell">
+                              <label>
+                                社員番号
+                                <input
+                                  type="text"
+                                  value={row.employeeNo}
+                                  onChange={(event) => updateRow(row.id, 'employeeNo', event.target.value)}
+                                  placeholder="1001"
+                                />
+                              </label>
+                              <label>
+                                社員名
+                                <input
+                                  type="text"
+                                  value={row.employeeName}
+                                  onChange={(event) => updateRow(row.id, 'employeeName', event.target.value)}
+                                  placeholder="山田 太郎"
+                                />
+                              </label>
+                              <label>
+                                区分
+                                <select
+                                  value={row.team ?? 'denture'}
+                                  onChange={(event) => updateRow(row.id, 'team', event.target.value)}
+                                >
+                                  <option value="denture">デンチャー</option>
+                                  <option value="ck">CK</option>
+                                </select>
+                              </label>
+                              <label>
+                                等級
+                                <select
+                                  value={row.grade}
+                                  onChange={(event) => updateRow(row.id, 'grade', event.target.value)}
+                                >
+                                  <option value="G1">G1</option>
+                                  <option value="G2">G2</option>
+                                  <option value="G3">G3</option>
+                                  <option value="G4">G4</option>
+                                  <option value="G5">G5</option>
+                                  <option value="G6">G6</option>
+                                  <option value="P3">P3</option>
+                                  <option value="G1J">G1準社員</option>
+                                  <option value="G2J">G2準社員</option>
+                                  <option value="G3J">G3準社員</option>
+                                  <option value="G4J">G4準社員</option>
+                                  <option value="G5J">G5準社員</option>
+                                  <option value="G6J">G6準社員</option>
+                                </select>
+                              </label>
+                            </div>
+                          </td>
+                          <td>
+                            <div className="photoCell">
+                              <label className="photoUploadArea">
+                                {row.photoDataUrl ? (
+                                  <img src={row.photoDataUrl} alt="社員顔写真" className="photoThumb" />
+                                ) : (
+                                  <div className="photoPlaceholder">未登録</div>
+                                )}
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  onChange={(event) => {
+                                    const file = event.target.files?.[0]
+                                    handlePhotoUpload(row.id, file)
+                                    event.target.value = ''
+                                  }}
+                                />
+                              </label>
+                              <label className="scoreUnderPhoto">
+                                スコア
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  value={row.score}
+                                  onChange={(event) =>
+                                    updateRow(
+                                      row.id,
+                                      'score',
+                                      sanitizeDecimalInput(event.target.value),
+                                    )
+                                  }
+                                />
+                              </label>
+                            </div>
+                          </td>
+                          <td>
+                            <div className="allowanceInfoCell">
+                              <div className="allowanceRow">
+                                <span>業績手当</span>
+                                <strong className="moneyCell">{formatJPY(row.performanceAllowance)}</strong>
+                              </div>
+                              <div className="allowanceRow">
+                                <span>特別手当</span>
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  value={row.specialAllowance}
+                                  onChange={(event) =>
+                                    updateRow(
+                                      row.id,
+                                      'specialAllowance',
+                                      sanitizeIntegerInput(event.target.value),
+                                    )
+                                  }
+                                />
+                              </div>
+                              <div className="allowanceRow">
+                                <span>第3回目賞与</span>
+                                <strong className="moneyCell">{formatJPY(row.thirdBonus)}</strong>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="noteCell">
+                            <input
+                              type="text"
+                              value={row.note}
+                              onChange={(event) => updateRow(row.id, 'note', event.target.value)}
+                              placeholder="備考"
+                            />
+                          </td>
+                          <td>
+                            <button
+                              type="button"
+                              className="dangerButton"
+                              onClick={() => removeRow(row.id)}
+                              disabled={computedRows.length === 1}
+                              aria-label="この行を削除"
+                            >
+                              ×
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            ) : (
+              <div className="calcPage">
                 <div className="targetPanel">
                   <div className="targetFields">
                     <label className="targetLabel">
@@ -731,253 +982,53 @@ function App() {
                       <input type="text" value={formatJPY(targetSpecialTotalValue)} readOnly />
                     </label>
                   </div>
-                  <p className="targetBreakdown">
-                    業績手当差額: デンチャー {formatJPY(Math.abs(denturePerformanceGap))}
-                    {denturePerformanceGap > 0 ? ' 不足' : denturePerformanceGap < 0 ? ' 超過' : ' 一致'} / CK{' '}
-                    {formatJPY(Math.abs(ckPerformanceGap))}
-                    {ckPerformanceGap > 0 ? ' 不足' : ckPerformanceGap < 0 ? ' 超過' : ' 一致'}
-                  </p>
-                  <p className="targetBreakdown">
-                    内訳差額: デンチャー {formatJPY(Math.abs(dentureGap))}
-                    {dentureGap > 0 ? ' 不足' : dentureGap < 0 ? ' 超過' : ' 一致'} / CK{' '}
-                    {formatJPY(Math.abs(ckGap))}
-                    {ckGap > 0 ? ' 不足' : ckGap < 0 ? ' 超過' : ' 一致'}
-                  </p>
-                  <p className={`targetGap ${totalGap < 0 ? 'isOver' : ''}`}>
-                    業績手当差額: {formatJPY(Math.abs(totalGap))}
-                    {totalGap > 0 ? ' 不足' : totalGap < 0 ? ' 超過' : ' 一致'}
-                  </p>
-                  <p className={`targetGap ${specialTotalGap < 0 ? 'isOver' : ''}`}>
-                    第3回目賞与差額: {formatJPY(Math.abs(specialTotalGap))}
-                    {specialTotalGap > 0
-                      ? ' 不足'
-                      : specialTotalGap < 0
-                        ? ' 超過'
-                        : ' 一致'}
-                  </p>
                 </div>
-              </div>
-              <button type="button" className="secondaryButton" onClick={() => setIsLoggedIn(false)}>
-                ログアウト
-              </button>
-            </div>
+                <p className="targetBreakdown">
+                  業績手当差額: デンチャー {formatJPY(Math.abs(denturePerformanceGap))}
+                  {denturePerformanceGap > 0 ? ' 不足' : denturePerformanceGap < 0 ? ' 超過' : ' 一致'} / CK{' '}
+                  {formatJPY(Math.abs(ckPerformanceGap))}
+                  {ckPerformanceGap > 0 ? ' 不足' : ckPerformanceGap < 0 ? ' 超過' : ' 一致'}
+                </p>
+                <p className="targetBreakdown">
+                  内訳差額: デンチャー {formatJPY(Math.abs(dentureGap))}
+                  {dentureGap > 0 ? ' 不足' : dentureGap < 0 ? ' 超過' : ' 一致'} / CK{' '}
+                  {formatJPY(Math.abs(ckGap))}
+                  {ckGap > 0 ? ' 不足' : ckGap < 0 ? ' 超過' : ' 一致'}
+                </p>
+                <p className={`targetGap ${totalGap < 0 ? 'isOver' : ''}`}>
+                  業績手当差額: {formatJPY(Math.abs(totalGap))}
+                  {totalGap > 0 ? ' 不足' : totalGap < 0 ? ' 超過' : ' 一致'}
+                </p>
+                <p className={`targetGap ${specialTotalGap < 0 ? 'isOver' : ''}`}>
+                  第3回目賞与差額: {formatJPY(Math.abs(specialTotalGap))}
+                  {specialTotalGap > 0
+                    ? ' 不足'
+                    : specialTotalGap < 0
+                      ? ' 超過'
+                      : ' 一致'}
+                </p>
 
-            <div className="actionRow">
-              <div className="sortControls">
-                <label className="sortLabel">
-                  並び替え
-                  <select value={sortKey} onChange={(event) => setSortKey(event.target.value)}>
-                    <option value="employeeNo">社員番号</option>
-                    <option value="employeeName">社員名</option>
-                    <option value="team">区分</option>
-                    <option value="grade">等級</option>
-                    <option value="score">評価スコア</option>
-                    <option value="performanceAllowance">業績手当</option>
-                    <option value="thirdBonus">第3回目賞与</option>
-                  </select>
-                </label>
-                <button
-                  type="button"
-                  className="secondaryButton"
-                  onClick={() => setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
-                >
-                  {sortOrder === 'asc' ? '昇順' : '降順'}
-                </button>
-              </div>
-              <button type="button" className="primaryButton" onClick={addRow}>
-                + 社員行を追加
-              </button>
-              <label className="csvImportButton">
-                CSV取込
-                <input type="file" accept=".csv" onChange={handleImportCsv} />
-              </label>
-              <button type="button" className="csvExportButton" onClick={handleExportCsv}>
-                CSV掃き出し
-              </button>
-            </div>
-            <p className="syncMessage">{syncMessage}</p>
-            {csvMessage ? <p className="csvMessage">{csvMessage}</p> : null}
+                <div className="result">
+                  <div className="resultRow">
+                    <span>業績手当 合計</span>
+                    <strong>{formatJPY(totals.performanceAllowance)}</strong>
+                  </div>
+                  <div className="resultRow">
+                    <span>特別手当 合計</span>
+                    <strong>{formatJPY(totals.specialAllowance)}</strong>
+                  </div>
+                  <div className="resultRow total">
+                    <span>第3回目賞与 合計</span>
+                    <strong>{formatJPY(totals.thirdBonus)}</strong>
+                  </div>
+                </div>
 
-            <div className="tableWrap">
-              <table className="allowanceTable">
-                <colgroup>
-                  <col className="colEmployeeInfo" />
-                  <col className="colPhoto" />
-                  <col className="colAllowanceInfo" />
-                  <col className="colNote" />
-                  <col className="colAction" />
-                </colgroup>
-                <thead>
-                  <tr>
-                    <th>社員情報</th>
-                    <th>顔写真 / 評価スコア</th>
-                    <th>手当情報</th>
-                    <th>備考欄</th>
-                    <th>操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedRows.map((row) => (
-                    <tr key={row.id}>
-                      <td>
-                        <div className="employeeInfoCell">
-                          <label>
-                            社員番号
-                            <input
-                              type="text"
-                              value={row.employeeNo}
-                              onChange={(event) => updateRow(row.id, 'employeeNo', event.target.value)}
-                              placeholder="1001"
-                            />
-                          </label>
-                          <label>
-                            社員名
-                            <input
-                              type="text"
-                              value={row.employeeName}
-                              onChange={(event) => updateRow(row.id, 'employeeName', event.target.value)}
-                              placeholder="山田 太郎"
-                            />
-                          </label>
-                          <label>
-                            区分
-                            <select
-                              value={row.team ?? 'denture'}
-                              onChange={(event) => updateRow(row.id, 'team', event.target.value)}
-                            >
-                              <option value="denture">デンチャー</option>
-                              <option value="ck">CK</option>
-                            </select>
-                          </label>
-                          <label>
-                            等級
-                            <select
-                              value={row.grade}
-                              onChange={(event) => updateRow(row.id, 'grade', event.target.value)}
-                            >
-                              <option value="G1">G1</option>
-                              <option value="G2">G2</option>
-                              <option value="G3">G3</option>
-                              <option value="G4">G4</option>
-                              <option value="G5">G5</option>
-                              <option value="G6">G6</option>
-                              <option value="P3">P3</option>
-                              <option value="G1J">G1準社員</option>
-                              <option value="G2J">G2準社員</option>
-                              <option value="G3J">G3準社員</option>
-                              <option value="G4J">G4準社員</option>
-                              <option value="G5J">G5準社員</option>
-                              <option value="G6J">G6準社員</option>
-                            </select>
-                          </label>
-                        </div>
-                      </td>
-                      <td>
-                        <div className="photoCell">
-                          <label className="photoUploadArea">
-                            {row.photoDataUrl ? (
-                              <img src={row.photoDataUrl} alt="社員顔写真" className="photoThumb" />
-                            ) : (
-                              <div className="photoPlaceholder">未登録</div>
-                            )}
-                            <input
-                              type="file"
-                              accept="image/*"
-                              onChange={(event) => {
-                                const file = event.target.files?.[0]
-                                handlePhotoUpload(row.id, file)
-                                event.target.value = ''
-                              }}
-                            />
-                          </label>
-                          <label className="scoreUnderPhoto">
-                            スコア
-                            <input
-                              type="text"
-                              inputMode="numeric"
-                              value={row.score}
-                              onChange={(event) =>
-                                updateRow(
-                                  row.id,
-                                  'score',
-                                  sanitizeDecimalInput(event.target.value),
-                                )
-                              }
-                            />
-                          </label>
-                        </div>
-                      </td>
-                      <td>
-                        <div className="allowanceInfoCell">
-                          <div className="allowanceRow">
-                            <span>業績手当</span>
-                            <strong className="moneyCell">{formatJPY(row.performanceAllowance)}</strong>
-                          </div>
-                          <div className="allowanceRow">
-                            <span>特別手当</span>
-                            <input
-                              type="text"
-                              inputMode="numeric"
-                              value={row.specialAllowance}
-                              onChange={(event) =>
-                                updateRow(
-                                  row.id,
-                                  'specialAllowance',
-                                  sanitizeIntegerInput(event.target.value),
-                                )
-                              }
-                            />
-                          </div>
-                          <div className="allowanceRow">
-                            <span>第3回目賞与</span>
-                            <strong className="moneyCell">{formatJPY(row.thirdBonus)}</strong>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="noteCell">
-                        <input
-                          type="text"
-                          value={row.note}
-                          onChange={(event) => updateRow(row.id, 'note', event.target.value)}
-                          placeholder="備考"
-                        />
-                      </td>
-                      <td>
-                        <button
-                          type="button"
-                          className="dangerButton"
-                          onClick={() => removeRow(row.id)}
-                          disabled={computedRows.length === 1}
-                          aria-label="この行を削除"
-                        >
-                          ×
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="result">
-              <div className="resultRow">
-                <span>業績手当 合計</span>
-                <strong>{formatJPY(totals.performanceAllowance)}</strong>
+                <p className="formula">
+                  計算式: 業績手当 = (個人のスコア×等級係数) ÷ 各区分の(スコア×係数合計) × 区分別業績手当総額,
+                  第3回目賞与 = (個人のスコア×等級係数) ÷ 各区分の(スコア×係数合計) × 区分別特別賞与総額
+                </p>
               </div>
-              <div className="resultRow">
-                <span>特別手当 合計</span>
-                <strong>{formatJPY(totals.specialAllowance)}</strong>
-              </div>
-              <div className="resultRow total">
-                <span>第3回目賞与 合計</span>
-                <strong>{formatJPY(totals.thirdBonus)}</strong>
-              </div>
-            </div>
-
-            <p className="formula">
-              計算式: 業績手当 = (個人のスコア×等級係数) ÷ 各区分の(スコア×係数合計) × 区分別業績手当総額,
-              第3回目賞与 = (個人のスコア×等級係数) ÷ 各区分の(スコア×係数合計) × 区分別特別賞与総額
-            </p>
+            )}
           </>
         )}
       </section>
