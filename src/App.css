@@ -1,0 +1,485 @@
+.app {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+.card {
+  width: 100%;
+  max-width: 1220px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-radius: 24px;
+  padding: 30px;
+  box-shadow: 0 20px 60px rgba(56, 72, 128, 0.24);
+}
+
+h1 {
+  margin: 0;
+  font-size: 31px;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  color: #111827;
+}
+
+.eyebrow {
+  display: inline-block;
+  margin: 0 0 10px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  background: rgba(79, 70, 229, 0.12);
+  color: #4338ca;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.description {
+  margin: 10px 0 24px;
+  color: #4b5563;
+  font-size: 15px;
+}
+
+.targetPanel {
+  margin-top: -10px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid #dbe1f3;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.targetFields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.targetLabel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.targetLabel input {
+  max-width: 220px;
+}
+
+.targetLabel input[readonly] {
+  background: #eef2ff;
+  color: #1e293b;
+  font-weight: 700;
+}
+
+.targetGap {
+  margin: 8px 0 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #1d4ed8;
+}
+
+.targetGap.isOver {
+  color: #b91c1c;
+}
+
+.cardHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+input {
+  border: 1px solid #d7dcf0;
+  border-radius: 12px;
+  padding: 11px 12px;
+  font-size: 15px;
+  background: rgba(255, 255, 255, 0.88);
+  color: #111827;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+input:focus {
+  border-color: #6366f1;
+  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.16);
+  transform: translateY(-1px);
+}
+
+select {
+  border: 1px solid #d7dcf0;
+  border-radius: 12px;
+  padding: 11px 12px;
+  font-size: 15px;
+  background: rgba(255, 255, 255, 0.88);
+  color: #111827;
+  outline: none;
+}
+
+select:focus {
+  border-color: #6366f1;
+  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.16);
+}
+
+.loginForm {
+  display: grid;
+  gap: 14px;
+}
+
+.primaryButton,
+.secondaryButton {
+  border: none;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease;
+}
+
+.primaryButton:hover,
+.secondaryButton:hover {
+  transform: translateY(-1px);
+}
+
+.primaryButton:active,
+.secondaryButton:active {
+  transform: translateY(0);
+}
+
+.primaryButton {
+  background: linear-gradient(135deg, #4f46e5, #7c3aed);
+  color: #ffffff;
+  padding: 11px 14px;
+  box-shadow: 0 10px 28px rgba(79, 70, 229, 0.3);
+}
+
+.secondaryButton {
+  background: rgba(255, 255, 255, 0.74);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  color: #334155;
+  padding: 10px 13px;
+}
+
+.dangerButton {
+  border: none;
+  border-radius: 10px;
+  background: #fee2e2;
+  color: #b91c1c;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.dangerButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.errorMessage {
+  margin: 0;
+  font-size: 13px;
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
+.result {
+  margin-top: 22px;
+  padding: 14px;
+  border-radius: 16px;
+  background: linear-gradient(160deg, #eef2ff, #e0e7ff);
+  border: 1px solid #c7d2fe;
+}
+
+.resultRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #1f2937;
+  font-weight: 600;
+}
+
+.resultRow + .resultRow {
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(99, 102, 241, 0.35);
+}
+
+.resultRow strong {
+  font-size: 20px;
+  letter-spacing: -0.01em;
+}
+
+.resultRow.total strong {
+  color: #312e81;
+}
+
+.formula {
+  margin-top: 15px;
+  font-size: 13px;
+  color: #4b5563;
+  line-height: 1.5;
+  background: rgba(255, 255, 255, 0.55);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.tableWrap {
+  margin-top: 8px;
+  overflow: hidden;
+  border: 1px solid #dbe1f3;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.allowanceTable {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.allowanceTable th {
+  background: #eef2ff;
+  color: #334155;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: left;
+  padding: 8px 7px;
+  border-bottom: 1px solid #dbe1f3;
+  white-space: nowrap;
+}
+
+.allowanceTable td {
+  padding: 7px;
+  border-bottom: 1px solid #e8ecfa;
+  vertical-align: middle;
+}
+
+.allowanceTable tbody tr:nth-child(even) {
+  background: rgba(248, 250, 252, 0.55);
+}
+
+.allowanceTable tbody tr:hover {
+  background: rgba(224, 231, 255, 0.45);
+}
+
+.allowanceTable td input,
+.allowanceTable td select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 8px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.moneyCell {
+  color: #1e293b;
+  font-weight: 700;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.actionRow {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sortControls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sortLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.sortLabel select {
+  min-width: 150px;
+  padding: 9px 10px;
+}
+
+.csvImportButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  border: 1px solid rgba(79, 70, 229, 0.35);
+  background: rgba(255, 255, 255, 0.85);
+  color: #3730a3;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+
+.csvImportButton input {
+  display: none;
+}
+
+.csvExportButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  background: rgba(236, 253, 245, 0.9);
+  color: #065f46;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+
+.csvMessage {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: #334155;
+}
+
+.syncMessage {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #475569;
+}
+
+.colEmployeeNo {
+  width: 8.5%;
+}
+
+.colEmployeeName {
+  width: 11%;
+}
+
+.colGrade {
+  width: 8%;
+}
+
+.colScore {
+  width: 8.5%;
+}
+
+.colMoney {
+  width: 12%;
+}
+
+.colNote {
+  width: 12%;
+}
+
+.colAction {
+  width: 4%;
+}
+
+@media (max-width: 640px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .card {
+    padding: 20px;
+    border-radius: 18px;
+  }
+
+  h1 {
+    font-size: 26px;
+  }
+
+  .cardHeader {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .targetLabel {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .targetFields {
+    grid-template-columns: 1fr;
+  }
+
+  .targetLabel input {
+    max-width: none;
+    width: 100%;
+  }
+
+  .resultRow strong {
+    font-size: 18px;
+  }
+
+  .actionRow {
+    justify-content: stretch;
+  }
+
+  .actionRow .primaryButton {
+    width: 100%;
+  }
+
+  .csvImportButton {
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .csvExportButton {
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .sortControls,
+  .sortLabel {
+    width: 100%;
+  }
+
+  .sortControls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .sortLabel {
+    justify-content: space-between;
+  }
+
+  .tableWrap {
+    overflow: auto;
+  }
+
+  .allowanceTable {
+    min-width: 980px;
+  }
+}
