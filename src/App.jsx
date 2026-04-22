@@ -40,6 +40,14 @@ const gradeAliasMap = {
   G6J: 'G6J',
 }
 
+const teamAliasMap = {
+  デンチャー: 'denture',
+  denture: 'denture',
+  DENTURE: 'denture',
+  CK: 'ck',
+  ck: 'ck',
+}
+
 const sanitizeIntegerInput = (value) => value.replace(/\D/g, '').replace(/^0+(?=\d)/, '')
 
 const sanitizeDecimalInput = (value) => {
@@ -55,10 +63,24 @@ const sanitizeDecimalInput = (value) => {
   return normalizedInteger
 }
 
+const sanitizePercentInput = (value) => {
+  const cleaned = value.replace(/[^\d.]/g, '')
+  const [integerPart = '', ...decimalParts] = cleaned.split('.')
+  const normalizedInteger = integerPart.replace(/^0+(?=\d)/, '')
+  const decimalPart = decimalParts.join('').slice(0, 1)
+
+  if (cleaned.includes('.')) {
+    return `${normalizedInteger || '0'}.${decimalPart}`
+  }
+
+  return normalizedInteger
+}
+
 const createRow = (index) => ({
   id: Date.now() + index,
   employeeNo: '',
   employeeName: '',
+  team: 'denture',
   grade: 'G3',
   score: '',
   specialAllowance: '',
@@ -90,12 +112,21 @@ function App() {
     const savedRows = savedData?.rows
     return Array.isArray(savedRows) && savedRows.length > 0 ? savedRows : [createRow(0), createRow(1)]
   })
-  const [departmentSales, setDepartmentSales] = useState(() => savedData?.departmentSales ?? '')
-  const [performanceRatePercent, setPerformanceRatePercent] = useState(
-    () => savedData?.performanceRatePercent ?? '',
+  const [departmentSalesDenture, setDepartmentSalesDenture] = useState(
+    () => savedData?.departmentSalesDenture ?? '',
   )
-  const [targetSpecialBonusTotal, setTargetSpecialBonusTotal] = useState(
-    () => savedData?.targetSpecialBonusTotal ?? '',
+  const [departmentSalesCk, setDepartmentSalesCk] = useState(() => savedData?.departmentSalesCk ?? '')
+  const [performanceRatePercentDenture, setPerformanceRatePercentDenture] = useState(
+    () => savedData?.performanceRatePercentDenture ?? '',
+  )
+  const [performanceRatePercentCk, setPerformanceRatePercentCk] = useState(
+    () => savedData?.performanceRatePercentCk ?? '',
+  )
+  const [targetSpecialDentureTotal, setTargetSpecialDentureTotal] = useState(
+    () => savedData?.targetSpecialDentureTotal ?? '',
+  )
+  const [targetSpecialCkTotal, setTargetSpecialCkTotal] = useState(
+    () => savedData?.targetSpecialCkTotal ?? '',
   )
   const [csvMessage, setCsvMessage] = useState('')
   const [sortKey, setSortKey] = useState(() => savedData?.sortKey ?? 'employeeNo')
@@ -147,6 +178,7 @@ function App() {
       const employeeNoIdx = headerIndex('社員番号')
       const employeeNameIdx = headerIndex('社員名')
       const gradeIdx = headerIndex('等級')
+      const teamIdx = headerIndex('区分')
       const scoreIdx = headerIndex('評価スコア')
       const specialIdx = headerIndex('特別手当')
       const noteIdx = headerIndex('備考欄')
@@ -162,11 +194,14 @@ function App() {
           const cols = parseLine(line)
           const inputGrade = gradeIdx >= 0 ? cols[gradeIdx] || '' : ''
           const normalizedGrade = gradeAliasMap[inputGrade] ?? 'G3'
+          const inputTeam = teamIdx >= 0 ? cols[teamIdx] || '' : ''
+          const normalizedTeam = teamAliasMap[inputTeam] ?? 'denture'
 
           return {
             id: Date.now() + index,
             employeeNo: employeeNoIdx >= 0 ? cols[employeeNoIdx] || '' : '',
             employeeName: employeeNameIdx >= 0 ? cols[employeeNameIdx] || '' : '',
+            team: normalizedTeam,
             grade: normalizedGrade,
             score: scoreIdx >= 0 ? sanitizeDecimalInput(cols[scoreIdx] || '') : '',
             specialAllowance:
@@ -194,6 +229,7 @@ function App() {
     const headers = [
       '社員番号',
       '社員名',
+      '区分',
       '等級',
       '評価スコア',
       '業績手当',
@@ -206,6 +242,7 @@ function App() {
     const rowsForExport = sortedRows.map((row) => [
       row.employeeNo,
       row.employeeName,
+      row.team === 'ck' ? 'CK' : 'デンチャー',
       row.grade,
       row.score,
       row.performanceAllowance,
@@ -232,32 +269,50 @@ function App() {
   }
 
   const computedRows = useMemo(() => {
-    const salesValue = Number(departmentSales === '' ? 0 : departmentSales) || 0
-    const rateValue = Number(performanceRatePercent === '' ? 0 : performanceRatePercent) || 0
-    const targetTotal = Math.round(salesValue * (rateValue / 100))
-    const targetSpecialTotal =
-      Number(targetSpecialBonusTotal === '' ? 0 : targetSpecialBonusTotal) || 0
+    const salesDentureValue = Number(departmentSalesDenture === '' ? 0 : departmentSalesDenture) || 0
+    const salesCkValue = Number(departmentSalesCk === '' ? 0 : departmentSalesCk) || 0
+    const rateDentureValue =
+      Number(performanceRatePercentDenture === '' ? 0 : performanceRatePercentDenture) || 0
+    const rateCkValue = Number(performanceRatePercentCk === '' ? 0 : performanceRatePercentCk) || 0
+    const targetDentureTotal = Math.round(salesDentureValue * (rateDentureValue / 100))
+    const targetCkTotal = Math.round(salesCkValue * (rateCkValue / 100))
+    const targetSpecialDenture =
+      Number(targetSpecialDentureTotal === '' ? 0 : targetSpecialDentureTotal) || 0
+    const targetSpecialCk = Number(targetSpecialCkTotal === '' ? 0 : targetSpecialCkTotal) || 0
 
     const weightedRows = rows.map((row) => {
       const score = Number(row.score === '' ? 0 : row.score) || 0
       const specialAllowance = Number(row.specialAllowance === '' ? 0 : row.specialAllowance) || 0
       const gradeRate = gradeRates[row.grade] ?? 0
       const weightedScore = score * gradeRate
+      const team = row.team === 'ck' ? 'ck' : 'denture'
 
       return {
         ...row,
+        team,
         score,
         specialAllowance,
         weightedScore,
       }
     })
 
-    const weightedTotal = weightedRows.reduce((sum, row) => sum + row.weightedScore, 0)
+    const dentureWeightedTotal = weightedRows
+      .filter((row) => row.team === 'denture')
+      .reduce((sum, row) => sum + row.weightedScore, 0)
+    const ckWeightedTotal = weightedRows
+      .filter((row) => row.team === 'ck')
+      .reduce((sum, row) => sum + row.weightedScore, 0)
 
     return weightedRows.map((row) => {
-      const allocationRate = weightedTotal > 0 ? row.weightedScore / weightedTotal : 0
-      const performanceAllowance = Math.round(allocationRate * targetTotal)
-      const thirdBonus = Math.round(allocationRate * targetSpecialTotal)
+      const performanceTeamWeightedTotal = row.team === 'ck' ? ckWeightedTotal : dentureWeightedTotal
+      const performanceTeamTargetTotal = row.team === 'ck' ? targetCkTotal : targetDentureTotal
+      const performanceAllocationRate =
+        performanceTeamWeightedTotal > 0 ? row.weightedScore / performanceTeamWeightedTotal : 0
+      const performanceAllowance = Math.round(performanceAllocationRate * performanceTeamTargetTotal)
+      const teamWeightedTotal = row.team === 'ck' ? ckWeightedTotal : dentureWeightedTotal
+      const teamTargetTotal = row.team === 'ck' ? targetSpecialCk : targetSpecialDenture
+      const teamAllocationRate = teamWeightedTotal > 0 ? row.weightedScore / teamWeightedTotal : 0
+      const thirdBonus = Math.round(teamAllocationRate * teamTargetTotal)
 
       return {
         ...row,
@@ -265,7 +320,15 @@ function App() {
         thirdBonus,
       }
     })
-  }, [rows, departmentSales, performanceRatePercent, targetSpecialBonusTotal])
+  }, [
+    rows,
+    departmentSalesDenture,
+    departmentSalesCk,
+    performanceRatePercentDenture,
+    performanceRatePercentCk,
+    targetSpecialDentureTotal,
+    targetSpecialCkTotal,
+  ])
 
   const totals = useMemo(
     () =>
@@ -291,18 +354,42 @@ function App() {
         return (a.performanceAllowance - b.performanceAllowance) * direction
       if (sortKey === 'thirdBonus') return (a.thirdBonus - b.thirdBonus) * direction
       if (sortKey === 'grade') return (gradeRates[a.grade] - gradeRates[b.grade]) * direction
+      if (sortKey === 'team') return toString(a.team).localeCompare(toString(b.team), 'ja') * direction
 
       return toString(a[sortKey]).localeCompare(toString(b[sortKey]), 'ja') * direction
     })
   }, [computedRows, sortKey, sortOrder])
 
-  const salesValue = Number(departmentSales === '' ? 0 : departmentSales) || 0
-  const rateValue = Number(performanceRatePercent === '' ? 0 : performanceRatePercent) || 0
-  const targetTotalValue = Math.round(salesValue * (rateValue / 100))
-  const targetSpecialTotalValue =
-    Number(targetSpecialBonusTotal === '' ? 0 : targetSpecialBonusTotal) || 0
+  const salesDentureValue = Number(departmentSalesDenture === '' ? 0 : departmentSalesDenture) || 0
+  const salesCkValue = Number(departmentSalesCk === '' ? 0 : departmentSalesCk) || 0
+  const rateDentureValue =
+    Number(performanceRatePercentDenture === '' ? 0 : performanceRatePercentDenture) || 0
+  const rateCkValue = Number(performanceRatePercentCk === '' ? 0 : performanceRatePercentCk) || 0
+  const targetTotalDentureValue = Math.round(salesDentureValue * (rateDentureValue / 100))
+  const targetTotalCkValue = Math.round(salesCkValue * (rateCkValue / 100))
+  const targetTotalValue = targetTotalDentureValue + targetTotalCkValue
+  const targetSpecialDentureValue =
+    Number(targetSpecialDentureTotal === '' ? 0 : targetSpecialDentureTotal) || 0
+  const targetSpecialCkValue = Number(targetSpecialCkTotal === '' ? 0 : targetSpecialCkTotal) || 0
+  const targetSpecialTotalValue = targetSpecialDentureValue + targetSpecialCkValue
   const totalGap = targetTotalValue - totals.performanceAllowance
   const specialTotalGap = targetSpecialTotalValue - totals.thirdBonus
+  const denturePerformanceTotal = computedRows
+    .filter((row) => row.team === 'denture')
+    .reduce((sum, row) => sum + row.performanceAllowance, 0)
+  const ckPerformanceTotal = computedRows
+    .filter((row) => row.team === 'ck')
+    .reduce((sum, row) => sum + row.performanceAllowance, 0)
+  const denturePerformanceGap = targetTotalDentureValue - denturePerformanceTotal
+  const ckPerformanceGap = targetTotalCkValue - ckPerformanceTotal
+  const dentureThirdBonusTotal = computedRows
+    .filter((row) => row.team === 'denture')
+    .reduce((sum, row) => sum + row.thirdBonus, 0)
+  const ckThirdBonusTotal = computedRows
+    .filter((row) => row.team === 'ck')
+    .reduce((sum, row) => sum + row.thirdBonus, 0)
+  const dentureGap = targetSpecialDentureValue - dentureThirdBonusTotal
+  const ckGap = targetSpecialCkValue - ckThirdBonusTotal
 
   const formatJPY = (value) =>
     new Intl.NumberFormat('ja-JP', {
@@ -351,12 +438,42 @@ function App() {
       if (payload && typeof payload === 'object') {
         const cloudRows = Array.isArray(payload.rows) && payload.rows.length > 0 ? payload.rows : null
         if (cloudRows) setRows(cloudRows)
-        if (typeof payload.departmentSales === 'string') setDepartmentSales(payload.departmentSales)
-        if (typeof payload.performanceRatePercent === 'string') {
-          setPerformanceRatePercent(payload.performanceRatePercent)
+        if (typeof payload.departmentSalesDenture === 'string') {
+          setDepartmentSalesDenture(payload.departmentSalesDenture)
         }
-        if (typeof payload.targetSpecialBonusTotal === 'string') {
-          setTargetSpecialBonusTotal(payload.targetSpecialBonusTotal)
+        if (typeof payload.departmentSalesCk === 'string') setDepartmentSalesCk(payload.departmentSalesCk)
+        if (typeof payload.performanceRatePercentDenture === 'string') {
+          setPerformanceRatePercentDenture(payload.performanceRatePercentDenture)
+        }
+        if (typeof payload.performanceRatePercentCk === 'string') {
+          setPerformanceRatePercentCk(payload.performanceRatePercentCk)
+        }
+        if (
+          typeof payload.departmentSales === 'string' &&
+          typeof payload.departmentSalesDenture !== 'string' &&
+          typeof payload.departmentSalesCk !== 'string'
+        ) {
+          setDepartmentSalesDenture(payload.departmentSales)
+        }
+        if (
+          typeof payload.performanceRatePercent === 'string' &&
+          typeof payload.performanceRatePercentDenture !== 'string' &&
+          typeof payload.performanceRatePercentCk !== 'string'
+        ) {
+          setPerformanceRatePercentDenture(payload.performanceRatePercent)
+        }
+        if (typeof payload.targetSpecialDentureTotal === 'string') {
+          setTargetSpecialDentureTotal(payload.targetSpecialDentureTotal)
+        }
+        if (typeof payload.targetSpecialCkTotal === 'string') {
+          setTargetSpecialCkTotal(payload.targetSpecialCkTotal)
+        }
+        if (
+          typeof payload.targetSpecialBonusTotal === 'string' &&
+          typeof payload.targetSpecialDentureTotal !== 'string' &&
+          typeof payload.targetSpecialCkTotal !== 'string'
+        ) {
+          setTargetSpecialDentureTotal(payload.targetSpecialBonusTotal)
         }
         if (typeof payload.sortKey === 'string') setSortKey(payload.sortKey)
         if (payload.sortOrder === 'asc' || payload.sortOrder === 'desc') setSortOrder(payload.sortOrder)
@@ -382,23 +499,39 @@ function App() {
       STORAGE_KEY,
       JSON.stringify({
         rows,
-        departmentSales,
-        performanceRatePercent,
-        targetSpecialBonusTotal,
+        departmentSalesDenture,
+        departmentSalesCk,
+        performanceRatePercentDenture,
+        performanceRatePercentCk,
+        targetSpecialDentureTotal,
+        targetSpecialCkTotal,
         sortKey,
         sortOrder,
       }),
     )
-  }, [rows, departmentSales, performanceRatePercent, targetSpecialBonusTotal, sortKey, sortOrder])
+  }, [
+    rows,
+    departmentSalesDenture,
+    departmentSalesCk,
+    performanceRatePercentDenture,
+    performanceRatePercentCk,
+    targetSpecialDentureTotal,
+    targetSpecialCkTotal,
+    sortKey,
+    sortOrder,
+  ])
 
   useEffect(() => {
     if (!supabase || !isCloudReady) return
 
     const payload = {
       rows,
-      departmentSales,
-      performanceRatePercent,
-      targetSpecialBonusTotal,
+      departmentSalesDenture,
+      departmentSalesCk,
+      performanceRatePercentDenture,
+      performanceRatePercentCk,
+      targetSpecialDentureTotal,
+      targetSpecialCkTotal,
       sortKey,
       sortOrder,
     }
@@ -419,9 +552,12 @@ function App() {
     return () => window.clearTimeout(timer)
   }, [
     rows,
-    departmentSales,
-    performanceRatePercent,
-    targetSpecialBonusTotal,
+    departmentSalesDenture,
+    departmentSalesCk,
+    performanceRatePercentDenture,
+    performanceRatePercentCk,
+    targetSpecialDentureTotal,
+    targetSpecialCkTotal,
     sortKey,
     sortOrder,
     isCloudReady,
@@ -478,13 +614,15 @@ function App() {
                 <div className="targetPanel">
                   <div className="targetFields">
                     <label className="targetLabel">
-                      部門売上
+                      部門売上(デンチャー)
                       <input
                         type="text"
                         inputMode="numeric"
-                        value={departmentSales === '' ? '' : formatJPY(Number(departmentSales))}
+                        value={
+                          departmentSalesDenture === '' ? '' : formatJPY(Number(departmentSalesDenture))
+                        }
                         onChange={(event) =>
-                          setDepartmentSales(
+                          setDepartmentSalesDenture(
                             sanitizeIntegerInput(event.target.value),
                           )
                         }
@@ -492,42 +630,104 @@ function App() {
                       />
                     </label>
                     <label className="targetLabel">
-                      業績手当率 (%)
+                      部門売上(CK)
                       <input
                         type="text"
                         inputMode="numeric"
-                        value={performanceRatePercent}
+                        value={departmentSalesCk === '' ? '' : formatJPY(Number(departmentSalesCk))}
                         onChange={(event) =>
-                          setPerformanceRatePercent(
+                          setDepartmentSalesCk(
                             sanitizeIntegerInput(event.target.value),
                           )
                         }
-                        placeholder="例: 12"
+                        placeholder="売上を入力"
                       />
                     </label>
                     <label className="targetLabel">
-                      業績手当総額 (部門売上×率)
-                      <input type="text" value={formatJPY(targetTotalValue)} readOnly />
-                    </label>
-                    <label className="targetLabel">
-                      特別賞与総額
+                      業績手当率(デンチャー %)
                       <input
                         type="text"
                         inputMode="numeric"
-                        value={
-                          targetSpecialBonusTotal === ''
-                            ? ''
-                            : formatJPY(Number(targetSpecialBonusTotal))
-                        }
+                        value={performanceRatePercentDenture}
                         onChange={(event) =>
-                          setTargetSpecialBonusTotal(
+                          setPerformanceRatePercentDenture(
+                            sanitizePercentInput(event.target.value),
+                          )
+                        }
+                        placeholder="例: 2.8"
+                      />
+                    </label>
+                    <label className="targetLabel">
+                      業績手当率(CK %)
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={performanceRatePercentCk}
+                        onChange={(event) =>
+                          setPerformanceRatePercentCk(
+                            sanitizePercentInput(event.target.value),
+                          )
+                        }
+                        placeholder="例: 2.8"
+                      />
+                    </label>
+                    <label className="targetLabel">
+                      業績手当総額(デンチャー)
+                      <input type="text" value={formatJPY(targetTotalDentureValue)} readOnly />
+                    </label>
+                    <label className="targetLabel">
+                      業績手当総額(CK)
+                      <input type="text" value={formatJPY(targetTotalCkValue)} readOnly />
+                    </label>
+                    <label className="targetLabel">
+                      業績手当総額(合計)
+                      <input type="text" value={formatJPY(targetTotalValue)} readOnly />
+                    </label>
+                    <label className="targetLabel">
+                      特別賞与総額(デンチャー)
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={targetSpecialDentureTotal === '' ? '' : formatJPY(Number(targetSpecialDentureTotal))}
+                        onChange={(event) =>
+                          setTargetSpecialDentureTotal(
                             sanitizeIntegerInput(event.target.value),
                           )
                         }
                         placeholder="総額を入力"
                       />
                     </label>
+                    <label className="targetLabel">
+                      特別賞与総額(CK)
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={targetSpecialCkTotal === '' ? '' : formatJPY(Number(targetSpecialCkTotal))}
+                        onChange={(event) =>
+                          setTargetSpecialCkTotal(
+                            sanitizeIntegerInput(event.target.value),
+                          )
+                        }
+                        placeholder="総額を入力"
+                      />
+                    </label>
+                    <label className="targetLabel">
+                      特別賞与総額(合計)
+                      <input type="text" value={formatJPY(targetSpecialTotalValue)} readOnly />
+                    </label>
                   </div>
+                  <p className="targetBreakdown">
+                    業績手当差額: デンチャー {formatJPY(Math.abs(denturePerformanceGap))}
+                    {denturePerformanceGap > 0 ? ' 不足' : denturePerformanceGap < 0 ? ' 超過' : ' 一致'} / CK{' '}
+                    {formatJPY(Math.abs(ckPerformanceGap))}
+                    {ckPerformanceGap > 0 ? ' 不足' : ckPerformanceGap < 0 ? ' 超過' : ' 一致'}
+                  </p>
+                  <p className="targetBreakdown">
+                    内訳差額: デンチャー {formatJPY(Math.abs(dentureGap))}
+                    {dentureGap > 0 ? ' 不足' : dentureGap < 0 ? ' 超過' : ' 一致'} / CK{' '}
+                    {formatJPY(Math.abs(ckGap))}
+                    {ckGap > 0 ? ' 不足' : ckGap < 0 ? ' 超過' : ' 一致'}
+                  </p>
                   <p className={`targetGap ${totalGap < 0 ? 'isOver' : ''}`}>
                     業績手当差額: {formatJPY(Math.abs(totalGap))}
                     {totalGap > 0 ? ' 不足' : totalGap < 0 ? ' 超過' : ' 一致'}
@@ -554,6 +754,7 @@ function App() {
                   <select value={sortKey} onChange={(event) => setSortKey(event.target.value)}>
                     <option value="employeeNo">社員番号</option>
                     <option value="employeeName">社員名</option>
+                    <option value="team">区分</option>
                     <option value="grade">等級</option>
                     <option value="score">評価スコア</option>
                     <option value="performanceAllowance">業績手当</option>
@@ -587,6 +788,7 @@ function App() {
                 <colgroup>
                   <col className="colEmployeeNo" />
                   <col className="colEmployeeName" />
+                  <col className="colTeam" />
                   <col className="colGrade" />
                   <col className="colScore" />
                   <col className="colMoney" />
@@ -599,6 +801,7 @@ function App() {
                   <tr>
                     <th>社員番号</th>
                     <th>社員名</th>
+                    <th>区分</th>
                     <th>等級</th>
                     <th>評価スコア</th>
                     <th>業績手当</th>
@@ -626,6 +829,15 @@ function App() {
                           onChange={(event) => updateRow(row.id, 'employeeName', event.target.value)}
                           placeholder="山田 太郎"
                         />
+                      </td>
+                      <td>
+                        <select
+                          value={row.team ?? 'denture'}
+                          onChange={(event) => updateRow(row.id, 'team', event.target.value)}
+                        >
+                          <option value="denture">デンチャー</option>
+                          <option value="ck">CK</option>
+                        </select>
                       </td>
                       <td>
                         <select
@@ -718,8 +930,8 @@ function App() {
             </div>
 
             <p className="formula">
-              計算式: 業績手当 = (個人のスコア×等級係数) ÷ 全体の(スコア×係数合計) × 業績手当総額,
-              第3回目賞与 = (個人のスコア×等級係数) ÷ 全体の(スコア×係数合計) × 特別賞与総額
+              計算式: 業績手当 = (個人のスコア×等級係数) ÷ 各区分の(スコア×係数合計) × 区分別業績手当総額,
+              第3回目賞与 = (個人のスコア×等級係数) ÷ 各区分の(スコア×係数合計) × 区分別特別賞与総額
             </p>
           </>
         )}

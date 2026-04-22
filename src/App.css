@@ -85,6 +85,13 @@ h1 {
   color: #1d4ed8;
 }
 
+.targetBreakdown {
+  margin: 10px 0 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+}
+
 .targetGap.isOver {
   color: #b91c1c;
 }
@@ -252,7 +259,8 @@ select:focus {
 
 .tableWrap {
   margin-top: 8px;
-  overflow: hidden;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
   border: 1px solid #dbe1f3;
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.7);
@@ -273,6 +281,9 @@ select:focus {
   padding: 8px 7px;
   border-bottom: 1px solid #dbe1f3;
   white-space: nowrap;
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
 
 .allowanceTable td {
@@ -386,6 +397,10 @@ select:focus {
   width: 11%;
 }
 
+.colTeam {
+  width: 8%;
+}
+
 .colGrade {
   width: 8%;
 }
@@ -406,18 +421,15 @@ select:focus {
   width: 4%;
 }
 
-@media (max-width: 640px) {
-  .grid {
-    grid-template-columns: 1fr;
+@media (max-width: 1024px) {
+  .app {
+    padding: 14px;
+    place-items: stretch;
   }
 
   .card {
     padding: 20px;
-    border-radius: 18px;
-  }
-
-  h1 {
-    font-size: 26px;
+    border-radius: 16px;
   }
 
   .cardHeader {
@@ -425,32 +437,73 @@ select:focus {
     align-items: stretch;
   }
 
+  .targetFields {
+    grid-template-columns: 1fr;
+  }
+
   .targetLabel {
     flex-direction: column;
     align-items: flex-start;
   }
 
-  .targetFields {
-    grid-template-columns: 1fr;
+  .targetLabel input {
+    width: 100%;
+    max-width: none;
   }
 
-  .targetLabel input {
-    max-width: none;
+  .actionRow {
+    align-items: stretch;
+  }
+
+  .sortControls {
     width: 100%;
+    display: grid;
+    grid-template-columns: 1fr auto;
+  }
+
+  .sortLabel {
+    width: 100%;
+  }
+
+  .sortLabel select {
+    min-width: 0;
+    width: 100%;
+  }
+}
+
+@media (max-width: 820px) {
+  .allowanceTable {
+    min-width: 860px;
   }
 
   .resultRow strong {
     font-size: 18px;
   }
+}
 
-  .actionRow {
-    justify-content: stretch;
+@media (max-width: 640px) {
+  .card {
+    padding: 14px;
+    border-radius: 14px;
   }
 
-  .actionRow .primaryButton {
-    width: 100%;
+  h1 {
+    font-size: 22px;
   }
 
+  .description {
+    font-size: 13px;
+  }
+
+  .targetPanel {
+    padding: 10px;
+  }
+
+  .resultRow strong {
+    font-size: 16px;
+  }
+
+  .actionRow .primaryButton,
   .csvImportButton {
     width: 100%;
     box-sizing: border-box;
@@ -461,25 +514,16 @@ select:focus {
     box-sizing: border-box;
   }
 
-  .sortControls,
-  .sortLabel {
-    width: 100%;
-  }
-
   .sortControls {
-    flex-direction: column;
-    align-items: stretch;
+    grid-template-columns: 1fr;
   }
 
   .sortLabel {
-    justify-content: space-between;
-  }
-
-  .tableWrap {
-    overflow: auto;
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .allowanceTable {
-    min-width: 980px;
+    min-width: 760px;
   }
 }
