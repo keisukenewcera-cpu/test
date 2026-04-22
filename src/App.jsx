@@ -717,16 +717,16 @@ function App() {
                 <div className="tableWrap">
                   <table className="allowanceTable">
                     <colgroup>
-                      <col className="colEmployeeInfo" />
                       <col className="colPhoto" />
+                      <col className="colEmployeeInfo" />
                       <col className="colAllowanceInfo" />
                       <col className="colNote" />
                       <col className="colAction" />
                     </colgroup>
                     <thead>
                       <tr>
-                        <th>社員情報</th>
                         <th>顔写真 / 評価スコア</th>
+                        <th>社員情報</th>
                         <th>手当情報</th>
                         <th>備考欄</th>
                         <th>操作</th>
@@ -735,6 +735,41 @@ function App() {
                     <tbody>
                       {sortedRows.map((row) => (
                         <tr key={row.id}>
+                          <td>
+                            <div className="photoCell">
+                              <label className="photoUploadArea">
+                                {row.photoDataUrl ? (
+                                  <img src={row.photoDataUrl} alt="社員顔写真" className="photoThumb" />
+                                ) : (
+                                  <div className="photoPlaceholder">未登録</div>
+                                )}
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  onChange={(event) => {
+                                    const file = event.target.files?.[0]
+                                    handlePhotoUpload(row.id, file)
+                                    event.target.value = ''
+                                  }}
+                                />
+                              </label>
+                              <label className="scoreUnderPhoto">
+                                スコア
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  value={row.score}
+                                  onChange={(event) =>
+                                    updateRow(
+                                      row.id,
+                                      'score',
+                                      sanitizeDecimalInput(event.target.value),
+                                    )
+                                  }
+                                />
+                              </label>
+                            </div>
+                          </td>
                           <td>
                             <div className="employeeInfoCell">
                               <label>
@@ -785,41 +820,6 @@ function App() {
                                   <option value="G5J">G5準社員</option>
                                   <option value="G6J">G6準社員</option>
                                 </select>
-                              </label>
-                            </div>
-                          </td>
-                          <td>
-                            <div className="photoCell">
-                              <label className="photoUploadArea">
-                                {row.photoDataUrl ? (
-                                  <img src={row.photoDataUrl} alt="社員顔写真" className="photoThumb" />
-                                ) : (
-                                  <div className="photoPlaceholder">未登録</div>
-                                )}
-                                <input
-                                  type="file"
-                                  accept="image/*"
-                                  onChange={(event) => {
-                                    const file = event.target.files?.[0]
-                                    handlePhotoUpload(row.id, file)
-                                    event.target.value = ''
-                                  }}
-                                />
-                              </label>
-                              <label className="scoreUnderPhoto">
-                                スコア
-                                <input
-                                  type="text"
-                                  inputMode="numeric"
-                                  value={row.score}
-                                  onChange={(event) =>
-                                    updateRow(
-                                      row.id,
-                                      'score',
-                                      sanitizeDecimalInput(event.target.value),
-                                    )
-                                  }
-                                />
                               </label>
                             </div>
                           </td>
