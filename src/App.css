@@ -287,7 +287,7 @@ select:focus {
 }
 
 .allowanceTable td {
-  padding: 7px;
+  padding: 6px;
   border-bottom: 1px solid #e8ecfa;
   vertical-align: middle;
 }
@@ -304,16 +304,94 @@ select:focus {
 .allowanceTable td select {
   width: 100%;
   box-sizing: border-box;
-  padding: 7px 8px;
+  padding: 5px 6px;
+  border-radius: 8px;
+  font-size: 11px;
+}
+
+.photoCell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+}
+
+.photoThumb {
+  width: 44px;
+  height: 44px;
   border-radius: 10px;
-  font-size: 13px;
+  object-fit: cover;
+  border: 1px solid #cbd5e1;
+}
+
+.photoPlaceholder {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  border: 1px dashed #cbd5e1;
+  color: #64748b;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  background: #f8fafc;
+}
+
+.photoUploadArea {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.photoUploadArea input {
+  display: none;
+}
+
+.scoreUnderPhoto {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #475569;
+}
+
+.scoreUnderPhoto input {
+  width: 56px;
+  min-width: 56px;
 }
 
 .moneyCell {
   color: #1e293b;
   font-weight: 700;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: 14px;
+}
+
+.allowanceInfoCell {
+  display: grid;
+  gap: 4px;
+}
+
+.allowanceRow {
+  display: grid;
+  grid-template-columns: 70px 1fr;
+  align-items: center;
+  gap: 6px;
+}
+
+.allowanceRow span {
+  font-size: 10px;
+  color: #475569;
+  font-weight: 700;
+}
+
+.allowanceRow input {
+  min-width: 0;
+}
+
+.noteCell input {
+  min-width: 110px;
 }
 
 .actionRow {
@@ -389,36 +467,37 @@ select:focus {
   color: #475569;
 }
 
-.colEmployeeNo {
-  width: 8.5%;
+.colEmployeeInfo {
+  width: 17%;
 }
 
-.colEmployeeName {
-  width: 11%;
-}
-
-.colTeam {
+.colPhoto {
   width: 8%;
 }
 
-.colGrade {
-  width: 8%;
-}
-
-.colScore {
-  width: 8.5%;
-}
-
-.colMoney {
-  width: 12%;
+.colAllowanceInfo {
+  width: 19%;
 }
 
 .colNote {
-  width: 12%;
+  width: 18%;
 }
 
 .colAction {
   width: 4%;
+}
+
+.employeeInfoCell {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px 4px;
+}
+
+.employeeInfoCell label {
+  gap: 2px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #475569;
 }
 
 @media (max-width: 1024px) {

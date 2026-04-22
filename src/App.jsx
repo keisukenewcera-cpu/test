@@ -80,6 +80,7 @@ const createRow = (index) => ({
   id: Date.now() + index,
   employeeNo: '',
   employeeName: '',
+  photoDataUrl: '',
   team: 'denture',
   grade: 'G3',
   score: '',
@@ -151,6 +152,17 @@ function App() {
     })
   }
 
+  const handlePhotoUpload = (id, file) => {
+    if (!file) return
+
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : ''
+      updateRow(id, 'photoDataUrl', result)
+    }
+    reader.readAsDataURL(file)
+  }
+
   const handleImportCsv = async (event) => {
     const file = event.target.files?.[0]
     if (!file) return
@@ -201,6 +213,7 @@ function App() {
             id: Date.now() + index,
             employeeNo: employeeNoIdx >= 0 ? cols[employeeNoIdx] || '' : '',
             employeeName: employeeNameIdx >= 0 ? cols[employeeNameIdx] || '' : '',
+            photoDataUrl: '',
             team: normalizedTeam,
             grade: normalizedGrade,
             score: scoreIdx >= 0 ? sanitizeDecimalInput(cols[scoreIdx] || '') : '',
@@ -229,6 +242,7 @@ function App() {
     const headers = [
       '社員番号',
       '社員名',
+      '顔写真',
       '区分',
       '等級',
       '評価スコア',
@@ -242,6 +256,7 @@ function App() {
     const rowsForExport = sortedRows.map((row) => [
       row.employeeNo,
       row.employeeName,
+      row.photoDataUrl ? '登録済み' : '',
       row.team === 'ck' ? 'CK' : 'デンチャー',
       row.grade,
       row.score,
@@ -786,27 +801,17 @@ function App() {
             <div className="tableWrap">
               <table className="allowanceTable">
                 <colgroup>
-                  <col className="colEmployeeNo" />
-                  <col className="colEmployeeName" />
-                  <col className="colTeam" />
-                  <col className="colGrade" />
-                  <col className="colScore" />
-                  <col className="colMoney" />
-                  <col className="colMoney" />
-                  <col className="colMoney" />
+                  <col className="colEmployeeInfo" />
+                  <col className="colPhoto" />
+                  <col className="colAllowanceInfo" />
                   <col className="colNote" />
                   <col className="colAction" />
                 </colgroup>
                 <thead>
                   <tr>
-                    <th>社員番号</th>
-                    <th>社員名</th>
-                    <th>区分</th>
-                    <th>等級</th>
-                    <th>評価スコア</th>
-                    <th>業績手当</th>
-                    <th>特別手当</th>
-                    <th>第3回目賞与</th>
+                    <th>社員情報</th>
+                    <th>顔写真 / 評価スコア</th>
+                    <th>手当情報</th>
                     <th>備考欄</th>
                     <th>操作</th>
                   </tr>
@@ -815,81 +820,121 @@ function App() {
                   {sortedRows.map((row) => (
                     <tr key={row.id}>
                       <td>
-                        <input
-                          type="text"
-                          value={row.employeeNo}
-                          onChange={(event) => updateRow(row.id, 'employeeNo', event.target.value)}
-                          placeholder="1001"
-                        />
+                        <div className="employeeInfoCell">
+                          <label>
+                            社員番号
+                            <input
+                              type="text"
+                              value={row.employeeNo}
+                              onChange={(event) => updateRow(row.id, 'employeeNo', event.target.value)}
+                              placeholder="1001"
+                            />
+                          </label>
+                          <label>
+                            社員名
+                            <input
+                              type="text"
+                              value={row.employeeName}
+                              onChange={(event) => updateRow(row.id, 'employeeName', event.target.value)}
+                              placeholder="山田 太郎"
+                            />
+                          </label>
+                          <label>
+                            区分
+                            <select
+                              value={row.team ?? 'denture'}
+                              onChange={(event) => updateRow(row.id, 'team', event.target.value)}
+                            >
+                              <option value="denture">デンチャー</option>
+                              <option value="ck">CK</option>
+                            </select>
+                          </label>
+                          <label>
+                            等級
+                            <select
+                              value={row.grade}
+                              onChange={(event) => updateRow(row.id, 'grade', event.target.value)}
+                            >
+                              <option value="G1">G1</option>
+                              <option value="G2">G2</option>
+                              <option value="G3">G3</option>
+                              <option value="G4">G4</option>
+                              <option value="G5">G5</option>
+                              <option value="G6">G6</option>
+                              <option value="P3">P3</option>
+                              <option value="G1J">G1準社員</option>
+                              <option value="G2J">G2準社員</option>
+                              <option value="G3J">G3準社員</option>
+                              <option value="G4J">G4準社員</option>
+                              <option value="G5J">G5準社員</option>
+                              <option value="G6J">G6準社員</option>
+                            </select>
+                          </label>
+                        </div>
                       </td>
                       <td>
-                        <input
-                          type="text"
-                          value={row.employeeName}
-                          onChange={(event) => updateRow(row.id, 'employeeName', event.target.value)}
-                          placeholder="山田 太郎"
-                        />
+                        <div className="photoCell">
+                          <label className="photoUploadArea">
+                            {row.photoDataUrl ? (
+                              <img src={row.photoDataUrl} alt="社員顔写真" className="photoThumb" />
+                            ) : (
+                              <div className="photoPlaceholder">未登録</div>
+                            )}
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={(event) => {
+                                const file = event.target.files?.[0]
+                                handlePhotoUpload(row.id, file)
+                                event.target.value = ''
+                              }}
+                            />
+                          </label>
+                          <label className="scoreUnderPhoto">
+                            スコア
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              value={row.score}
+                              onChange={(event) =>
+                                updateRow(
+                                  row.id,
+                                  'score',
+                                  sanitizeDecimalInput(event.target.value),
+                                )
+                              }
+                            />
+                          </label>
+                        </div>
                       </td>
                       <td>
-                        <select
-                          value={row.team ?? 'denture'}
-                          onChange={(event) => updateRow(row.id, 'team', event.target.value)}
-                        >
-                          <option value="denture">デンチャー</option>
-                          <option value="ck">CK</option>
-                        </select>
+                        <div className="allowanceInfoCell">
+                          <div className="allowanceRow">
+                            <span>業績手当</span>
+                            <strong className="moneyCell">{formatJPY(row.performanceAllowance)}</strong>
+                          </div>
+                          <div className="allowanceRow">
+                            <span>特別手当</span>
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              value={row.specialAllowance}
+                              onChange={(event) =>
+                                updateRow(
+                                  row.id,
+                                  'specialAllowance',
+                                  sanitizeIntegerInput(event.target.value),
+                                )
+                              }
+                            />
+                          </div>
+                          <div className="allowanceRow">
+                            <span>第3回目賞与</span>
+                            <strong className="moneyCell">{formatJPY(row.thirdBonus)}</strong>
+                          </div>
+                        </div>
                       </td>
-                      <td>
-                        <select
-                          value={row.grade}
-                          onChange={(event) => updateRow(row.id, 'grade', event.target.value)}
-                        >
-                          <option value="G1">G1</option>
-                          <option value="G2">G2</option>
-                          <option value="G3">G3</option>
-                          <option value="G4">G4</option>
-                          <option value="G5">G5</option>
-                          <option value="G6">G6</option>
-                          <option value="P3">P3</option>
-                          <option value="G1J">G1準社員</option>
-                          <option value="G2J">G2準社員</option>
-                          <option value="G3J">G3準社員</option>
-                          <option value="G4J">G4準社員</option>
-                          <option value="G5J">G5準社員</option>
-                          <option value="G6J">G6準社員</option>
-                        </select>
-                      </td>
-                      <td>
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          value={row.score}
-                          onChange={(event) =>
-                            updateRow(
-                              row.id,
-                              'score',
-                              sanitizeDecimalInput(event.target.value),
-                            )
-                          }
-                        />
-                      </td>
-                      <td className="moneyCell">{formatJPY(row.performanceAllowance)}</td>
-                      <td>
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          value={row.specialAllowance}
-                          onChange={(event) =>
-                            updateRow(
-                              row.id,
-                              'specialAllowance',
-                              sanitizeIntegerInput(event.target.value),
-                            )
-                          }
-                        />
-                      </td>
-                      <td className="moneyCell">{formatJPY(row.thirdBonus)}</td>
-                      <td>
+                      <td className="noteCell">
                         <input
                           type="text"
                           value={row.note}
