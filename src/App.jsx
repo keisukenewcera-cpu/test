@@ -216,8 +216,8 @@ function App() {
         return
       }
 
-      setRows(importedRows)
-      setCsvMessage(`${importedRows.length}件の社員データを取り込みました。`)
+      setRows((prev) => [...prev, ...importedRows])
+      setCsvMessage(`${importedRows.length}件の社員データを追記しました。`)
     } catch {
       setCsvMessage('CSVの読み込みに失敗しました。形式を確認してください。')
     } finally {
