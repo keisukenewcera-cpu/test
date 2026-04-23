@@ -7,6 +7,112 @@
   width: 100%;
 }
 
+/* ---- Responsive hardening (phones + tablets) ---- */
+.app,
+.card,
+.adminMain,
+.adminPanel,
+.memberDetailWorkspace,
+.memberDetailTabPanel {
+  min-width: 0;
+}
+
+@media (max-width: 1024px) {
+  .card {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .summaryCards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .summaryCards p {
+    font-size: 11px;
+  }
+
+  .summaryCards strong {
+    font-size: 22px;
+  }
+
+  .memberTable {
+    display: block;
+    overflow-x: auto;
+  }
+
+  .memberTable .row {
+    min-width: 560px;
+  }
+}
+
+@media (max-width: 768px) {
+  .app {
+    padding: 10px;
+  }
+
+  .card {
+    padding: 12px;
+  }
+
+  .pageTabs {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .tabButton {
+    min-width: 96px;
+    padding: 7px 10px;
+    font-size: 11px;
+  }
+
+  .summaryCards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .summaryCards strong {
+    font-size: 18px;
+  }
+
+  .adminMain {
+    padding: 12px;
+  }
+
+  .memberDetailMetricGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .employeeTable {
+    overflow-x: auto;
+  }
+
+  .employeeTable .row {
+    min-width: 700px;
+  }
+
+  .allowanceTable {
+    min-width: 640px;
+  }
+}
+
+@media (max-width: 480px) {
+  .summaryCards {
+    grid-template-columns: 1fr;
+  }
+
+  .memberTable .row {
+    min-width: 520px;
+  }
+
+  .sessionTopRight {
+    gap: 6px;
+  }
+
+  .sessionUserChip {
+    max-width: 42vw;
+  }
+}
+
 .card {
   width: min(100%, 1280px);
   max-width: calc(100vw - 16px);
