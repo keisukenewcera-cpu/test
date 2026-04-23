@@ -2742,6 +2742,35 @@ select:focus {
     gap: 6px;
   }
 
+  .summaryCards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .summaryCards article {
+    padding: 7px 6px;
+    border-radius: 8px;
+  }
+
+  .summaryCards p {
+    font-size: 10px;
+    line-height: 1.2;
+  }
+
+  .summaryCards strong {
+    margin-top: 3px;
+    font-size: 16px;
+    line-height: 1.1;
+  }
+
+  .memberTable {
+    overflow-x: auto;
+  }
+
+  .memberTable .row {
+    min-width: 520px;
+  }
+
   .skillUpProfileCard {
     grid-column: 1;
     grid-row: 1;
