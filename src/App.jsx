@@ -100,8 +100,6 @@ const createRow = (index) => ({
 const STORAGE_KEY = 'performanceAllowanceAppData'
 const CLOUD_STATE_ID = 'default'
 const getCurrentPeriod = () => new Date().toISOString().slice(0, 7)
-const LOGIN_LOCK_THRESHOLD = 5
-const LOGIN_LOCK_MS = 5 * 60 * 1000
 
 const formatQuarterLabel = (d = new Date()) => {
   const y = d.getFullYear()
@@ -215,16 +213,6 @@ function normalizeEmployeeGrade(value) {
   const v = String(value ?? '').trim()
   if (/^G[1-6]$/.test(v)) return v
   return 'G1'
-}
-
-function hasStrongPassword(value) {
-  const s = String(value ?? '')
-  if (s.length < 8) return false
-  if (!/[A-Z]/.test(s)) return false
-  if (!/[a-z]/.test(s)) return false
-  if (!/\d/.test(s)) return false
-  if (!/[^A-Za-z0-9]/.test(s)) return false
-  return true
 }
 
 function stripSensitiveEmployeeFields(rows) {
@@ -512,12 +500,24 @@ const MAIN_WORKSPACE_TAB_ORDER = [
   { key: 'execEval', label: MENU_DISPLAY_META.execEval.tabLabel },
 ]
 
+const MAIN_WORKSPACE_TAB_ICONS = {
+  gyoseki: '💹',
+  admin: '📊',
+  employee: '👥',
+  settings: '⚙️',
+  skillup: '🚀',
+  selfeval: '📝',
+  goals: '🎯',
+  bossEval: '🧑‍💼',
+  execEval: '🏛️',
+}
+
 /** 管理者の表示設定対象タブ（業績手当含む） */
 const ADMIN_ROLE_MENU_KEYS = MAIN_WORKSPACE_TAB_ORDER.map((t) => t.key)
 
 const MENU_KEYS_BY_ROLE_CARD = {
   [MENU_ROLE_IPPAN]: ['skillup', 'selfeval', 'goals', 'bossEval'],
-  [MENU_ROLE_JOUSHI]: ['skillup', 'selfeval', 'goals', 'bossEval'],
+  [MENU_ROLE_JOUSHI]: ['admin', 'skillup', 'selfeval', 'goals', 'bossEval'],
   [MENU_ROLE_ADMIN]: [...ADMIN_ROLE_MENU_KEYS],
 }
 
@@ -635,9 +635,7 @@ function App() {
   const [loginError, setLoginError] = useState('')
   const [isLoggedIn, setIsLoggedIn] = useState(false)
   const [loggedInEmployeeId, setLoggedInEmployeeId] = useState(null)
-  const [loginFailCount, setLoginFailCount] = useState(0)
-  const [loginLockedUntil, setLoginLockedUntil] = useState(0)
-  const [adminPassword, setAdminPassword] = useState(() => (loadSavedData()?.adminPassword ?? 'ChangeMe-Admin-2026!'))
+  const [adminPassword, setAdminPassword] = useState(() => (loadSavedData()?.adminPassword ?? 'test'))
   const [rememberLogin, setRememberLogin] = useState(false)
   const [resetModalOpen, setResetModalOpen] = useState(false)
   const [resetId, setResetId] = useState('')
@@ -862,15 +860,21 @@ function App() {
           .map((value) => value.trim().replace(/^"|"$/g, ''))
 
       const headers = parseLine(lines[0])
-      const headerIndex = (name) => headers.findIndex((header) => header === name)
+      const headerIndex = (candidates) => {
+        for (const name of candidates) {
+          const idx = headers.findIndex((header) => header === name)
+          if (idx >= 0) return idx
+        }
+        return -1
+      }
 
-      const employeeNoIdx = headerIndex('社員番号')
-      const employeeNameIdx = headerIndex('社員名')
-      const gradeIdx = headerIndex('等級')
-      const teamIdx = headerIndex('区分')
-      const scoreIdx = headerIndex('評価スコア')
-      const specialIdx = headerIndex('特別手当')
-      const noteIdx = headerIndex('備考欄')
+      const employeeNoIdx = headerIndex(['社員C', '社員番号', 'ID', 'id'])
+      const employeeNameIdx = headerIndex(['社員名', '名前'])
+      const gradeIdx = headerIndex(['等級', 'グレード'])
+      const teamIdx = headerIndex(['区分'])
+      const scoreIdx = headerIndex(['評価スコア', '総合得点'])
+      const specialIdx = headerIndex(['特別手当'])
+      const noteIdx = headerIndex(['備考欄'])
 
       if (employeeNoIdx < 0 && employeeNameIdx < 0) {
         setCsvMessage('CSVヘッダーを確認してください（社員番号 or 社員名は必須）。')
@@ -906,8 +910,41 @@ function App() {
         return
       }
 
-      setRows((prev) => [...prev, ...importedRows])
-      setCsvMessage(`${importedRows.length}件の社員データを追記しました。`)
+      let replacedCount = 0
+      let appendedCount = 0
+      setRows((prev) => {
+        const next = [...prev]
+        const indexByEmployeeNo = new Map()
+        next.forEach((row, idx) => {
+          const key = String(row.employeeNo ?? '').trim()
+          if (key) indexByEmployeeNo.set(key, idx)
+        })
+
+        for (const imported of importedRows) {
+          const key = String(imported.employeeNo ?? '').trim()
+          if (key && indexByEmployeeNo.has(key)) {
+            const targetIdx = indexByEmployeeNo.get(key)
+            const current = next[targetIdx]
+            next[targetIdx] = {
+              ...current,
+              ...imported,
+              id: current.id,
+              photoDataUrl: current.photoDataUrl,
+            }
+            replacedCount += 1
+          } else {
+            next.push(imported)
+            const newIdx = next.length - 1
+            if (key) indexByEmployeeNo.set(key, newIdx)
+            appendedCount += 1
+          }
+        }
+
+        return next
+      })
+      setCsvMessage(
+        `${importedRows.length}件を取り込みました（上書き: ${replacedCount}件 / 追加: ${appendedCount}件）。`,
+      )
     } catch {
       setCsvMessage('CSVの読み込みに失敗しました。形式を確認してください。')
     } finally {
@@ -1113,6 +1150,7 @@ function App() {
     }
     return employeeDirectoryRows[0] ?? null
   }, [employeeDirectoryRows, loggedInEmployeeId])
+  const loggedInAccountLabel = loginMode === 'admin' ? '管理者' : loggedInEmployee?.name ?? '従業員'
 
   const goalMgmtEmployee = loggedInEmployee
   const goalMgmtGoals = useMemo(
@@ -1212,31 +1250,15 @@ function App() {
 
   const handleLogin = (event) => {
     event.preventDefault()
-    const now = Date.now()
-    if (loginLockedUntil > now) {
-      const leftSec = Math.ceil((loginLockedUntil - now) / 1000)
-      setLoginError(`ログイン失敗が続いたため一時ロック中です。${leftSec}秒後に再試行してください。`)
-      return
-    }
 
     const normalizedLoginId = email.trim().toLowerCase()
     if (loginMode === 'admin') {
       if (normalizedLoginId === 'admin@example.com' && password === adminPassword) {
         setIsLoggedIn(true)
         setLoggedInEmployeeId(null)
-        setLoginFailCount(0)
-        setLoginLockedUntil(0)
         setLoginError('')
         return
       }
-      const nextFail = loginFailCount + 1
-      if (nextFail >= LOGIN_LOCK_THRESHOLD) {
-        setLoginFailCount(0)
-        setLoginLockedUntil(now + LOGIN_LOCK_MS)
-        setLoginError('ログイン失敗が5回続いたため、5分間ロックします。')
-        return
-      }
-      setLoginFailCount(nextFail)
       setLoginError('管理者IDまたはパスワードが違います。')
       return
     }
@@ -1250,19 +1272,9 @@ function App() {
     if (matchedEmployee) {
       setIsLoggedIn(true)
       setLoggedInEmployeeId(matchedEmployee.id)
-      setLoginFailCount(0)
-      setLoginLockedUntil(0)
       setLoginError('')
       return
     }
-    const nextFail = loginFailCount + 1
-    if (nextFail >= LOGIN_LOCK_THRESHOLD) {
-      setLoginFailCount(0)
-      setLoginLockedUntil(now + LOGIN_LOCK_MS)
-      setLoginError('ログイン失敗が5回続いたため、5分間ロックします。')
-      return
-    }
-    setLoginFailCount(nextFail)
     setLoginError('社員Noまたはパスワードが違います。')
   }
 
@@ -1271,10 +1283,6 @@ function App() {
     const id = resetId.trim().toLowerCase()
     if (!id || !resetPrevPassword || !resetNextPassword) {
       window.alert('すべての項目を入力してください。')
-      return
-    }
-    if (!hasStrongPassword(resetNextPassword)) {
-      window.alert('新しいパスワードは8文字以上で、英大文字・英小文字・数字・記号を含めてください。')
       return
     }
     if (id === 'admin@example.com') {
@@ -1742,7 +1750,9 @@ function App() {
               <div className="loginBrandMark" aria-hidden>
                 🛡️
               </div>
-              <h1 className="loginBrandTitle">{loginMode === 'admin' ? '管理者ログイン' : 'WorkVision'}</h1>
+              <h1 className={`loginBrandTitle${loginMode === 'admin' ? ' isAdmin' : ''}`}>
+                {loginMode === 'admin' ? '管理者ログイン' : 'WorkVision'}
+              </h1>
               <p className="loginBrandSub">{loginMode === 'admin' ? 'システム管理・人材育成統括' : '成長が見える、次がわかる'}</p>
 
               <form className="loginForm" onSubmit={handleLogin}>
@@ -1898,30 +1908,35 @@ function App() {
           </div>
         ) : (
           <>
-            <button type="button" className="secondaryButton logoutTopRight" onClick={handleLogout}>
-              ログアウト
-            </button>
-            <div className="cardHeader">
-              <div>
-                <p className="eyebrow">Performance Suite</p>
-                <h1>多機能アプリ</h1>
-              </div>
+            <div className="sessionTopRight">
+              <span className="sessionUserChip" title="現在ログイン中のアカウント">
+                {loggedInAccountLabel}
+              </span>
+              <button type="button" className="secondaryButton logoutTopRight" onClick={handleLogout}>
+                ログアウト
+              </button>
             </div>
-            <div className="pageTabs">
+            <div className="cardHeader">
+              <div />
+            </div>
+            <div className="pageTabs pageTabsMain">
               {MAIN_WORKSPACE_TAB_ORDER.filter((t) => isWorkspaceMenuVisible(t.key)).map((t) => (
                 <button
                   key={t.key}
                   type="button"
-                  className={`tabButton ${workspaceView === t.key ? 'isActive' : ''}`}
+                  className={`tabButton tabButtonMain ${workspaceView === t.key ? 'isActive' : ''}`}
                   onClick={() => setWorkspaceView(t.key)}
                 >
-                  {t.label}
+                  <span className="tabButtonMainIcon" aria-hidden>
+                    {MAIN_WORKSPACE_TAB_ICONS[t.key] ?? '•'}
+                  </span>
+                  <span className="tabButtonMainLabel">{t.label}</span>
                 </button>
               ))}
             </div>
 
             <div style={{ display: workspaceView === 'gyoseki' ? 'block' : 'none' }}>
-              <div className="pageTabs">
+              <div className="pageTabs pageTabsSub">
               <button
                 type="button"
                 className={`tabButton ${activePage === 'input' ? 'isActive' : ''}`}
@@ -1966,11 +1981,11 @@ function App() {
                     + 社員行を追加
                   </button>
                   <label className="csvImportButton">
-                    CSV取込
+                    CSVインポート
                     <input type="file" accept=".csv" onChange={handleImportCsv} />
                   </label>
                   <button type="button" className="csvExportButton" onClick={handleExportCsv}>
-                    CSV掃き出し
+                    CSVエクスポート
                   </button>
                   <button
                     type="button"
@@ -2365,6 +2380,10 @@ function App() {
                   setWorkspaceView('bossEval')
                 }}
                 onStartExecutiveEval={(employeeId) => {
+                  if (menuRoleKey !== MENU_ROLE_ADMIN) {
+                    window.alert('権限がありません。')
+                    return
+                  }
                   setAdminSelectedMemberId(employeeId)
                   setSelectedEvalEmployeeId(employeeId)
                   setWorkspaceView('execEval')
@@ -2499,10 +2518,6 @@ function MenuDisplaySettingsPage({ menuVisibilityByRole, setMenuVisibilityByRole
     setMenuVisibilityByRole(normalizeMenuVisibilityByRole(null))
   }
 
-  const saveSettings = () => {
-    window.alert('設定を保存しました。（ローカル／クラウドへ自動同期されます）')
-  }
-
   return (
     <section className="menuDispPage">
       <header className="menuDispHeader">
@@ -2518,7 +2533,7 @@ function MenuDisplaySettingsPage({ menuVisibilityByRole, setMenuVisibilityByRole
           使い方
         </p>
         <p className="menuDispGuideBody">
-          各役割のカードで、表示したいメニューにチェックを入れてください。変更後は必ず「設定を保存」を押してください（自動保存も有効です）。
+          各役割のカードで、表示したいメニューにチェックを入れてください。変更内容は自動で保存されます。
         </p>
       </div>
 
@@ -2566,9 +2581,6 @@ function MenuDisplaySettingsPage({ menuVisibilityByRole, setMenuVisibilityByRole
       <div className="menuDispFooter">
         <button type="button" className="menuDispBtnReset" onClick={resetDefaults}>
           デフォルトに戻す
-        </button>
-        <button type="button" className="menuDispBtnSave" onClick={saveSettings}>
-          <span aria-hidden>💾</span> 設定を保存
         </button>
       </div>
     </section>
@@ -2958,30 +2970,20 @@ function SkillUpPage({ employees, skills, sections, progress }) {
           <h3>{employee.name}</h3>
           <span className="skillUpDeptBadge">{employee.dept}</span>
           <p className="skillUpJoin">入社日: {joinDisplay}</p>
-        </article>
-        <article className="skillUpStatCard skillUpStatStars">
-          <div className="skillUpStatIcon" aria-hidden>
-            ★
+          <div className="skillUpInlineStats">
+            <div className="skillUpInlineStat">
+              <span className="skillUpInlineStatLabel">等級</span>
+              <strong className="skillUpInlineStatValue">{grade}</strong>
+            </div>
+            <div className="skillUpInlineStat">
+              <span className="skillUpInlineStatLabel">獲得★</span>
+              <strong className="skillUpInlineStatValue">{stars}</strong>
+            </div>
+            <div className="skillUpInlineStat">
+              <span className="skillUpInlineStatLabel">習得</span>
+              <strong className="skillUpInlineStatValue">{acquiredCount}</strong>
+            </div>
           </div>
-          <p className="skillUpStatLabel">獲得★数</p>
-          <strong className="skillUpStatValue">{stars}</strong>
-        </article>
-        <article className="skillUpStatCard skillUpStatGrade">
-          <div className="skillUpStatIcon skillUpStatIconBlue" aria-hidden>
-            🏆
-          </div>
-          <p className="skillUpStatLabel">現在の等級</p>
-          <strong className="skillUpStatValue">
-            {grade}
-            <small> Level 1</small>
-          </strong>
-        </article>
-        <article className="skillUpStatCard skillUpStatSkills">
-          <div className="skillUpStatIcon skillUpStatIconBlue" aria-hidden>
-            ◎
-          </div>
-          <p className="skillUpStatLabel">習得スキル</p>
-          <strong className="skillUpStatValue">{acquiredCount}</strong>
         </article>
       </div>
 
@@ -3082,7 +3084,7 @@ function SkillUpPage({ employees, skills, sections, progress }) {
   )
 }
 
-function EvalQuestionnairePage({ variant, employees, evalState, setEvalState, peerSelfEval, onSave }) {
+function EvalQuestionnairePage({ variant, employees, evalState, setEvalState, peerSelfEval }) {
   const isBoss = variant === 'boss'
   const employee = useMemo(() => (employees.length ? employees[0] : null), [employees])
 
@@ -3133,15 +3135,14 @@ function EvalQuestionnairePage({ variant, employees, evalState, setEvalState, pe
   const guideLinesSelf = [
     '各項目について、1～5点で自己評価してください',
     '点数の基準は「詳細を表示」ボタンで確認できます',
-    '必要に応じてコメントを追加してください',
-    'すべての項目を評価したら「保存」ボタンで保存してください',
+    '入力内容は自動で保存されます',
   ]
 
   const guideLinesBoss = [
     '各項目について、1～5点で評価してください',
     '被評価者の自己評価点数は各項目に参考として表示されます（自己評価タブで入力）',
     '評価の根拠やコメントを入力してください',
-    'すべての項目を評価したら「保存」ボタンで保存してください',
+    '入力内容は自動で保存されます',
   ]
 
   const guideLines = isBoss ? guideLinesBoss : guideLinesSelf
@@ -3179,22 +3180,6 @@ function EvalQuestionnairePage({ variant, employees, evalState, setEvalState, pe
             {allComplete ? 'すべての項目の評価が完了しています' : 'すべての項目を評価してください'}
           </p>
         </div>
-        <button
-          type="button"
-          className="selfEvalSaveBtn"
-          disabled={!allComplete}
-          onClick={() => {
-            if (onSave) {
-              onSave()
-              return
-            }
-            window.alert(
-              isBoss ? '上司評価を保存しました。（ローカル／クラウドに保存済み）' : '自己評価を保存しました。（ローカル／クラウドに保存済み）',
-            )
-          }}
-        >
-          <span aria-hidden>💾</span> 保存
-        </button>
       </div>
 
       <div className="selfEvalCategories">
@@ -3231,33 +3216,49 @@ function EvalQuestionnairePage({ variant, employees, evalState, setEvalState, pe
                             自己評価の点数: {selfPts ? `${selfPts}点` : '（未入力）'}
                           </p>
                         ) : null}
-                        <button type="button" className="selfEvalDetailLink" onClick={() => setDetailItem(it)}>
-                          <span aria-hidden>ⓘ</span> 詳細を表示
-                        </button>
-                        <div className="selfEvalItemGrid">
+                        <div className={`selfEvalItemGrid${isBoss ? '' : ' isSingleField'}`}>
                           <label className="selfEvalFieldLabel">
-                            <span>{isBoss ? '上司評価の点数' : '評価点数'}</span>
-                            <select
-                              value={scores[it.id] ?? ''}
-                              onChange={(event) => patchScore(it.id, event.target.value)}
-                            >
-                              <option value="">点数を選択</option>
-                              {[1, 2, 3, 4, 5].map((n) => (
-                                <option key={n} value={String(n)}>
-                                  {n}点
-                                </option>
-                              ))}
-                            </select>
+                            <span className="selfEvalFieldHead">
+                              <span>{isBoss ? '上司評価の点数' : '評価点数'}</span>
+                              <button
+                                type="button"
+                                className="selfEvalDetailLink"
+                                onClick={() => setDetailItem(it)}
+                                aria-label={`${it.title} の詳細を表示`}
+                                title="詳細を表示"
+                              >
+                                ⓘ
+                              </button>
+                            </span>
+                            <div className="selfEvalScoreSegment" role="group" aria-label={`${it.title}の評価点数`}>
+                              {[1, 2, 3, 4, 5].map((n) => {
+                                const value = String(n)
+                                const selected = String(scores[it.id] ?? '') === value
+                                return (
+                                  <button
+                                    key={n}
+                                    type="button"
+                                    className={`selfEvalScorePill${selected ? ' isActive' : ''}`}
+                                    onClick={() => patchScore(it.id, value)}
+                                    aria-pressed={selected}
+                                  >
+                                    {n}
+                                  </button>
+                                )
+                              })}
+                            </div>
                           </label>
-                          <label className="selfEvalFieldLabel">
-                            <span>{isBoss ? 'コメント（評価の根拠など）' : 'コメント（任意）'}</span>
-                            <input
-                              type="text"
-                              value={comments[it.id] ?? ''}
-                              onChange={(event) => patchComment(it.id, event.target.value)}
-                              placeholder={isBoss ? '評価の根拠や補足があれば入力' : '補足説明があれば入力'}
-                            />
-                          </label>
+                          {isBoss ? (
+                            <label className="selfEvalFieldLabel">
+                              <span>コメント（評価の根拠など）</span>
+                              <input
+                                type="text"
+                                value={comments[it.id] ?? ''}
+                                onChange={(event) => patchComment(it.id, event.target.value)}
+                                placeholder="評価の根拠や補足があれば入力"
+                              />
+                            </label>
+                          ) : null}
                         </div>
                       </article>
                     )
@@ -3276,6 +3277,26 @@ function EvalQuestionnairePage({ variant, employees, evalState, setEvalState, pe
               ×
             </button>
             <h3>{detailItem.title}</h3>
+            <div className="selfEvalDetailScoreBox">
+              <p className="selfEvalDetailScoreLabel">{isBoss ? '上司評価の点数' : '評価点数'}</p>
+              <div className="selfEvalScoreSegment" role="group" aria-label={`${detailItem.title}の評価点数`}>
+                {[1, 2, 3, 4, 5].map((n) => {
+                  const value = String(n)
+                  const selected = String(scores[detailItem.id] ?? '') === value
+                  return (
+                    <button
+                      key={n}
+                      type="button"
+                      className={`selfEvalScorePill${selected ? ' isActive' : ''}`}
+                      onClick={() => patchScore(detailItem.id, value)}
+                      aria-pressed={selected}
+                    >
+                      {n}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
             <div className="selfEvalDetailBody">
               <h4>点数の目安（1～5点）</h4>
               <pre className="selfEvalDetailCriteria">{detailItem.criteria}</pre>
@@ -3291,7 +3312,7 @@ function SelfEvaluationPage({ employees, evalState, setEvalState }) {
   return <EvalQuestionnairePage variant="self" employees={employees} evalState={evalState} setEvalState={setEvalState} />
 }
 
-function SupervisorEvaluationPage({ employees, evalState, setEvalState, peerSelfEval, onSave }) {
+function SupervisorEvaluationPage({ employees, evalState, setEvalState, peerSelfEval }) {
   return (
     <EvalQuestionnairePage
       variant="boss"
@@ -3299,7 +3320,6 @@ function SupervisorEvaluationPage({ employees, evalState, setEvalState, peerSelf
       evalState={evalState}
       setEvalState={setEvalState}
       peerSelfEval={peerSelfEval}
-      onSave={onSave}
     />
   )
 }
@@ -4266,7 +4286,35 @@ function AdminMockPage({
         return { id: s.id, title: s.title, description: s.description, required: !!s.required, current, max }
       })
   }, [selectedMember, skills, skillProgress])
-  const selectedMemberGoalCount = selectedMember ? (goalsByEmployee?.[selectedMember.id] ?? []).length : 0
+  const evalItems = useMemo(() => SELF_EVAL_CATEGORIES.flatMap((cat) => cat.items), [])
+  const selectedMemberSelfEvalRows = useMemo(() => {
+    if (!selectedMember) return []
+    const evalState = selfEvalByEmployee?.[selectedMember.id]
+    const scores = evalState?.scores ?? {}
+    return evalItems
+      .map((item) => {
+        const score = String(scores[item.id] ?? '').trim()
+        if (!score) return null
+        return { id: item.id, title: item.title, score }
+      })
+      .filter(Boolean)
+  }, [selectedMember, selfEvalByEmployee, evalItems])
+  const selectedMemberBossEvalRows = useMemo(() => {
+    if (!selectedMember) return []
+    const evalState = supervisorEvalByEmployee?.[selectedMember.id]
+    const scores = evalState?.scores ?? {}
+    const comments = evalState?.comments ?? {}
+    return evalItems
+      .map((item) => {
+        const score = String(scores[item.id] ?? '').trim()
+        const comment = String(comments[item.id] ?? '').trim()
+        if (!score && !comment) return null
+        return { id: item.id, title: item.title, score, comment }
+      })
+      .filter(Boolean)
+  }, [selectedMember, supervisorEvalByEmployee, evalItems])
+  const selectedMemberGoals = selectedMember ? goalsByEmployee?.[selectedMember.id] ?? [] : []
+  const selectedMemberGoalCount = selectedMemberGoals.length
   const selectedMemberAcquiredSkillCount = selectedMemberSkills.filter((x) => x.current > 0).length
 
   const gradeRows = useMemo(() => {
@@ -4540,7 +4588,7 @@ function AdminMockPage({
                 {detailTab === 'skill' ? (
                   selectedMemberSkills.length ? (
                     <ul className="memberSkillList">
-                      {selectedMemberSkills.slice(0, 6).map((s) => (
+                      {selectedMemberSkills.map((s) => (
                         <li key={s.id}>
                           <p className="memberSkillTitle">{s.title}</p>
                           <p className="memberSkillMeta">
@@ -4553,10 +4601,58 @@ function AdminMockPage({
                     <p className="memberDetailEmpty">この等級のスキル設定がありません。</p>
                   )
                 ) : null}
-                {detailTab === 'self' ? <p className="memberDetailEmpty">自己評価の詳細は「自己評価」タブで確認できます。</p> : null}
-                {detailTab === 'boss' ? <p className="memberDetailEmpty">上司評価の詳細は「上司評価」タブで確認できます。</p> : null}
+                {detailTab === 'self' ? (
+                  selectedMemberSelfEvalRows.length ? (
+                    <ul className="memberEvalList">
+                      {selectedMemberSelfEvalRows.map((row) => (
+                        <li key={row.id} className="memberEvalItem">
+                          <div className="memberEvalHead">
+                            <p className="memberEvalTitle">{row.title}</p>
+                            <span className="memberEvalScore">{row.score}点</span>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="memberDetailEmpty">自己評価の入力はまだありません。</p>
+                  )
+                ) : null}
+                {detailTab === 'boss' ? (
+                  selectedMemberBossEvalRows.length ? (
+                    <ul className="memberEvalList">
+                      {selectedMemberBossEvalRows.map((row) => (
+                        <li key={row.id} className="memberEvalItem">
+                          <div className="memberEvalHead">
+                            <p className="memberEvalTitle">{row.title}</p>
+                            <span className="memberEvalScore">{row.score ? `${row.score}点` : '未入力'}</span>
+                          </div>
+                          {row.comment ? <p className="memberEvalComment">{row.comment}</p> : null}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="memberDetailEmpty">上司評価の入力はまだありません。</p>
+                  )
+                ) : null}
                 {detailTab === 'goal' ? (
-                  <p className="memberDetailEmpty">登録目標: {selectedMemberGoalCount} 件（詳細は「目標設定・管理」タブ）</p>
+                  selectedMemberGoalCount > 0 ? (
+                    <ul className="memberGoalList">
+                      {selectedMemberGoals.map((goal) => (
+                        <li key={goal.id} className="memberGoalItem">
+                          <div className="memberGoalHead">
+                            <p className={goal.achieved ? 'memberGoalTitle isDone' : 'memberGoalTitle'}>{goal.title}</p>
+                            <span className={`memberGoalStatus${goal.achieved ? ' isDone' : ''}`}>
+                              {goal.achieved ? '達成済み' : '進行中'}
+                            </span>
+                          </div>
+                          <p className="memberGoalDeadline">期日: {goal.deadline || '―'}</p>
+                          <p className="memberGoalDetail">{goal.detail || '（詳細なし）'}</p>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="memberDetailEmpty">登録目標はありません。</p>
+                  )
                 ) : null}
               </div>
             </section>
@@ -4621,10 +4717,6 @@ function EmployeeManagePage({
   const handleCreateEmployee = (event) => {
     event.preventDefault()
     if (!newEmployee.id.trim() || !newEmployee.name.trim()) return
-    if (newEmployee.password && !hasStrongPassword(newEmployee.password)) {
-      window.alert('パスワードは8文字以上で、英大文字・英小文字・数字・記号を含めてください。')
-      return
-    }
 
     setRows((prev) => [
       ...prev,
@@ -4660,10 +4752,6 @@ function EmployeeManagePage({
 
     const trimmedName = editingRow.name.trim()
     if (!trimmedName) return
-    if (editingRow.password && !hasStrongPassword(editingRow.password)) {
-      window.alert('パスワードは8文字以上で、英大文字・英小文字・数字・記号を含めてください。')
-      return
-    }
 
     setRows((prev) => prev.map((row) => (row.id === editingRow.id ? { ...row, ...editingRow, name: trimmedName } : row)))
     setIsEditModalOpen(false)

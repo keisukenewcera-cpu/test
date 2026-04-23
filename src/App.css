@@ -10,6 +10,7 @@
 .card {
   width: min(100%, 1280px);
   max-width: calc(100vw - 16px);
+  box-sizing: border-box;
   background: rgba(255, 255, 255, 0.72);
   border: 1px solid rgba(255, 255, 255, 0.45);
   backdrop-filter: blur(14px);
@@ -143,6 +144,29 @@ h1 {
   box-shadow: 0 6px 16px rgba(79, 70, 229, 0.28);
 }
 
+.tabButtonMain {
+  min-width: 59px;
+  border-radius: 10px;
+  padding: 8px 10px 7px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+
+.tabButtonMainIcon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.tabButtonMainLabel {
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.01em;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -201,6 +225,7 @@ select:focus {
 
 .cardLogin {
   width: min(100%, 1200px);
+  box-sizing: border-box;
   background: transparent;
   border: none;
   box-shadow: none;
@@ -237,8 +262,13 @@ select:focus {
 .loginBrandTitle {
   text-align: center;
   margin: 0;
-  font-size: 48px;
+  font-size: 38px;
+  line-height: 1.2;
   color: #0f172a;
+}
+
+.loginBrandTitle.isAdmin {
+  font-size: 28px;
 }
 
 .loginBrandSub {
@@ -440,10 +470,46 @@ select:focus {
 }
 
 .logoutTopRight {
+  position: static;
+  margin: 0;
+  z-index: auto;
+}
+
+.sessionTopRight {
   position: fixed;
   top: 12px;
   right: 12px;
   z-index: 30;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sessionUserChip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 180px;
+  padding: 6px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  background: rgba(255, 255, 255, 0.82);
+  color: #334155;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sessionTopRight .logoutTopRight {
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  background: rgba(255, 255, 255, 0.82);
+  color: #334155;
+  border-radius: 999px;
+  padding: 6px 9px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
 }
 
 .dangerButton {
@@ -853,45 +919,47 @@ select:focus {
   border: 1px solid #fecaca;
   border-left: 4px solid #dc2626;
   border-radius: 10px;
-  padding: 12px;
+  padding: 8px;
 }
 
 .stagnationAlert h3 {
   margin: 0;
   color: #991b1b;
-  font-size: 16px;
+  font-size: 13px;
 }
 
 .stagnationAlert > p {
-  margin: 8px 0 10px;
+  margin: 5px 0 6px;
   color: #7f1d1d;
-  font-size: 13px;
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .stagnationCard {
   background: #ffffff;
   border: 1px solid #e5e7eb;
-  border-radius: 10px;
-  padding: 10px;
-  margin-top: 8px;
+  border-radius: 8px;
+  padding: 7px 8px;
+  margin-top: 6px;
 }
 
 .stagnationCard h4 {
   margin: 0;
-  font-size: 22px;
+  font-size: 14px;
+  line-height: 1.25;
 }
 
 .stagnationCard > span {
   display: block;
-  margin-top: 2px;
+  margin-top: 1px;
   color: #6b7280;
-  font-size: 12px;
+  font-size: 10px;
 }
 
 .statusTags {
-  margin-top: 8px;
+  margin-top: 5px;
   display: flex;
-  gap: 6px;
+  gap: 4px;
   flex-wrap: wrap;
 }
 
@@ -900,8 +968,8 @@ select:focus {
   background: #fef3c7;
   border: 1px solid #fcd34d;
   border-radius: 999px;
-  padding: 3px 8px;
-  font-size: 11px;
+  padding: 2px 6px;
+  font-size: 9px;
   color: #92400e;
 }
 
@@ -1231,6 +1299,120 @@ select:focus {
   margin: 4px 0 0;
   font-size: 12px;
   color: #64748b;
+}
+
+.memberGoalList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.memberGoalItem {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 9px 10px;
+}
+
+.memberGoalHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.memberGoalTitle {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.memberGoalTitle.isDone {
+  text-decoration: line-through;
+  color: #64748b;
+}
+
+.memberGoalStatus {
+  flex-shrink: 0;
+  border-radius: 999px;
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.memberGoalStatus.isDone {
+  border-color: #86efac;
+  background: #ecfdf5;
+  color: #15803d;
+}
+
+.memberGoalDeadline {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: #475569;
+  font-weight: 600;
+}
+
+.memberGoalDetail {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: #334155;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.memberEvalList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.memberEvalItem {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 9px 10px;
+}
+
+.memberEvalHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.memberEvalTitle {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.memberEvalScore {
+  flex-shrink: 0;
+  border-radius: 999px;
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.memberEvalComment {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: #334155;
+  line-height: 1.5;
+  white-space: pre-wrap;
 }
 
 .memberDetailEmpty {
@@ -2053,83 +2235,180 @@ select:focus {
 
 .skillUpTopGrid {
   display: grid;
-  grid-template-columns: minmax(200px, 1.25fr) 1fr 1fr;
-  grid-template-rows: auto auto;
-  gap: 12px;
-  margin-bottom: 20px;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  margin-bottom: 14px;
 }
 
 .skillUpProfileCard {
   grid-column: 1;
-  grid-row: 1 / span 2;
-  background: #ffffff;
-  border: 1px solid #e5e7eb;
-  border-radius: 14px;
-  padding: 16px 18px;
-  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
+  grid-row: 1;
+  background: linear-gradient(160deg, #ffffff, #f8fbff);
+  border: 1px solid #dbe7ff;
+  border-radius: 12px;
+  padding: 10px 12px;
+  box-shadow: 0 6px 16px rgba(59, 130, 246, 0.12);
 }
 
 .skillUpProfileCard h3 {
   margin: 0;
-  font-size: 22px;
+  font-size: 17px;
   color: #0f172a;
 }
 
 .skillUpDeptBadge {
   display: inline-block;
-  margin-top: 8px;
-  padding: 3px 10px;
+  margin-top: 6px;
+  padding: 2px 8px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
-  background: #f1f5f9;
-  color: #475569;
+  background: #e8f0ff;
+  color: #1d4ed8;
 }
 
 .skillUpJoin {
-  margin: 12px 0 0;
-  font-size: 13px;
+  margin: 8px 0 0;
+  font-size: 11px;
   color: #64748b;
 }
 
-.skillUpStatCard {
-  border-radius: 14px;
-  padding: 14px 16px;
-  border: 1px solid #e8e0c8;
+.skillUpInlineStats {
+  margin-top: 8px;
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-height: 100px;
+  justify-content: flex-start;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.skillUpInlineStats .skillUpInlineStat:nth-child(1) {
+  background: linear-gradient(160deg, #eff6ff, #dbeafe);
+  border-color: #bae6fd;
+}
+
+.skillUpInlineStats .skillUpInlineStat:nth-child(2) {
+  background: linear-gradient(160deg, #fff7e8, #fde9ba);
+  border-color: #fde68a;
+}
+
+.skillUpInlineStats .skillUpInlineStat:nth-child(3) {
+  background: linear-gradient(160deg, #eefdf5, #dcfce7);
+  border-color: #86efac;
+}
+
+.skillUpInlineStats .skillUpInlineStat:nth-child(1) .skillUpInlineStatValue {
+  color: #1d4ed8;
+}
+
+.skillUpInlineStats .skillUpInlineStat:nth-child(2) .skillUpInlineStatValue {
+  color: #c2410c;
+}
+
+.skillUpInlineStats .skillUpInlineStat:nth-child(3) .skillUpInlineStatValue {
+  color: #15803d;
+}
+
+.skillUpInlineStats .skillUpInlineStat:nth-child(1) .skillUpInlineStatLabel::before {
+  content: '🏆 ';
+}
+
+.skillUpInlineStats .skillUpInlineStat:nth-child(2) .skillUpInlineStatLabel::before {
+  content: '★ ';
+}
+
+.skillUpInlineStats .skillUpInlineStat:nth-child(3) .skillUpInlineStatLabel::before {
+  content: '◎ ';
+}
+
+.skillUpInlineStat {
+  width: 74px;
+  aspect-ratio: 1 / 1;
+  border: 1px solid #dbe7ff;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  text-align: center;
+  padding: 6px;
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
+}
+
+.skillUpInlineStatLabel {
+  display: block;
+  font-size: 8px;
+  color: #64748b;
+  font-weight: 700;
+}
+
+.skillUpInlineStatValue {
+  display: block;
+  margin-top: 1px;
+  font-size: 13px;
+  color: #0f172a;
+  line-height: 1.1;
+}
+
+@media (max-width: 640px) {
+  .skillUpInlineStats {
+    gap: 8px;
+  }
+
+  .skillUpInlineStat {
+    width: 64px;
+    padding: 5px;
+  }
+
+  .skillUpInlineStatLabel {
+    font-size: 7px;
+  }
+
+  .skillUpInlineStatValue {
+    font-size: 11px;
+  }
+}
+
+.skillUpStatCard {
+  border-radius: 999px;
+  padding: 8px 6px;
+  border: 1px solid #dbe7ff;
+  display: grid;
+  place-items: center;
+  gap: 2px;
+  width: min(100%, 86px);
+  aspect-ratio: 1 / 1;
+  justify-self: center;
+  text-align: center;
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
 }
 
 .skillUpStatStars {
-  grid-column: 2;
-  grid-row: 1;
-  background: linear-gradient(160deg, #fffbeb, #fef3c7);
+  grid-column: 1;
+  grid-row: 2;
+  background: linear-gradient(160deg, #fff7e8, #fde9ba);
   border-color: #fde68a;
 }
 
 .skillUpStatGrade {
   grid-column: 3;
   grid-row: 1;
-  background: linear-gradient(160deg, #f0f9ff, #e0f2fe);
+  background: linear-gradient(160deg, #eff6ff, #dbeafe);
   border-color: #bae6fd;
 }
 
 .skillUpStatSkills {
   grid-column: 2 / span 2;
   grid-row: 2;
-  background: linear-gradient(160deg, #f0f9ff, #e0f2fe);
-  border-color: #bae6fd;
+  background: linear-gradient(160deg, #eefdf5, #dcfce7);
+  border-color: #86efac;
 }
 
 .skillUpStatIcon {
-  width: 36px;
-  height: 36px;
+  width: 22px;
+  height: 22px;
   border-radius: 999px;
   display: grid;
   place-items: center;
-  font-size: 18px;
+  font-size: 12px;
   background: #fff7ed;
   color: #ea580c;
 }
@@ -2141,21 +2420,21 @@ select:focus {
 
 .skillUpStatLabel {
   margin: 0;
-  font-size: 12px;
+  font-size: 9px;
   font-weight: 700;
   color: #64748b;
 }
 
 .skillUpStatValue {
-  font-size: 26px;
+  font-size: 16px;
   color: #0f172a;
   line-height: 1.1;
 }
 
 .skillUpStatValue small {
   display: block;
-  margin-top: 4px;
-  font-size: 13px;
+  margin-top: 1px;
+  font-size: 8px;
   font-weight: 600;
   color: #475569;
 }
@@ -2460,19 +2739,12 @@ select:focus {
 @media (max-width: 900px) {
   .skillUpTopGrid {
     grid-template-columns: 1fr;
-    grid-template-rows: none;
+    gap: 6px;
   }
 
   .skillUpProfileCard {
-    grid-column: auto;
-    grid-row: auto;
-  }
-
-  .skillUpStatStars,
-  .skillUpStatGrade,
-  .skillUpStatSkills {
-    grid-column: auto;
-    grid-row: auto;
+    grid-column: 1;
+    grid-row: 1;
   }
 
   .skillTableWrap {
@@ -2687,28 +2959,42 @@ select:focus {
 .selfEvalDetailLink {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  margin: 0 0 14px;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin: 0;
   padding: 0;
-  border: none;
-  background: none;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  background: #eff6ff;
   font-family: inherit;
   font-size: 13px;
   font-weight: 700;
-  color: #2563eb;
+  color: #1d4ed8;
   cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 3px;
+  text-decoration: none;
 }
 
 .selfEvalDetailLink:hover {
-  color: #1d4ed8;
+  background: #dbeafe;
+  border-color: #93c5fd;
+}
+
+.selfEvalFieldHead {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
 }
 
 .selfEvalItemGrid {
   display: grid;
   grid-template-columns: 1fr 1.2fr;
   gap: 14px 18px;
+}
+
+.selfEvalItemGrid.isSingleField {
+  grid-template-columns: 1fr;
 }
 
 @media (max-width: 720px) {
@@ -2728,20 +3014,75 @@ select:focus {
 
 .selfEvalFieldLabel select,
 .selfEvalFieldLabel input {
+  min-height: 44px;
   padding: 10px 12px;
-  border-radius: 8px;
+  border-radius: 12px;
   border: 1px solid #cbd5e1;
   font-size: 14px;
+  font-weight: 600;
   font-family: inherit;
   color: #0f172a;
   background: #ffffff;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.selfEvalFieldLabel select {
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  padding-right: 38px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, #64748b 50%),
+    linear-gradient(135deg, #64748b 50%, transparent 50%);
+  background-position:
+    calc(100% - 18px) calc(50% - 2px),
+    calc(100% - 13px) calc(50% - 2px);
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.selfEvalFieldLabel select:hover,
+.selfEvalFieldLabel input:hover {
+  border-color: #93c5fd;
 }
 
 .selfEvalFieldLabel select:focus,
 .selfEvalFieldLabel input:focus {
-  outline: 2px solid #93c5fd;
-  outline-offset: 0;
+  outline: none;
   border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+  transform: translateY(-1px);
+}
+
+.selfEvalScoreSegment {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.selfEvalScorePill {
+  min-height: 42px;
+  border-radius: 999px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #334155;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease, background-color 0.18s ease;
+}
+
+.selfEvalScorePill:hover {
+  border-color: #93c5fd;
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.16);
+  transform: translateY(-1px);
+}
+
+.selfEvalScorePill.isActive {
+  border-color: #2563eb;
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  color: #ffffff;
+  box-shadow: 0 6px 14px rgba(37, 99, 235, 0.28);
 }
 
 .selfEvalDetailModal h3 {
@@ -2749,6 +3090,17 @@ select:focus {
   font-size: 18px;
   color: #0f172a;
   padding-right: 36px;
+}
+
+.selfEvalDetailScoreBox {
+  margin: 0 0 12px;
+}
+
+.selfEvalDetailScoreLabel {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #475569;
 }
 
 .selfEvalDetailBody {
@@ -2837,6 +3189,12 @@ select:focus {
 .bossEvalPage .selfEvalFieldLabel input:focus {
   outline-color: #c4b5fd;
   border-color: #8b5cf6;
+}
+
+.bossEvalPage .selfEvalScorePill.isActive {
+  border-color: #7c3aed;
+  background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+  box-shadow: 0 6px 14px rgba(124, 58, 237, 0.28);
 }
 
 .bossEvalPage .selfEvalDetailBody {
@@ -4243,7 +4601,7 @@ select:focus {
   }
 
   .summaryCards {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .employeeToolbar {
@@ -4294,9 +4652,279 @@ select:focus {
 }
 
 @media (max-width: 640px) {
+  html,
+  body,
+  #root {
+    overflow-x: hidden;
+  }
+
+  .app {
+    padding: 8px;
+  }
+
   .card {
+    width: 100%;
+    max-width: 100%;
     padding: 14px;
     border-radius: 14px;
+  }
+
+  .loginScreen {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .loginPanel {
+    width: 100%;
+    box-sizing: border-box;
+    border-radius: 16px;
+    padding: 18px 14px 14px;
+  }
+
+  .loginBrandMark {
+    width: 50px;
+    height: 50px;
+    font-size: 30px;
+    margin-bottom: 2px;
+  }
+
+  .loginBrandTitle {
+    font-size: 30px;
+  }
+
+  .loginBrandTitle.isAdmin {
+    font-size: 24px;
+  }
+
+  .loginBrandSub {
+    margin-bottom: 14px;
+    font-size: 12px;
+  }
+
+  .loginAuxRow {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .logoutTopRight {
+    position: static;
+    width: fit-content;
+    margin: 0;
+    z-index: auto;
+  }
+
+  .sessionTopRight {
+    position: static;
+    width: 100%;
+    justify-content: flex-end;
+    margin-bottom: 8px;
+    z-index: auto;
+  }
+
+  .sessionUserChip {
+    max-width: 46vw;
+    font-size: 10px;
+    padding: 5px 8px;
+  }
+
+  .sessionTopRight .logoutTopRight {
+    font-size: 10px;
+    padding: 5px 8px;
+  }
+
+  .pageTabs {
+    gap: 6px;
+    margin-top: 8px;
+    padding-bottom: 2px;
+    max-width: 100%;
+  }
+
+  .tabButton {
+    min-width: 132px;
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+
+  .tabButtonMain {
+    min-width: 48px;
+    padding: 7px 8px 6px;
+  }
+
+  .tabButtonMainIcon {
+    font-size: 14px;
+  }
+
+  .tabButtonMainLabel {
+    font-size: 10px;
+  }
+
+  .pageTabsSub {
+    overflow-x: hidden;
+  }
+
+  .pageTabsSub .tabButton {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .employeeHeader h2 {
+    font-size: 24px;
+  }
+
+  .employeeHeader p {
+    font-size: 12px;
+  }
+
+  .employeeTable {
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .employeeTable .row {
+    min-width: 760px;
+  }
+
+  .skillUpPageHeader h2 {
+    font-size: 24px;
+  }
+
+  .skillUpLead {
+    font-size: 13px;
+  }
+
+  .skillUpTopGrid {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .skillUpProfileCard,
+  .skillUpStatCard {
+    padding: 6px;
+    min-height: 0;
+  }
+
+  .skillUpProfileCard {
+    grid-column: 1 / -1;
+  }
+
+  .skillUpProfileCard h3 {
+    font-size: 13px;
+  }
+
+  .skillUpDeptBadge {
+    font-size: 9px;
+    padding: 1px 6px;
+  }
+
+  .skillUpJoin {
+    margin-top: 5px;
+    font-size: 10px;
+  }
+
+  .skillUpInlineStats {
+    gap: 6px;
+  }
+
+  .skillUpInlineStat {
+    padding: 5px 6px;
+  }
+
+  .skillUpInlineStatLabel {
+    font-size: 8px;
+  }
+
+  .skillUpInlineStatValue {
+    font-size: 12px;
+  }
+
+  .skillUpFilterTabs {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    padding-bottom: 2px;
+  }
+
+  .skillUpFilterTab {
+    flex: 0 0 auto;
+    min-width: 120px;
+  }
+
+  .selfEvalHeader h2 {
+    font-size: 24px;
+  }
+
+  .selfEvalGuide {
+    padding: 12px;
+  }
+
+  .selfEvalCategoryHead {
+    padding: 10px 12px;
+  }
+
+  .selfEvalItemCard {
+    padding: 12px;
+  }
+
+  .selfEvalItemGrid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .selfEvalSaveBtn {
+    width: 100%;
+  }
+
+  .goalMgmtHeader h2 {
+    font-size: 24px;
+  }
+
+  .goalMgmtMeta {
+    margin-bottom: 14px;
+    font-size: 13px;
+  }
+
+  .goalMgmtToolbar {
+    justify-content: stretch;
+  }
+
+  .goalMgmtAddBtn {
+    width: 100%;
+  }
+
+  .goalMgmtMainBox {
+    padding: 14px;
+  }
+
+  .goalMgmtListItem {
+    padding: 12px;
+  }
+
+  .goalMgmtListHead {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .goalMgmtDeleteBtn {
+    align-self: flex-end;
+  }
+
+  .goalMgmtListDeadline,
+  .goalMgmtListDetail {
+    margin-left: 0;
+  }
+
+  .goalMgmtFormModal {
+    width: 100%;
+    padding: 16px 14px 14px;
+  }
+
+  .goalMgmtModalActions {
+    flex-direction: column;
+  }
+
+  .goalMgmtBtnSecondary,
+  .goalMgmtBtnPrimary {
+    width: 100%;
   }
 
   h1 {
