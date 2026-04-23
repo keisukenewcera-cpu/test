@@ -10,5 +10,9 @@ body {
 }
 
 #root {
+  display: flex;
+  flex-wrap: wrap;
+  width: 393px;
+  position: absolute;
   min-height: 100vh;
 }
