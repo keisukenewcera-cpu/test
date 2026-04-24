@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import './App.css'
 import { supabase } from './lib/supabaseClient'
 
@@ -93,9 +94,24 @@ const createRow = (index) => ({
   team: 'denture',
   grade: 'G3',
   score: '',
+  adjustment: '',
   specialAllowance: '',
   note: '',
 })
+
+const GYOSEKI_CSV_COLUMNS = [
+  { key: 'employeeNo', label: '社員番号', value: (row) => row.employeeNo },
+  { key: 'employeeName', label: '社員名', value: (row) => row.employeeName },
+  { key: 'photo', label: '顔写真', value: (row) => (row.photoDataUrl ? '登録済み' : '') },
+  { key: 'team', label: '区分', value: (row) => (row.team === 'ck' ? 'CK' : 'デンチャー') },
+  { key: 'grade', label: '等級', value: (row) => row.grade },
+  { key: 'score', label: '評価スコア', value: (row) => row.score },
+  { key: 'performanceAllowance', label: '業績手当', value: (row) => row.performanceAllowance },
+  { key: 'adjustment', label: '調整', value: (row) => row.adjustment ?? '' },
+  { key: 'specialAllowance', label: '特別手当', value: (row) => row.specialAllowance },
+  { key: 'thirdBonus', label: '第3回目賞与', value: (row) => row.thirdBonus },
+  { key: 'note', label: '備考欄', value: (row) => row.note },
+]
 
 const STORAGE_KEY = 'performanceAllowanceAppData'
 const CLOUD_STATE_ID = 'default'
@@ -546,6 +562,60 @@ function criteriaBlobToFiveScores(text) {
   return out
 }
 
+function scoreCriteriaToCriteriaBlob(scoreCriteria) {
+  const arr = Array.isArray(scoreCriteria) ? [...scoreCriteria] : []
+  while (arr.length < 5) arr.push('')
+  return [5, 4, 3, 2, 1]
+    .map((n) => `${n}点：${String(arr[n - 1] ?? '').trim()}`)
+    .join('\n')
+}
+
+function buildEvalCategoriesForGrade(criteriaStore, gradeId) {
+  const g = String(gradeId ?? '').trim()
+  const seedSuperGroupByTitle = new Map(
+    SELF_EVAL_CATEGORIES.map((cat) => [String(cat.title ?? '').trim(), cat.superGroup === 'interpersonal' ? 'interpersonal' : 'business']),
+  )
+  const sharedMajors = Array.isArray(criteriaStore?.sharedMajors) ? criteriaStore.sharedMajors : []
+  const minorsByMajor =
+    criteriaStore?.minorsByGrade?.[g] && typeof criteriaStore.minorsByGrade[g] === 'object' && !Array.isArray(criteriaStore.minorsByGrade[g])
+      ? criteriaStore.minorsByGrade[g]
+      : null
+
+  if (sharedMajors.length > 0 && minorsByMajor) {
+    return sharedMajors.map((major, majorIndex) => {
+      const title = String(major?.title ?? '').trim()
+      const superGroup = seedSuperGroupByTitle.get(title) ?? 'business'
+      const rawMinors = Array.isArray(minorsByMajor[major.id]) ? minorsByMajor[major.id] : []
+      const items = rawMinors
+        .map((minor, minorIndex) => ({
+          id: String(minor?.id ?? '').trim() || `min-fallback-${majorIndex}-${minorIndex}`,
+          title: String(minor?.title ?? '').trim(),
+          weightPct: Math.min(100, Math.max(0, Number(minor?.weightPct) || 0)),
+          criteria: scoreCriteriaToCriteriaBlob(minor?.scoreCriteria),
+        }))
+        .filter((it) => it.title)
+      return {
+        id: String(major?.id ?? '').trim() || `major-fallback-${majorIndex}`,
+        title: title || `大項目${majorIndex + 1}`,
+        superGroup,
+        items,
+      }
+    })
+  }
+
+  return SELF_EVAL_CATEGORIES.map((cat) => ({
+    id: cat.id,
+    title: cat.title,
+    superGroup: cat.superGroup === 'interpersonal' ? 'interpersonal' : 'business',
+    items: cat.items.map((it) => ({
+      id: it.id,
+      title: it.title,
+      weightPct: it.weightPct,
+      criteria: it.criteria,
+    })),
+  }))
+}
+
 function normalizeEvaluationMinor(m) {
   const sc = Array.isArray(m?.scoreCriteria) ? [...m.scoreCriteria] : []
   while (sc.length < 5) sc.push('')
@@ -860,6 +930,132 @@ function resizeLevelCriteriaArray(prev, newLen) {
   return next
 }
 
+function GyosekiSvgIcon({ children }) {
+  return (
+    <svg className="gyosekiSvgIcon" viewBox="0 0 24 24" width="18" height="18" aria-hidden>
+      {children}
+    </svg>
+  )
+}
+
+function GyosekiIconDownload() {
+  return (
+    <GyosekiSvgIcon>
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"
+      />
+    </GyosekiSvgIcon>
+  )
+}
+
+function GyosekiIconUpload() {
+  return (
+    <GyosekiSvgIcon>
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M12 21V9m0 0l-4 4m4-4l4 4M4 15h16"
+      />
+    </GyosekiSvgIcon>
+  )
+}
+
+function GyosekiIconMail() {
+  return (
+    <GyosekiSvgIcon>
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+      />
+    </GyosekiSvgIcon>
+  )
+}
+
+function GyosekiIconPlus() {
+  return (
+    <GyosekiSvgIcon>
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        d="M12 5v14M5 12h14"
+      />
+    </GyosekiSvgIcon>
+  )
+}
+
+function GyosekiIconSortAsc() {
+  return (
+    <GyosekiSvgIcon>
+      <path fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M8 17l4-8 4 8M8 17h8" />
+    </GyosekiSvgIcon>
+  )
+}
+
+function GyosekiIconSortDesc() {
+  return (
+    <GyosekiSvgIcon>
+      <path fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M8 7l4 8 4-8M8 7h8" />
+    </GyosekiSvgIcon>
+  )
+}
+
+function sortGyosekiAllowanceRows(list, sortKey, sortOrder) {
+  const direction = sortOrder === 'asc' ? 1 : -1
+  const toString = (value) => String(value ?? '').toLowerCase()
+  return [...list].sort((a, b) => {
+    if (sortKey === 'score') return (a.score - b.score) * direction
+    if (sortKey === 'employeeNo') {
+      const aNo = Number(a.employeeNo)
+      const bNo = Number(b.employeeNo)
+      const aIsNumeric = Number.isFinite(aNo) && a.employeeNo !== ''
+      const bIsNumeric = Number.isFinite(bNo) && b.employeeNo !== ''
+
+      if (aIsNumeric && bIsNumeric) return (aNo - bNo) * direction
+      if (aIsNumeric) return -1 * direction
+      if (bIsNumeric) return 1 * direction
+      return toString(a.employeeNo).localeCompare(toString(b.employeeNo), 'ja') * direction
+    }
+    if (sortKey === 'performanceAllowance')
+      return (a.performanceAllowance - b.performanceAllowance) * direction
+    if (sortKey === 'thirdBonus') return (a.thirdBonus - b.thirdBonus) * direction
+    if (sortKey === 'grade') return (gradeRates[a.grade] - gradeRates[b.grade]) * direction
+    if (sortKey === 'team') return toString(a.team).localeCompare(toString(b.team), 'ja') * direction
+
+    return toString(a[sortKey]).localeCompare(toString(b[sortKey]), 'ja') * direction
+  })
+}
+
+function EmployeeIconTemplateCsv() {
+  return (
+    <svg className="employeeToolbarSvgIcon" viewBox="0 0 24 24" width="18" height="18" aria-hidden>
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"
+      />
+      <path fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M14 2v6h6" />
+      <path fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" d="M8 13h8M8 17h6" />
+    </svg>
+  )
+}
+
 function App() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -895,8 +1091,21 @@ function App() {
     () => savedData?.targetSpecialCkTotal ?? '',
   )
   const [csvMessage, setCsvMessage] = useState('')
+  const [gyosekiCsvModalOpen, setGyosekiCsvModalOpen] = useState(false)
+  const [gyosekiCsvColumnOrder, setGyosekiCsvColumnOrder] = useState(() => GYOSEKI_CSV_COLUMNS.map((c) => c.key))
+  const [gyosekiCsvColumnEnabled, setGyosekiCsvColumnEnabled] = useState(() =>
+    Object.fromEntries(GYOSEKI_CSV_COLUMNS.map((c) => [c.key, true])),
+  )
   const [sortKey, setSortKey] = useState(() => savedData?.sortKey ?? 'employeeNo')
   const [sortOrder, setSortOrder] = useState(() => savedData?.sortOrder ?? 'asc')
+  const [gyosekiTeamFilter, setGyosekiTeamFilter] = useState(() =>
+    savedData?.gyosekiTeamFilter === 'denture' || savedData?.gyosekiTeamFilter === 'ck'
+      ? savedData.gyosekiTeamFilter
+      : 'all',
+  )
+  const [gyosekiRowView, setGyosekiRowView] = useState(() =>
+    savedData?.gyosekiRowView === 'simple' ? 'simple' : 'detail',
+  )
   const [workspaceView, setWorkspaceView] = useState(() => savedData?.workspaceView ?? 'gyoseki')
   const [settingsTab, setSettingsTab] = useState(() => savedData?.settingsTab ?? 'skill')
   const [activePage, setActivePage] = useState(() => savedData?.activePage ?? 'input')
@@ -1184,6 +1393,7 @@ function App() {
       const gradeIdx = headerIndex(['等級', 'グレード'])
       const teamIdx = headerIndex(['区分'])
       const scoreIdx = headerIndex(['評価スコア', '総合得点'])
+      const adjustmentIdx = headerIndex(['調整'])
       const specialIdx = headerIndex(['特別手当'])
       const noteIdx = headerIndex(['備考欄'])
 
@@ -1209,6 +1419,7 @@ function App() {
             team: normalizedTeam,
             grade: normalizedGrade,
             score: scoreIdx >= 0 ? sanitizeDecimalInput(cols[scoreIdx] || '') : '',
+            adjustment: adjustmentIdx >= 0 ? sanitizeIntegerInput(cols[adjustmentIdx] || '') : '',
             specialAllowance:
               specialIdx >= 0 ? sanitizeIntegerInput(cols[specialIdx] || '') : '',
             note: noteIdx >= 0 ? cols[noteIdx] || '' : '',
@@ -1264,39 +1475,58 @@ function App() {
   }
 
   const handleExportCsv = () => {
-    const csvContent = buildCsvContent()
-    downloadCsvFile(csvContent)
+    setGyosekiCsvModalOpen(true)
   }
 
-  const buildCsvContent = () => {
-    const headers = [
-      '社員番号',
-      '社員名',
-      '顔写真',
-      '区分',
-      '等級',
-      '評価スコア',
-      '業績手当',
-      '特別手当',
-      '第3回目賞与',
-      '備考欄',
-    ]
+  const buildCsvContent = (selectedColumnKeys) => {
+    const selectedColumns = gyosekiCsvColumnOrder
+      .filter((key) => selectedColumnKeys.includes(key))
+      .map((key) => GYOSEKI_CSV_COLUMNS.find((c) => c.key === key))
+      .filter(Boolean)
+    const headers = selectedColumns.map((c) => c.label)
     const escapeCsvValue = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`
-    const rowsForExport = sortedRows.map((row) => [
-      row.employeeNo,
-      row.employeeName,
-      row.photoDataUrl ? '登録済み' : '',
-      row.team === 'ck' ? 'CK' : 'デンチャー',
-      row.grade,
-      row.score,
-      row.performanceAllowance,
-      row.specialAllowance,
-      row.thirdBonus,
-      row.note,
-    ])
+    const rowsForExport = sortGyosekiAllowanceRows(computedRows, sortKey, sortOrder).map((row) =>
+      selectedColumns.map((c) => c.value(row)),
+    )
     return [headers, ...rowsForExport]
       .map((line) => line.map(escapeCsvValue).join(','))
       .join('\r\n')
+  }
+
+  const moveGyosekiCsvColumn = (key, delta) => {
+    setGyosekiCsvColumnOrder((prev) => {
+      const index = prev.indexOf(key)
+      if (index < 0) return prev
+      const to = index + delta
+      if (to < 0 || to >= prev.length) return prev
+      const next = [...prev]
+      const [item] = next.splice(index, 1)
+      next.splice(to, 0, item)
+      return next
+    })
+  }
+
+  const toggleGyosekiCsvColumn = (key) => {
+    setGyosekiCsvColumnEnabled((prev) => ({ ...prev, [key]: !prev[key] }))
+  }
+
+  const setAllGyosekiCsvColumnsEnabled = (enabled) => {
+    setGyosekiCsvColumnEnabled(Object.fromEntries(GYOSEKI_CSV_COLUMNS.map((c) => [c.key, enabled])))
+  }
+
+  const resetGyosekiCsvColumns = () => {
+    setGyosekiCsvColumnOrder(GYOSEKI_CSV_COLUMNS.map((c) => c.key))
+  }
+
+  const handleConfirmGyosekiCsvExport = () => {
+    const selectedKeys = gyosekiCsvColumnOrder.filter((key) => gyosekiCsvColumnEnabled[key])
+    if (selectedKeys.length === 0) {
+      window.alert('抽出する項目を1つ以上選んでください。')
+      return
+    }
+    const csvContent = buildCsvContent(selectedKeys)
+    downloadCsvFile(csvContent)
+    setGyosekiCsvModalOpen(false)
   }
 
   const downloadCsvFile = (csvContent) => {
@@ -1389,32 +1619,15 @@ function App() {
     [computedRows],
   )
 
-  const sortedRows = useMemo(() => {
-    const direction = sortOrder === 'asc' ? 1 : -1
-    const toString = (value) => String(value ?? '').toLowerCase()
+  const gyosekiFilteredRows = useMemo(() => {
+    if (gyosekiTeamFilter === 'all') return computedRows
+    return computedRows.filter((row) => row.team === gyosekiTeamFilter)
+  }, [computedRows, gyosekiTeamFilter])
 
-    return [...computedRows].sort((a, b) => {
-      if (sortKey === 'score') return (a.score - b.score) * direction
-      if (sortKey === 'employeeNo') {
-        const aNo = Number(a.employeeNo)
-        const bNo = Number(b.employeeNo)
-        const aIsNumeric = Number.isFinite(aNo) && a.employeeNo !== ''
-        const bIsNumeric = Number.isFinite(bNo) && b.employeeNo !== ''
-
-        if (aIsNumeric && bIsNumeric) return (aNo - bNo) * direction
-        if (aIsNumeric) return -1 * direction
-        if (bIsNumeric) return 1 * direction
-        return toString(a.employeeNo).localeCompare(toString(b.employeeNo), 'ja') * direction
-      }
-      if (sortKey === 'performanceAllowance')
-        return (a.performanceAllowance - b.performanceAllowance) * direction
-      if (sortKey === 'thirdBonus') return (a.thirdBonus - b.thirdBonus) * direction
-      if (sortKey === 'grade') return (gradeRates[a.grade] - gradeRates[b.grade]) * direction
-      if (sortKey === 'team') return toString(a.team).localeCompare(toString(b.team), 'ja') * direction
-
-      return toString(a[sortKey]).localeCompare(toString(b[sortKey]), 'ja') * direction
-    })
-  }, [computedRows, sortKey, sortOrder])
+  const sortedRows = useMemo(
+    () => sortGyosekiAllowanceRows(gyosekiFilteredRows, sortKey, sortOrder),
+    [gyosekiFilteredRows, sortKey, sortOrder],
+  )
 
   const salesDentureValue = Number(departmentSalesDenture === '' ? 0 : departmentSalesDenture) || 0
   const salesCkValue = Number(departmentSalesCk === '' ? 0 : departmentSalesCk) || 0
@@ -1879,6 +2092,8 @@ function App() {
       targetSpecialCkTotal,
       sortKey,
       sortOrder,
+      gyosekiTeamFilter,
+      gyosekiRowView,
       workspaceView,
       settingsTab,
       activePage,
@@ -2036,6 +2251,12 @@ function App() {
     }
     if (typeof payload.sortKey === 'string') setSortKey(payload.sortKey)
     if (payload.sortOrder === 'asc' || payload.sortOrder === 'desc') setSortOrder(payload.sortOrder)
+    if (payload.gyosekiTeamFilter === 'all' || payload.gyosekiTeamFilter === 'denture' || payload.gyosekiTeamFilter === 'ck') {
+      setGyosekiTeamFilter(payload.gyosekiTeamFilter)
+    }
+    if (payload.gyosekiRowView === 'simple' || payload.gyosekiRowView === 'detail') {
+      setGyosekiRowView(payload.gyosekiRowView)
+    }
     if (
       payload.workspaceView === 'gyoseki' ||
       payload.workspaceView === 'count' ||
@@ -2209,6 +2430,8 @@ function App() {
     targetSpecialCkTotal,
     sortKey,
     sortOrder,
+    gyosekiTeamFilter,
+    gyosekiRowView,
     workspaceView,
     settingsTab,
     activePage,
@@ -2252,6 +2475,8 @@ function App() {
     targetSpecialCkTotal,
     sortKey,
     sortOrder,
+    gyosekiTeamFilter,
+    gyosekiRowView,
     workspaceView,
     settingsTab,
     activePage,
@@ -2488,11 +2713,27 @@ function App() {
 
             {activePage === 'input' ? (
               <>
-                <div className="actionRow">
+                <div className="actionRow actionRowGyoseki">
                   <div className="sortControls">
                     <label className="sortLabel">
-                      並び替え
-                      <select value={sortKey} onChange={(event) => setSortKey(event.target.value)}>
+                      <span className="sortLabelText">区分で絞り込み</span>
+                      <select
+                        value={gyosekiTeamFilter}
+                        onChange={(event) => setGyosekiTeamFilter(event.target.value)}
+                        aria-label="区分で絞り込み"
+                      >
+                        <option value="all">すべて</option>
+                        <option value="denture">デンチャー</option>
+                        <option value="ck">CK</option>
+                      </select>
+                    </label>
+                    <label className="sortLabel">
+                      <span className="sortLabelText">並び替え</span>
+                      <select
+                        value={sortKey}
+                        onChange={(event) => setSortKey(event.target.value)}
+                        aria-label="並び替えの基準"
+                      >
                         <option value="employeeNo">社員番号</option>
                         <option value="employeeName">社員名</option>
                         <option value="team">区分</option>
@@ -2504,25 +2745,39 @@ function App() {
                     </label>
                     <button
                       type="button"
-                      className="secondaryButton"
+                      className="secondaryButton gyosekiToolbarBtn"
+                      aria-label={sortOrder === 'asc' ? '昇順（タップで降順）' : '降順（タップで昇順）'}
                       onClick={() => setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
                     >
-                      {sortOrder === 'asc' ? '昇順' : '降順'}
+                      <span className="gyosekiToolbarIcon" aria-hidden>
+                        {sortOrder === 'asc' ? <GyosekiIconSortAsc /> : <GyosekiIconSortDesc />}
+                      </span>
+                      <span className="gyosekiToolbarLabel">{sortOrder === 'asc' ? '昇順' : '降順'}</span>
                     </button>
                   </div>
-                  <button type="button" className="primaryButton" onClick={addRow}>
-                    + 社員行を追加
+                  <button type="button" className="primaryButton gyosekiToolbarBtn" aria-label="社員行を追加" onClick={addRow}>
+                    <span className="gyosekiToolbarIcon" aria-hidden>
+                      <GyosekiIconPlus />
+                    </span>
+                    <span className="gyosekiToolbarLabel">+ 社員行を追加</span>
                   </button>
-                  <label className="csvImportButton">
-                    CSVインポート
+                  <label className="csvImportButton gyosekiToolbarBtn" aria-label="CSVインポート">
+                    <span className="gyosekiToolbarIcon" aria-hidden>
+                      <GyosekiIconDownload />
+                    </span>
+                    <span className="gyosekiToolbarLabel">CSVインポート</span>
                     <input type="file" accept=".csv" onChange={handleImportCsv} />
                   </label>
-                  <button type="button" className="csvExportButton" onClick={handleExportCsv}>
-                    CSVエクスポート
+                  <button type="button" className="csvExportButton gyosekiToolbarBtn" aria-label="CSVエクスポート" onClick={handleExportCsv}>
+                    <span className="gyosekiToolbarIcon" aria-hidden>
+                      <GyosekiIconUpload />
+                    </span>
+                    <span className="gyosekiToolbarLabel">CSVエクスポート</span>
                   </button>
                   <button
                     type="button"
-                    className="csvMailButton"
+                    className="csvMailButton gyosekiToolbarBtn"
+                    aria-label="CSVをメール送信"
                     onClick={() => {
                       const csvContent = buildCsvContent()
                       downloadCsvFile(csvContent)
@@ -2533,10 +2788,20 @@ function App() {
                       window.location.href = `mailto:keisuke.newcera@gmail.com?subject=${subject}&body=${body}`
                     }}
                   >
-                    CSVをメール送信
+                    <span className="gyosekiToolbarIcon" aria-hidden>
+                      <GyosekiIconMail />
+                    </span>
+                    <span className="gyosekiToolbarLabel">CSVをメール送信</span>
                   </button>
                 </div>
                 <p className="syncMessage">{syncMessage}</p>
+                <button
+                  type="button"
+                  className="gyosekiViewToggle"
+                  onClick={() => setGyosekiRowView((prev) => (prev === 'detail' ? 'simple' : 'detail'))}
+                >
+                  {gyosekiRowView === 'detail' ? '簡易表示' : '詳細表示'}
+                </button>
                 {syncError ? (
                   <div className="syncErrorBanner" role="alert">
                     <p>{syncError}</p>
@@ -2546,18 +2811,84 @@ function App() {
                   </div>
                 ) : null}
                 {csvMessage ? <p className="csvMessage">{csvMessage}</p> : null}
+                {gyosekiCsvModalOpen ? (
+                  <div className="employeeModalOverlay" onClick={() => setGyosekiCsvModalOpen(false)}>
+                    <div className="employeeModal gyosekiCsvModal" onClick={(event) => event.stopPropagation()}>
+                      <button type="button" className="modalClose" onClick={() => setGyosekiCsvModalOpen(false)}>
+                        ×
+                      </button>
+                      <h3>CSV抽出項目を選択</h3>
+                      <p>チェックした項目のみ、下の並び順でCSV出力します。</p>
+                      <div className="gyosekiCsvModalToolbar">
+                        <span className="gyosekiCsvModalCount">
+                          選択中 {gyosekiCsvColumnOrder.filter((key) => gyosekiCsvColumnEnabled[key]).length} / {gyosekiCsvColumnOrder.length}
+                        </span>
+                        <div className="gyosekiCsvModalQuickActions">
+                          <button type="button" onClick={() => setAllGyosekiCsvColumnsEnabled(true)}>
+                            全選択
+                          </button>
+                          <button type="button" onClick={() => setAllGyosekiCsvColumnsEnabled(false)}>
+                            全解除
+                          </button>
+                          <button type="button" onClick={resetGyosekiCsvColumns}>
+                            初期順
+                          </button>
+                        </div>
+                      </div>
+                      <ul className="gyosekiCsvFieldList">
+                        {gyosekiCsvColumnOrder.map((key, idx) => {
+                          const col = GYOSEKI_CSV_COLUMNS.find((c) => c.key === key)
+                          if (!col) return null
+                          const checked = !!gyosekiCsvColumnEnabled[key]
+                          return (
+                            <li key={key} className="gyosekiCsvFieldItem">
+                              <label>
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => toggleGyosekiCsvColumn(key)}
+                                />
+                                <span>{col.label}</span>
+                              </label>
+                              <div className="gyosekiCsvFieldSort">
+                                <button type="button" onClick={() => moveGyosekiCsvColumn(key, -1)} disabled={idx === 0}>
+                                  ↑
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => moveGyosekiCsvColumn(key, 1)}
+                                  disabled={idx === gyosekiCsvColumnOrder.length - 1}
+                                >
+                                  ↓
+                                </button>
+                              </div>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                      <div className="gyosekiCsvModalActions">
+                        <button type="button" className="secondaryButton" onClick={() => setGyosekiCsvModalOpen(false)}>
+                          キャンセル
+                        </button>
+                        <button type="button" className="primaryButton" onClick={handleConfirmGyosekiCsvExport}>
+                          この内容で出力
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
 
                 <div className="tableWrap">
                   <table className="allowanceTable">
                     <colgroup>
-                      <col className="colPhoto" />
+                      {gyosekiRowView === 'detail' ? <col className="colPhoto" /> : null}
                       <col className="colEmployeeInfo" />
                       <col className="colAllowanceInfo" />
                       <col className="colAction" />
                     </colgroup>
                     <thead>
                       <tr>
-                        <th>顔写真 / 評価スコア</th>
+                        {gyosekiRowView === 'detail' ? <th>顔写真 / 評価スコア</th> : null}
                         <th>社員情報</th>
                         <th>手当情報</th>
                         <th>操作</th>
@@ -2566,112 +2897,67 @@ function App() {
                     <tbody>
                       {sortedRows.map((row) => (
                         <tr key={row.id} className={getGradeRowClass(row.grade)}>
-                          <td>
-                            <div className="photoCell">
-                              <label className="photoUploadArea">
-                                {row.photoDataUrl ? (
-                                  <img src={row.photoDataUrl} alt="社員顔写真" className="photoThumb" />
-                                ) : (
-                                  <div className="photoPlaceholder">未登録</div>
-                                )}
+                          {gyosekiRowView === 'detail' ? (
+                            <td>
+                              <div className="photoCell">
+                                <label className="photoUploadArea">
+                                  {row.photoDataUrl ? (
+                                    <img src={row.photoDataUrl} alt="社員顔写真" className="photoThumb" />
+                                  ) : (
+                                    <div className="photoPlaceholder">未登録</div>
+                                  )}
+                                  <input
+                                    type="file"
+                                    accept="image/*"
+                                    onChange={(event) => {
+                                      const file = event.target.files?.[0]
+                                      handlePhotoUpload(row.id, file)
+                                      event.target.value = ''
+                                    }}
+                                  />
+                                </label>
+                              </div>
+                            </td>
+                          ) : null}
+                          {gyosekiRowView === 'simple' ? (
+                            <td colSpan={2}>
+                              <div className="gyosekiSimpleRow">
                                 <input
-                                  type="file"
-                                  accept="image/*"
-                                  onChange={(event) => {
-                                    const file = event.target.files?.[0]
-                                    handlePhotoUpload(row.id, file)
-                                    event.target.value = ''
-                                  }}
-                                />
-                              </label>
-                              <label className="scoreUnderPhoto">
-                                スコア
-                                <input
-                                  type="text"
-                                  inputMode="numeric"
-                                  value={row.score}
-                                  onChange={(event) =>
-                                    updateRow(
-                                      row.id,
-                                      'score',
-                                      sanitizeDecimalInput(event.target.value),
-                                    )
-                                  }
-                                />
-                              </label>
-                              <label className="noteUnderPhoto">
-                                備考
-                                <input
-                                  type="text"
-                                  value={row.note}
-                                  onChange={(event) => updateRow(row.id, 'note', event.target.value)}
-                                  placeholder="備考"
-                                />
-                              </label>
-                            </div>
-                          </td>
-                          <td>
-                            <div className="employeeInfoCell">
-                              <label>
-                                社員番号
-                                <input
+                                  className="gyosekiSimpleNo"
                                   type="text"
                                   value={row.employeeNo}
                                   onChange={(event) => updateRow(row.id, 'employeeNo', event.target.value)}
                                   placeholder="1001"
+                                  aria-label="社員番号"
                                 />
-                              </label>
-                              <label>
-                                社員名
                                 <input
+                                  className="gyosekiSimpleName"
                                   type="text"
                                   value={row.employeeName}
                                   onChange={(event) => updateRow(row.id, 'employeeName', event.target.value)}
                                   placeholder="山田 太郎"
+                                  aria-label="社員名"
                                 />
-                              </label>
-                              <label>
-                                区分
-                                <select
-                                  value={row.team ?? 'denture'}
-                                  onChange={(event) => updateRow(row.id, 'team', event.target.value)}
-                                >
-                                  <option value="denture">デンチャー</option>
-                                  <option value="ck">CK</option>
-                                </select>
-                              </label>
-                              <label>
-                                等級
-                                <select
-                                  value={row.grade}
-                                  onChange={(event) => updateRow(row.id, 'grade', event.target.value)}
-                                >
-                                  <option value="G1">G1</option>
-                                  <option value="G2">G2</option>
-                                  <option value="G3">G3</option>
-                                  <option value="G4">G4</option>
-                                  <option value="G5">G5</option>
-                                  <option value="G6">G6</option>
-                                  <option value="P3">P3</option>
-                                  <option value="G1J">G1準社員</option>
-                                  <option value="G2J">G2準社員</option>
-                                  <option value="G3J">G3準社員</option>
-                                  <option value="G4J">G4準社員</option>
-                                  <option value="G5J">G5準社員</option>
-                                  <option value="G6J">G6準社員</option>
-                                </select>
-                              </label>
-                            </div>
-                          </td>
-                          <td>
-                            <div className="allowanceInfoCell">
-                              <div className="allowanceRow">
-                                <span>業績手当</span>
-                                <strong className="moneyCell">{formatJPY(row.performanceAllowance)}</strong>
-                              </div>
-                              <div className="allowanceRow">
-                                <span>特別手当</span>
+                                <span className="gyosekiSimpleLabel">業</span>
+                                <strong className="moneyCell gyosekiSimpleMoney">{formatJPY(row.performanceAllowance)}</strong>
+                                <span className="gyosekiSimpleLabel">調</span>
                                 <input
+                                  className="gyosekiSimpleAdjust"
+                                  type="text"
+                                  inputMode="numeric"
+                                  value={row.adjustment ?? ''}
+                                  onChange={(event) =>
+                                    updateRow(
+                                      row.id,
+                                      'adjustment',
+                                      sanitizeIntegerInput(event.target.value),
+                                    )
+                                  }
+                                  aria-label="調整"
+                                />
+                                <span className="gyosekiSimpleLabel">特</span>
+                                <input
+                                  className="gyosekiSimpleSpecial"
                                   type="text"
                                   inputMode="numeric"
                                   value={row.specialAllowance}
@@ -2682,20 +2968,145 @@ function App() {
                                       sanitizeIntegerInput(event.target.value),
                                     )
                                   }
+                                  aria-label="特別手当"
                                 />
                               </div>
-                              <div className="allowanceRow">
-                                <span>第3回目賞与</span>
-                                <strong className="moneyCell">{formatJPY(row.thirdBonus)}</strong>
-                              </div>
-                            </div>
-                          </td>
+                            </td>
+                          ) : (
+                            <>
+                              <td>
+                                <div className="employeeInfoCell">
+                                  <label className="employeeFieldNo">
+                                    <span className="srOnlyFieldLabel">社員番号</span>
+                                    <input
+                                      type="text"
+                                      value={row.employeeNo}
+                                      onChange={(event) => updateRow(row.id, 'employeeNo', event.target.value)}
+                                      placeholder="1001"
+                                      aria-label="社員番号"
+                                    />
+                                  </label>
+                                  <label className="employeeFieldTeam">
+                                    <span className="srOnlyFieldLabel">区分</span>
+                                    <select
+                                      value={row.team ?? 'denture'}
+                                      onChange={(event) => updateRow(row.id, 'team', event.target.value)}
+                                      aria-label="区分"
+                                    >
+                                      <option value="denture">デンチャー</option>
+                                      <option value="ck">CK</option>
+                                    </select>
+                                  </label>
+                                  <label className="employeeFieldGrade">
+                                    <span className="srOnlyFieldLabel">等級</span>
+                                    <select
+                                      value={row.grade}
+                                      onChange={(event) => updateRow(row.id, 'grade', event.target.value)}
+                                      aria-label="等級"
+                                    >
+                                      <option value="G1">G1</option>
+                                      <option value="G2">G2</option>
+                                      <option value="G3">G3</option>
+                                      <option value="G4">G4</option>
+                                      <option value="G5">G5</option>
+                                      <option value="G6">G6</option>
+                                      <option value="P3">P3</option>
+                                      <option value="G1J">G1準社員</option>
+                                      <option value="G2J">G2準社員</option>
+                                      <option value="G3J">G3準社員</option>
+                                      <option value="G4J">G4準社員</option>
+                                      <option value="G5J">G5準社員</option>
+                                      <option value="G6J">G6準社員</option>
+                                    </select>
+                                  </label>
+                                  <label className="employeeFieldScore">
+                                    <span className="srOnlyFieldLabel">スコア</span>
+                                    <input
+                                      type="text"
+                                      inputMode="numeric"
+                                      value={row.score}
+                                      onChange={(event) =>
+                                        updateRow(
+                                          row.id,
+                                          'score',
+                                          sanitizeDecimalInput(event.target.value),
+                                        )
+                                      }
+                                      aria-label="スコア"
+                                    />
+                                  </label>
+                                  <label className="employeeFieldName">
+                                    <span className="srOnlyFieldLabel">社員名</span>
+                                    <input
+                                      type="text"
+                                      value={row.employeeName}
+                                      onChange={(event) => updateRow(row.id, 'employeeName', event.target.value)}
+                                      placeholder="山田 太郎"
+                                      aria-label="社員名"
+                                    />
+                                  </label>
+                                  <label className="employeeFieldNote">
+                                    <span className="srOnlyFieldLabel">備考</span>
+                                    <input
+                                      type="text"
+                                      value={row.note}
+                                      onChange={(event) => updateRow(row.id, 'note', event.target.value)}
+                                      placeholder="備考"
+                                      aria-label="備考"
+                                    />
+                                  </label>
+                                </div>
+                              </td>
+                              <td>
+                                <div className="allowanceInfoCell">
+                                  <div className="allowanceRow">
+                                    <span>業績手当</span>
+                                    <strong className="moneyCell">{formatJPY(row.performanceAllowance)}</strong>
+                                  </div>
+                                  <div className="allowanceRow">
+                                    <span>調整</span>
+                                    <input
+                                      type="text"
+                                      inputMode="numeric"
+                                      value={row.adjustment ?? ''}
+                                      onChange={(event) =>
+                                        updateRow(
+                                          row.id,
+                                          'adjustment',
+                                          sanitizeIntegerInput(event.target.value),
+                                        )
+                                      }
+                                    />
+                                  </div>
+                                  <div className="allowanceRow">
+                                    <span>特別手当</span>
+                                    <input
+                                      type="text"
+                                      inputMode="numeric"
+                                      value={row.specialAllowance}
+                                      onChange={(event) =>
+                                        updateRow(
+                                          row.id,
+                                          'specialAllowance',
+                                          sanitizeIntegerInput(event.target.value),
+                                        )
+                                      }
+                                    />
+                                  </div>
+                                  <div className="allowanceRow">
+                                    <span>第3回目賞与</span>
+                                    <strong className="moneyCell">{formatJPY(row.thirdBonus)}</strong>
+                                  </div>
+                                </div>
+                              </td>
+                            </>
+                          )}
                           <td>
                             <button
                               type="button"
                               className="dangerButton"
                               onClick={() => removeRow(row.id)}
-                              disabled={computedRows.length === 1}
+                              disabled={rows.length <= 1}
                               aria-label="この行を削除"
                             >
                               ×
@@ -3033,6 +3444,7 @@ function App() {
                 employees={evalSubjectEmployee ? [evalSubjectEmployee] : []}
                 evalState={evalSubjectEmployee ? selfEvalByEmployee[evalSubjectEmployee.id] : undefined}
                 setEvalState={updateSelfEvalForSubject}
+                evaluationCriteria={evaluationCriteria}
               />
             ) : null}
             {workspaceView === 'goals' ? (
@@ -3045,6 +3457,7 @@ function App() {
                 evalState={evalSubjectEmployee ? supervisorEvalByEmployee[evalSubjectEmployee.id] : undefined}
                 setEvalState={updateSupervisorEvalForSubject}
                 peerSelfEval={evalSubjectEmployee ? selfEvalByEmployee[evalSubjectEmployee.id] : undefined}
+                evaluationCriteria={evaluationCriteria}
               />
             ) : null}
             {workspaceView === 'execEval' ? (
@@ -4127,7 +4540,7 @@ function SkillUpPage({ employees, skills, sections, progress }) {
   )
 }
 
-function EvalQuestionnairePage({ variant, employees, evalState, setEvalState, peerSelfEval }) {
+function EvalQuestionnairePage({ variant, employees, evalState, setEvalState, peerSelfEval, evaluationCriteria }) {
   const isBoss = variant === 'boss'
   const employee = useMemo(() => (employees.length ? employees[0] : null), [employees])
 
@@ -4149,23 +4562,36 @@ function EvalQuestionnairePage({ variant, employees, evalState, setEvalState, pe
     }))
   }
 
-  const allItems = useMemo(() => SELF_EVAL_CATEGORIES.flatMap((c) => c.items), [])
+  const categories = useMemo(
+    () => buildEvalCategoriesForGrade(evaluationCriteria, employee?.grade),
+    [evaluationCriteria, employee?.grade],
+  )
+  const allItems = useMemo(() => categories.flatMap((c) => c.items), [categories])
   const totalCount = allItems.length
 
   const superGroupedCategories = useMemo(() => {
     const blocks = []
-    for (const cat of SELF_EVAL_CATEGORIES) {
+    for (const cat of categories) {
       const key = cat.superGroup === 'interpersonal' ? 'interpersonal' : 'business'
       const tail = blocks[blocks.length - 1]
       if (tail && tail.key === key) tail.cats.push(cat)
       else blocks.push({ key, cats: [cat] })
     }
     return blocks
-  }, [])
+  }, [categories])
 
   const [openCats, setOpenCats] = useState(() =>
-    Object.fromEntries(SELF_EVAL_CATEGORIES.map((c, i) => [c.id, i === 0])),
+    Object.fromEntries(categories.map((c, i) => [c.id, i === 0])),
   )
+  useEffect(() => {
+    setOpenCats((prev) => {
+      const next = {}
+      categories.forEach((cat, i) => {
+        next[cat.id] = Object.prototype.hasOwnProperty.call(prev, cat.id) ? prev[cat.id] : i === 0
+      })
+      return next
+    })
+  }, [categories])
   const [detailItem, setDetailItem] = useState(null)
 
   const evaluatedCount = useMemo(
@@ -4375,11 +4801,19 @@ function EvalQuestionnairePage({ variant, employees, evalState, setEvalState, pe
   )
 }
 
-function SelfEvaluationPage({ employees, evalState, setEvalState }) {
-  return <EvalQuestionnairePage variant="self" employees={employees} evalState={evalState} setEvalState={setEvalState} />
+function SelfEvaluationPage({ employees, evalState, setEvalState, evaluationCriteria }) {
+  return (
+    <EvalQuestionnairePage
+      variant="self"
+      employees={employees}
+      evalState={evalState}
+      setEvalState={setEvalState}
+      evaluationCriteria={evaluationCriteria}
+    />
+  )
 }
 
-function SupervisorEvaluationPage({ employees, evalState, setEvalState, peerSelfEval }) {
+function SupervisorEvaluationPage({ employees, evalState, setEvalState, peerSelfEval, evaluationCriteria }) {
   return (
     <EvalQuestionnairePage
       variant="boss"
@@ -4387,6 +4821,7 @@ function SupervisorEvaluationPage({ employees, evalState, setEvalState, peerSelf
       evalState={evalState}
       setEvalState={setEvalState}
       peerSelfEval={peerSelfEval}
+      evaluationCriteria={evaluationCriteria}
     />
   )
 }
@@ -5357,6 +5792,9 @@ function AdminMockPage({
   const [adminMemberEmployment, setAdminMemberEmployment] = useState('active')
   /** name | id | grade | retiredFirst */
   const [adminMemberSort, setAdminMemberSort] = useState('name')
+  const memberDetailHeroRef = useRef(null)
+  const adminMockTopRef = useRef(null)
+  const [adminScrollTopVisible, setAdminScrollTopVisible] = useState(false)
 
   const pendingPromotionRequests = useMemo(
     () => (promotionRequests ?? []).filter((r) => r.status === 'pending'),
@@ -5466,6 +5904,22 @@ function AdminMockPage({
     if (!hideGradeSelfEvalAndGradeStats) return
     if (adminMemberSort === 'grade') setAdminMemberSort('name')
   }, [hideGradeSelfEvalAndGradeStats, adminMemberSort])
+
+  useEffect(() => {
+    const el = adminMockTopRef.current
+    if (!el) return
+    const update = () => {
+      const top = el.getBoundingClientRect().top
+      setAdminScrollTopVisible(top < 72)
+    }
+    update()
+    window.addEventListener('scroll', update, { passive: true })
+    window.addEventListener('resize', update, { passive: true })
+    return () => {
+      window.removeEventListener('scroll', update)
+      window.removeEventListener('resize', update)
+    }
+  }, [])
 
   const selectedMember = useMemo(
     () => adminFilteredMemberRows.find((m) => m.id === selectedMemberId) ?? null,
@@ -5616,8 +6070,9 @@ function AdminMockPage({
   ])
 
   return (
-    <section className="adminMock">
-      <div className="adminMain only">
+    <>
+      <section ref={adminMockTopRef} className="adminMock">
+        <div className="adminMain only">
         <section className="adminOverview">
           <header className="adminHeader">
             <h2>管理者ダッシュボード</h2>
@@ -5673,7 +6128,29 @@ function AdminMockPage({
             {stagnationAlerts.length ? (
               stagnationAlerts.map((alert) => (
                 <article className="stagnationCard" key={alert.id}>
-                  <h4>{alert.name}</h4>
+                  <button
+                    type="button"
+                    className="stagnationCardNameBtn"
+                    title={`${alert.name}の詳細へ移動`}
+                    onClick={() => {
+                      setAdminMemberEmployment('active')
+                      setAdminMemberSearch('')
+                      setAdminMemberDept('')
+                      if (!hideGradeSelfEvalAndGradeStats) setAdminMemberGrade('')
+                      setSelectedMemberId(alert.id)
+                      onSelectMember?.(alert.id)
+                      window.requestAnimationFrame(() => {
+                        window.requestAnimationFrame(() => {
+                          memberDetailHeroRef.current?.scrollIntoView({
+                            behavior: 'smooth',
+                            block: 'start',
+                          })
+                        })
+                      })
+                    }}
+                  >
+                    {alert.name}
+                  </button>
                   <span>{alert.dept}</span>
                   <div className="statusTags">
                     {alert.tags.map((tag) => (
@@ -5774,9 +6251,18 @@ function AdminMockPage({
                   <button
                     type="button"
                     className={`memberNameButton ${selectedMemberId === member.id ? 'isActive' : ''}`}
+                    title={`${member.name}の詳細へ移動`}
                     onClick={() => {
                       setSelectedMemberId(member.id)
                       onSelectMember?.(member.id)
+                      window.requestAnimationFrame(() => {
+                        window.requestAnimationFrame(() => {
+                          memberDetailHeroRef.current?.scrollIntoView({
+                            behavior: 'smooth',
+                            block: 'start',
+                          })
+                        })
+                      })
                     }}
                   >
                     {member.name}
@@ -5790,7 +6276,11 @@ function AdminMockPage({
           </div>
           {selectedMember ? (
             <section className="memberDetailWorkspace">
-              <header className="memberDetailHero">
+              <header
+                ref={memberDetailHeroRef}
+                className="memberDetailHero"
+                id={selectedMember ? `admin-member-detail-${selectedMember.id}` : undefined}
+              >
                 <div className="memberDetailHeroTop">
                   <div className="memberDetailAvatar" aria-hidden>
                     👤
@@ -6077,8 +6567,35 @@ function AdminMockPage({
             </div>
           </section>
         )}
-      </div>
-    </section>
+        </div>
+      </section>
+      {typeof document !== 'undefined'
+      ? createPortal(
+          <button
+            type="button"
+            className={`adminMockScrollTop${adminScrollTopVisible ? ' isVisible' : ''}`}
+            aria-label="管理者ダッシュの先頭へ戻る"
+            title="管理者ダッシュの先頭へ"
+            onClick={() => {
+              adminMockTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            }}
+          >
+            <svg className="adminMockScrollTopChevron" width="20" height="12" viewBox="0 0 20 12" aria-hidden>
+              <path
+                d="M3 9.5L10 2.5L17 9.5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.25"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            <span className="adminMockScrollTopLabel">TOP</span>
+          </button>,
+          document.body,
+        )
+      : null}
+  </>
   )
 }
 
@@ -6424,14 +6941,23 @@ function EmployeeManagePage({
 
       <div className="employeeToolbar">
         <div className="leftActions">
-          <button type="button" className="btn export" onClick={handleEmployeeExportCsv}>
-            CSVエクスポート
+          <button type="button" className="btn export" aria-label="CSVエクスポート" onClick={handleEmployeeExportCsv}>
+            <span className="employeeToolbarBtnIcon" aria-hidden>
+              <GyosekiIconDownload />
+            </span>
+            <span className="employeeToolbarBtnLabel">CSVエクスポート</span>
           </button>
-          <button type="button" className="btn import" onClick={() => employeeCsvFileRef.current?.click()}>
-            CSVインポート
+          <button type="button" className="btn import" aria-label="CSVインポート" onClick={() => employeeCsvFileRef.current?.click()}>
+            <span className="employeeToolbarBtnIcon" aria-hidden>
+              <GyosekiIconUpload />
+            </span>
+            <span className="employeeToolbarBtnLabel">CSVインポート</span>
           </button>
-          <button type="button" className="btn template" onClick={handleEmployeeTemplateCsv}>
-            CSVテンプレート
+          <button type="button" className="btn template" aria-label="CSVテンプレート" onClick={handleEmployeeTemplateCsv}>
+            <span className="employeeToolbarBtnIcon" aria-hidden>
+              <EmployeeIconTemplateCsv />
+            </span>
+            <span className="employeeToolbarBtnLabel">CSVテンプレート</span>
           </button>
           <input
             ref={employeeCsvFileRef}
@@ -6441,8 +6967,11 @@ function EmployeeManagePage({
             onChange={handleEmployeeImportCsv}
           />
         </div>
-        <button className="btn add" onClick={() => setIsCreateModalOpen(true)}>
-          + 新規従業員を追加
+        <button type="button" className="btn add" aria-label="新規従業員を追加" onClick={() => setIsCreateModalOpen(true)}>
+          <span className="employeeToolbarBtnIcon" aria-hidden>
+            <GyosekiIconPlus />
+          </span>
+          <span className="employeeToolbarBtnLabel">新規従業員を追加</span>
         </button>
       </div>
 
