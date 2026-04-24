@@ -148,6 +148,23 @@ const calcEmployeeSkillStars = (allSkills, employeeProgress) =>
 
 const escapeCsvField = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`
 
+/** 従業員管理 CSV の1行目。パスワード列あり（セル空なら既存パスワードを維持）。 */
+const EMPLOYEE_DIRECTORY_CSV_HEADERS = ['社員C', '名前', '部署', '等級', '総合得点', '役割', 'パスワード']
+
+/** 退職扱い: 社員C を「退職」または「退職_…」にした行（例: 退職_e1） */
+function isEmployeeDirectoryRetired(row) {
+  const id = String(row?.id ?? '').trim()
+  if (!id) return false
+  return id === '退職' || id.startsWith('退職')
+}
+
+/** 等級分布・平均等級・総従業員数（分布内）の集計に含める行（退職者・役員を除く） */
+function isDirectoryRowCountedForGradeStats(row) {
+  if (isEmployeeDirectoryRetired(row)) return false
+  if (String(row?.role ?? '').trim() === '役員') return false
+  return true
+}
+
 function parseCsvLine(line) {
   const result = []
   let current = ''
@@ -196,12 +213,42 @@ function normalizeEmployeeDirectoryScore(value) {
   return '0.0点'
 }
 
-const EMPLOYEE_DEPT_OPTIONS = ['製造', '営業', '品質']
-const EMPLOYEE_ROLE_OPTIONS = ['一般従業員', '上司', '管理者']
+const DEFAULT_EMPLOYEE_DEPTS = ['製造', '営業', '品質']
+const EMPLOYEE_ROLE_OPTIONS = ['一般従業員', '上司', '役員', '管理者']
 
-function normalizeEmployeeDept(value) {
+function normalizeEmployeeDeptOptions(raw) {
+  const seen = new Set()
+  const out = []
+  if (Array.isArray(raw)) {
+    for (const x of raw) {
+      const v = String(x ?? '').trim()
+      if (!v || seen.has(v)) continue
+      seen.add(v)
+      out.push(v)
+    }
+  }
+  if (out.length === 0) return [...DEFAULT_EMPLOYEE_DEPTS]
+  return out
+}
+
+function mergeEmployeeDeptOptionsFromRows(savedOptions, rows) {
+  const base = normalizeEmployeeDeptOptions(savedOptions)
+  const seen = new Set(base)
+  const out = [...base]
+  for (const row of rows || []) {
+    const d = String(row?.dept ?? '').trim()
+    if (d && !seen.has(d)) {
+      seen.add(d)
+      out.push(d)
+    }
+  }
+  return out
+}
+
+function normalizeEmployeeDept(value, deptOptions) {
   const v = String(value ?? '').trim()
-  return EMPLOYEE_DEPT_OPTIONS.includes(v) ? v : '製造'
+  const list = Array.isArray(deptOptions) && deptOptions.length > 0 ? deptOptions : DEFAULT_EMPLOYEE_DEPTS
+  return list.includes(v) ? v : (list[0] ?? '製造')
 }
 
 function normalizeEmployeeRole(value) {
@@ -215,19 +262,54 @@ function normalizeEmployeeGrade(value) {
   return 'G1'
 }
 
+function normalizeEmployeeExtraMenuKeys(value) {
+  if (!Array.isArray(value)) return []
+  const allowed = new Set(MAIN_WORKSPACE_TAB_ORDER.map((tab) => tab.key))
+  return [...new Set(value.map((k) => String(k)).filter((k) => allowed.has(k)))]
+}
+
+function normalizeEmployeeDirectoryRows(rows) {
+  if (!Array.isArray(rows)) return []
+  return rows.map((row) => ({
+    ...row,
+    extraMenuKeys: normalizeEmployeeExtraMenuKeys(row?.extraMenuKeys),
+  }))
+}
+
 function stripSensitiveEmployeeFields(rows) {
   if (!Array.isArray(rows)) return []
   return rows.map((row) => ({ ...row, password: '' }))
 }
 
+/** CSV 等で「列はあるが空欄」のときはキーを付けず、既存行の値を維持する */
+const EMPLOYEE_DIRECTORY_MERGE_KEYS = ['name', 'dept', 'grade', 'score', 'role', 'joinDate', 'email', 'extraMenuKeys']
+
 function mergeEmployeeDirectoryRows(prev, imported) {
   const mapImport = new Map(imported.map((r) => [String(r.id), r]))
   const seen = new Set()
   const merged = []
+  const employeeIdsToClearSkillProgress = []
   for (const row of prev) {
     const imp = mapImport.get(String(row.id))
     if (imp) {
-      merged.push(imp)
+      const next = { ...row }
+      for (const k of EMPLOYEE_DIRECTORY_MERGE_KEYS) {
+        if (Object.prototype.hasOwnProperty.call(imp, k)) {
+          next[k] = imp[k]
+        }
+      }
+      const nextPassword =
+        Object.prototype.hasOwnProperty.call(imp, 'password') && String(imp.password ?? '').trim()
+          ? String(imp.password).trim()
+          : (row.password ?? '')
+      next.password = nextPassword
+      if (
+        Object.prototype.hasOwnProperty.call(imp, 'grade') &&
+        String(row.grade ?? '').trim() !== String(next.grade ?? '').trim()
+      ) {
+        employeeIdsToClearSkillProgress.push(String(row.id))
+      }
+      merged.push(next)
       seen.add(String(row.id))
     } else {
       merged.push(row)
@@ -235,11 +317,44 @@ function mergeEmployeeDirectoryRows(prev, imported) {
   }
   for (const imp of imported) {
     if (!seen.has(String(imp.id))) {
-      merged.push(imp)
+      merged.push({
+        ...imp,
+        password: String(imp.password ?? '').trim() ? String(imp.password).trim() : '',
+      })
       seen.add(String(imp.id))
     }
   }
-  return merged
+  return {
+    merged,
+    employeeIdsToClearSkillProgress: [...new Set(employeeIdsToClearSkillProgress)],
+  }
+}
+
+/** 昇級は G1→G2→…→G6（一段階） */
+const PROMOTION_GRADE_ORDER = ['G1', 'G2', 'G3', 'G4', 'G5', 'G6']
+
+function nextPromotionGrade(currentGrade) {
+  const g = normalizeEmployeeGrade(currentGrade)
+  const i = PROMOTION_GRADE_ORDER.indexOf(g)
+  if (i < 0 || i >= PROMOTION_GRADE_ORDER.length - 1) return null
+  return PROMOTION_GRADE_ORDER[i + 1]
+}
+
+function normalizePromotionRequests(raw) {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((x) => x && typeof x === 'object')
+    .map((x, idx) => ({
+      id: String(x.id ?? '').trim() || `promo_${idx}_${Date.now()}`,
+      employeeId: String(x.employeeId ?? '').trim(),
+      employeeName: String(x.employeeName ?? '').trim(),
+      fromGrade: normalizeEmployeeGrade(x.fromGrade),
+      toGrade: normalizeEmployeeGrade(x.toGrade),
+      status: x.status === 'approved' || x.status === 'rejected' ? x.status : 'pending',
+      requestedAt: String(x.requestedAt ?? '').trim() || new Date().toISOString(),
+      reviewedAt: String(x.reviewedAt ?? '').trim(),
+    }))
+    .filter((x) => x.employeeId)
 }
 
 const defaultSkillSections = [
@@ -321,10 +436,17 @@ const defaultSkillEmployeeProgress = {
   e4: {},
 }
 
+/** 自己評価・上司評価の大分類（UI色分け）: business=業務能力（青）, interpersonal=対人関係能力（黄） */
+const SELF_EVAL_SUPER_GROUP = {
+  business: { key: 'business', label: '業務能力', description: '業務遂行・目標達成など' },
+  interpersonal: { key: 'interpersonal', label: '対人関係能力', description: 'コミュニケーション・協働など' },
+}
+
 const SELF_EVAL_CATEGORIES = [
   {
     id: 'cat-exec',
     title: '業務遂行能力',
+    superGroup: 'business',
     items: [
       {
         id: 'se-exec-1',
@@ -351,6 +473,7 @@ const SELF_EVAL_CATEGORIES = [
   {
     id: 'cat-comm',
     title: 'コミュニケーション能力',
+    superGroup: 'interpersonal',
     items: [
       {
         id: 'se-comm-1',
@@ -377,6 +500,7 @@ const SELF_EVAL_CATEGORIES = [
   {
     id: 'cat-growth',
     title: '成長意欲',
+    superGroup: 'interpersonal',
     items: [
       {
         id: 'se-gr-1',
@@ -442,39 +566,120 @@ function normalizeEvaluationMajor(m) {
   }
 }
 
+function normalizeSharedMajor(m) {
+  return {
+    id: typeof m?.id === 'string' && m.id ? m.id : newEvaluationId('maj'),
+    title: String(m?.title ?? '').trim(),
+  }
+}
+
+/** 旧形式 { G1: majors[], G2: ... } を大項目共通＋等級別小項目へ移行 */
+function migrateLegacyEvaluationCriteriaToShared(raw, gradeList) {
+  const grades = gradeList?.length ? gradeList : defaultSkillGrades
+  const gradeIds = grades.map((g) => g.id)
+  const majorSeen = new Map()
+  const majorOrder = []
+  for (const gid of gradeIds) {
+    const arr = Array.isArray(raw?.[gid]) ? raw[gid] : []
+    for (const m of arr) {
+      const id = String(m?.id ?? '').trim()
+      const title = String(m?.title ?? '').trim()
+      if (!id || !title) continue
+      if (!majorSeen.has(id)) {
+        majorSeen.set(id, title)
+        majorOrder.push(id)
+      }
+    }
+  }
+  if (majorOrder.length === 0) {
+    return buildDefaultEvaluationCriteriaFromSelfEval(gradeList)
+  }
+  const sharedMajors = majorOrder.map((id) => ({ id, title: majorSeen.get(id) }))
+  const minorsByGrade = {}
+  for (const gid of gradeIds) {
+    minorsByGrade[gid] = {}
+    const arr = Array.isArray(raw?.[gid]) ? raw[gid] : []
+    const byMajorId = Object.fromEntries(
+      arr.filter((x) => x && String(x?.id ?? '').trim()).map((x) => [String(x.id).trim(), x]),
+    )
+    for (const mj of sharedMajors) {
+      const found = byMajorId[mj.id]
+      const minors =
+        found && Array.isArray(found.minors)
+          ? found.minors.map(normalizeEvaluationMinor).filter((x) => x.title)
+          : []
+      minorsByGrade[gid][mj.id] = minors
+    }
+  }
+  return { sharedMajors, minorsByGrade }
+}
+
 function normalizeEvaluationCriteriaStore(raw, gradeList) {
   const grades = gradeList?.length ? gradeList : defaultSkillGrades
-  const next = {}
-  for (const g of grades) {
-    const majors = Array.isArray(raw?.[g.id]) ? raw[g.id] : []
-    next[g.id] = majors.map(normalizeEvaluationMajor).filter((x) => x.id && x.title)
+  const gradeIds = grades.map((g) => g.id)
+  if (
+    raw &&
+    typeof raw === 'object' &&
+    !Array.isArray(raw) &&
+    Array.isArray(raw.sharedMajors) &&
+    raw.minorsByGrade &&
+    typeof raw.minorsByGrade === 'object' &&
+    !Array.isArray(raw.minorsByGrade)
+  ) {
+    const sharedMajors = raw.sharedMajors.map(normalizeSharedMajor).filter((m) => m.id && m.title)
+    if (sharedMajors.length === 0) {
+      return buildDefaultEvaluationCriteriaFromSelfEval(gradeList)
+    }
+    const minorsByGrade = {}
+    for (const gid of gradeIds) {
+      const blob =
+        raw.minorsByGrade[gid] && typeof raw.minorsByGrade[gid] === 'object' && !Array.isArray(raw.minorsByGrade[gid])
+          ? raw.minorsByGrade[gid]
+          : {}
+      minorsByGrade[gid] = {}
+      for (const mj of sharedMajors) {
+        const arr = blob[mj.id]
+        minorsByGrade[gid][mj.id] = Array.isArray(arr) ? arr.map(normalizeEvaluationMinor).filter((x) => x.title) : []
+      }
+    }
+    return { sharedMajors, minorsByGrade }
   }
-  return next
+  return migrateLegacyEvaluationCriteriaToShared(raw, gradeList)
 }
 
 function buildDefaultEvaluationCriteriaFromSelfEval(gradeList) {
   const grades = gradeList?.length ? gradeList : defaultSkillGrades
-  const base = Object.fromEntries(grades.map((g) => [g.id, []]))
-  if (!('G1' in base)) return base
-  base.G1 = SELF_EVAL_CATEGORIES.map((cat) => ({
+  const sharedMajors = SELF_EVAL_CATEGORIES.map((cat) => ({
     id: `maj-seed-${cat.id}`,
     title: cat.title,
-    minors: cat.items.map((it) => ({
-      id: `min-seed-${it.id}`,
-      title: it.title,
-      weightPct: Number(it.weightPct) || 0,
-      scoreCriteria: criteriaBlobToFiveScores(it.criteria),
-    })),
   }))
-  return base
+  const seedMinorsForOneGrade = () =>
+    Object.fromEntries(
+      SELF_EVAL_CATEGORIES.map((cat) => [
+        `maj-seed-${cat.id}`,
+        cat.items.map((it) =>
+          normalizeEvaluationMinor({
+            id: `min-seed-${it.id}`,
+            title: it.title,
+            weightPct: it.weightPct,
+            scoreCriteria: criteriaBlobToFiveScores(it.criteria),
+          }),
+        ),
+      ]),
+    )
+  const minorsByGrade = Object.fromEntries(grades.map((g) => [g.id, seedMinorsForOneGrade()]))
+  return { sharedMajors, minorsByGrade }
 }
 
 const MENU_ROLE_IPPAN = 'ippan'
 const MENU_ROLE_JOUSHI = 'joushi'
+const MENU_ROLE_YAKUIN = 'yakuin'
 const MENU_ROLE_ADMIN = 'admin'
 
 const MENU_DISPLAY_META = {
   gyoseki: { tabLabel: '業績手当', description: '業績手当の入力・自動計算を行います。' },
+  count: { tabLabel: 'カウント', description: 'カウント機能の内容を後から追加します。' },
+  honsu: { tabLabel: '本数表', description: '本数表機能の内容を後から追加します。' },
   skillup: { tabLabel: 'スキルアップ', description: 'スキル習得状況の確認と管理を行います。' },
   selfeval: { tabLabel: '自己評価', description: '自己評価の実施と確認を行います。' },
   goals: { tabLabel: '目標設定・管理', description: '個人の目標設定と進捗管理を行います。' },
@@ -490,6 +695,8 @@ const MENU_DISPLAY_META = {
 
 const MAIN_WORKSPACE_TAB_ORDER = [
   { key: 'gyoseki', label: '業績手当' },
+  { key: 'count', label: MENU_DISPLAY_META.count.tabLabel },
+  { key: 'honsu', label: MENU_DISPLAY_META.honsu.tabLabel },
   { key: 'admin', label: MENU_DISPLAY_META.admin.tabLabel },
   { key: 'employee', label: MENU_DISPLAY_META.employee.tabLabel },
   { key: 'settings', label: MENU_DISPLAY_META.settings.tabLabel },
@@ -502,6 +709,8 @@ const MAIN_WORKSPACE_TAB_ORDER = [
 
 const MAIN_WORKSPACE_TAB_ICONS = {
   gyoseki: '💹',
+  count: '🔢',
+  honsu: '📋',
   admin: '📊',
   employee: '👥',
   settings: '⚙️',
@@ -516,14 +725,36 @@ const MAIN_WORKSPACE_TAB_ICONS = {
 const ADMIN_ROLE_MENU_KEYS = MAIN_WORKSPACE_TAB_ORDER.map((t) => t.key)
 
 const MENU_KEYS_BY_ROLE_CARD = {
-  [MENU_ROLE_IPPAN]: ['skillup', 'selfeval', 'goals', 'bossEval'],
-  [MENU_ROLE_JOUSHI]: ['admin', 'skillup', 'selfeval', 'goals', 'bossEval'],
+  [MENU_ROLE_IPPAN]: ['count', 'honsu', 'skillup', 'selfeval', 'goals', 'bossEval'],
+  [MENU_ROLE_JOUSHI]: ['count', 'honsu', 'admin', 'skillup', 'selfeval', 'goals', 'bossEval'],
+  [MENU_ROLE_YAKUIN]: [
+    'gyoseki',
+    'count',
+    'honsu',
+    'admin',
+    'employee',
+    'settings',
+    'goals',
+    'bossEval',
+    'execEval',
+  ],
   [MENU_ROLE_ADMIN]: [...ADMIN_ROLE_MENU_KEYS],
 }
 
 const DEFAULT_MENU_VISIBILITY_BY_ROLE = {
-  [MENU_ROLE_IPPAN]: ['skillup', 'selfeval', 'goals'],
-  [MENU_ROLE_JOUSHI]: ['skillup', 'selfeval', 'goals', 'bossEval'],
+  [MENU_ROLE_IPPAN]: ['count', 'honsu', 'skillup', 'selfeval', 'goals'],
+  [MENU_ROLE_JOUSHI]: ['count', 'honsu', 'skillup', 'selfeval', 'goals', 'bossEval'],
+  [MENU_ROLE_YAKUIN]: [
+    'gyoseki',
+    'count',
+    'honsu',
+    'admin',
+    'employee',
+    'settings',
+    'goals',
+    'bossEval',
+    'execEval',
+  ],
   [MENU_ROLE_ADMIN]: [...ADMIN_ROLE_MENU_KEYS],
 }
 
@@ -560,6 +791,7 @@ function resolveMenuRoleKey(normalizedEmail, employees) {
     return emailMatch || idMatch
   })
   if (emp?.role === '上司') return MENU_ROLE_JOUSHI
+  if (emp?.role === '役員') return MENU_ROLE_YAKUIN
   if (emp) return MENU_ROLE_IPPAN
   return MENU_ROLE_ADMIN
 }
@@ -570,7 +802,7 @@ function isWorkspaceVisibleForRole(workspaceKey, roleKey, menuVisibilityByRole) 
       ? 'settings'
       : workspaceKey
   if (normalizedWorkspaceKey === 'gyoseki') {
-    if (roleKey !== MENU_ROLE_ADMIN) return false
+    if (roleKey !== MENU_ROLE_ADMIN && roleKey !== MENU_ROLE_YAKUIN) return false
     const list = menuVisibilityByRole[roleKey] ?? []
     return list.includes('gyoseki')
   }
@@ -670,7 +902,14 @@ function App() {
   const [activePage, setActivePage] = useState(() => savedData?.activePage ?? 'input')
   const [employeeDirectoryRows, setEmployeeDirectoryRows] = useState(() => {
     const saved = savedData?.employeeDirectoryRows
-    return Array.isArray(saved) && saved.length > 0 ? saved : defaultEmployeeDirectoryRows
+    const base = Array.isArray(saved) && saved.length > 0 ? saved : defaultEmployeeDirectoryRows
+    return normalizeEmployeeDirectoryRows(base)
+  })
+  const [employeeDeptOptions, setEmployeeDeptOptions] = useState(() => {
+    const saved = savedData?.employeeDirectoryRows
+    const base = Array.isArray(saved) && saved.length > 0 ? saved : defaultEmployeeDirectoryRows
+    const rows = normalizeEmployeeDirectoryRows(base)
+    return mergeEmployeeDeptOptionsFromRows(savedData?.employeeDeptOptions, rows)
   })
   const [skillSettings, setSkillSettings] = useState(() => {
     const saved = savedData?.skillSettings
@@ -744,10 +983,14 @@ function App() {
   })
   const [evaluationCriteria, setEvaluationCriteria] = useState(() => {
     const raw = savedData?.evaluationCriteria
+    const gradeListForEval =
+      Array.isArray(savedData?.skillGrades) && savedData.skillGrades.some((g) => g && g.id)
+        ? savedData.skillGrades
+        : defaultSkillGrades
     if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-      return normalizeEvaluationCriteriaStore(raw, defaultSkillGrades)
+      return normalizeEvaluationCriteriaStore(raw, gradeListForEval)
     }
-    return buildDefaultEvaluationCriteriaFromSelfEval(defaultSkillGrades)
+    return buildDefaultEvaluationCriteriaFromSelfEval(gradeListForEval)
   })
   const [menuVisibilityByRole, setMenuVisibilityByRole] = useState(() => {
     const raw = savedData?.menuVisibilityByRole
@@ -763,9 +1006,19 @@ function App() {
   const [executiveEvalByEmployee, setExecutiveEvalByEmployee] = useState(() =>
     normalizeExecutiveEvalByEmployeeMap(savedData?.executiveEvalByEmployee),
   )
+  const [countCurrent, setCountCurrent] = useState(() => {
+    const raw = Number(savedData?.countCurrent)
+    return Number.isFinite(raw) ? Math.max(0, Math.trunc(raw)) : 0
+  })
+  const [countHourlyTarget, setCountHourlyTarget] = useState(() => {
+    const raw = Number(savedData?.countHourlyTarget)
+    return Number.isFinite(raw) ? Math.max(1, Math.trunc(raw)) : 60
+  })
+  const [countIsRunning, setCountIsRunning] = useState(() => Boolean(savedData?.countIsRunning))
   const [selectedEvalEmployeeId, setSelectedEvalEmployeeId] = useState(null)
   const [adminSelectedMemberId, setAdminSelectedMemberId] = useState(null)
   const [adminDetailTab, setAdminDetailTab] = useState('skill')
+  const [promotionRequests, setPromotionRequests] = useState(() => normalizePromotionRequests(savedData?.promotionRequests))
   const [isCloudReady, setIsCloudReady] = useState(false)
   const [snapshotPeriod, setSnapshotPeriod] = useState(() => savedData?.snapshotPeriod ?? getCurrentPeriod())
   const [snapshotHistory, setSnapshotHistory] = useState([])
@@ -777,19 +1030,77 @@ function App() {
 
   useEffect(() => {
     setEvaluationCriteria((prev) => {
-      const ids = new Set(skillGrades.map((g) => g.id))
-      const next = {}
+      if (!prev || !Array.isArray(prev.sharedMajors) || !prev.minorsByGrade) {
+        return normalizeEvaluationCriteriaStore(prev, skillGrades)
+      }
+      const ids = skillGrades.map((g) => g.id)
+      const idSet = new Set(ids)
+      const sharedMajors = prev.sharedMajors
+      let minorsByGrade = { ...prev.minorsByGrade }
       let changed = false
-      for (const id of ids) {
-        next[id] = Array.isArray(prev[id]) ? prev[id] : []
-        if (prev[id] === undefined) changed = true
+      for (const gid of ids) {
+        const cur = minorsByGrade[gid] && typeof minorsByGrade[gid] === 'object' && !Array.isArray(minorsByGrade[gid])
+          ? { ...minorsByGrade[gid] }
+          : {}
+        let gChanged = !minorsByGrade[gid]
+        for (const m of sharedMajors) {
+          if (!Array.isArray(cur[m.id])) {
+            cur[m.id] = []
+            gChanged = true
+          }
+        }
+        if (gChanged) {
+          minorsByGrade[gid] = cur
+          changed = true
+        }
       }
-      for (const k of Object.keys(prev)) {
-        if (!ids.has(k)) changed = true
+      for (const k of Object.keys(minorsByGrade)) {
+        if (!idSet.has(k)) {
+          delete minorsByGrade[k]
+          changed = true
+        }
       }
-      return changed ? next : prev
+      return changed ? { ...prev, minorsByGrade } : prev
     })
   }, [skillGrades])
+
+  useEffect(() => {
+    const sharedMajors = Array.isArray(evaluationCriteria?.sharedMajors) ? evaluationCriteria.sharedMajors : []
+    if (sharedMajors.length === 0) return
+    const linkedSections = sharedMajors.map((m) => ({
+      id: String(m.id ?? '').trim(),
+      label: String(m.title ?? '').trim(),
+    })).filter((s) => s.id && s.label)
+    if (linkedSections.length === 0) return
+
+    setSkillSections((prev) => {
+      const prevNorm = Array.isArray(prev)
+        ? prev.map((s) => ({ id: String(s?.id ?? '').trim(), label: String(s?.label ?? '').trim() })).filter((s) => s.id && s.label)
+        : []
+      const sameLen = prevNorm.length === linkedSections.length
+      const sameAll = sameLen && prevNorm.every((s, i) => s.id === linkedSections[i].id && s.label === linkedSections[i].label)
+      return sameAll ? prev : linkedSections
+    })
+
+    setSkillSettings((prev) => {
+      if (!Array.isArray(prev) || prev.length === 0) return prev
+      const validIdSet = new Set(linkedSections.map((s) => s.id))
+      const prevLabelById = new Map((skillSections ?? []).map((s) => [String(s.id ?? '').trim(), String(s.label ?? '').trim()]))
+      const linkedIdByLabel = new Map(linkedSections.map((s) => [s.label, s.id]))
+      const fallbackId = linkedSections[0].id
+      let changed = false
+      const next = prev.map((row) => {
+        const currentSectionId = String(row.sectionId ?? '').trim()
+        if (validIdSet.has(currentSectionId)) return row
+        const currentLabel = prevLabelById.get(currentSectionId) ?? ''
+        const mappedId = (currentLabel && linkedIdByLabel.get(currentLabel)) || fallbackId
+        if (!mappedId || mappedId === currentSectionId) return row
+        changed = true
+        return { ...row, sectionId: mappedId }
+      })
+      return changed ? next : prev
+    })
+  }, [evaluationCriteria, skillSections])
 
   const prevSkillProgressRef = useRef(skillEmployeeProgress)
   useEffect(() => {
@@ -1220,14 +1531,195 @@ function App() {
     [evalSubjectEmployee],
   )
 
+  const renameEmployeeIdInAppState = useCallback((oldId, newId) => {
+    const o = String(oldId ?? '').trim()
+    const n = String(newId ?? '').trim()
+    if (!o || !n || o === n) return
+    const moveKey = (prev) => {
+      if (!prev || typeof prev !== 'object' || Array.isArray(prev) || !Object.prototype.hasOwnProperty.call(prev, o)) {
+        return prev
+      }
+      const next = { ...prev }
+      next[n] = prev[o]
+      delete next[o]
+      return next
+    }
+    setSkillEmployeeProgress((prev) => moveKey(prev))
+    setSkillProgressUpdatedAtByEmployee((prev) => moveKey(prev))
+    setGoalsByEmployee((prev) => moveKey(prev))
+    setSelfEvalByEmployee((prev) => moveKey(prev))
+    setSupervisorEvalByEmployee((prev) => moveKey(prev))
+    setExecutiveEvalByEmployee((prev) => moveKey(prev))
+    setLoggedInEmployeeId((cur) => (cur === o ? n : cur))
+    setSelectedEvalEmployeeId((cur) => (cur === o ? n : cur))
+    setAdminSelectedMemberId((cur) => (cur === o ? n : cur))
+  }, [])
+
+  const deleteKeyedObjectEntryByTrimmedId = useCallback((setter, rawEmployeeId) => {
+    const target = String(rawEmployeeId ?? '').trim()
+    if (!target) return
+    setter((prev) => {
+      if (!prev || typeof prev !== 'object') return prev
+      const matchKey = Object.keys(prev).find((k) => String(k ?? '').trim() === target)
+      if (matchKey === undefined) return prev
+      const next = { ...prev }
+      delete next[matchKey]
+      return next
+    })
+  }, [])
+
+  const clearSkillProgressForEmployees = useCallback((employeeIds) => {
+    if (!Array.isArray(employeeIds) || employeeIds.length === 0) return
+    const idSet = new Set(employeeIds.map((x) => String(x ?? '').trim()).filter(Boolean))
+    if (idSet.size === 0) return
+    const deleteMatches = (prev) => {
+      if (!prev || typeof prev !== 'object') return prev
+      let changed = false
+      const next = { ...prev }
+      for (const id of idSet) {
+        const matchKey = Object.keys(next).find((k) => String(k ?? '').trim() === id)
+        if (matchKey !== undefined) {
+          delete next[matchKey]
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    }
+    setSkillEmployeeProgress(deleteMatches)
+    setSkillProgressUpdatedAtByEmployee(deleteMatches)
+  }, [])
+
+  /** 全従業員のスキル進捗から、指定したスキルIDのキーを削除する（区分削除・スキル一括削除用） */
+  const removeSkillProgressKeysGlobally = useCallback((skillIds) => {
+    if (!Array.isArray(skillIds) || skillIds.length === 0) return
+    const keySet = new Set(skillIds.map((id) => String(id ?? '').trim()).filter(Boolean))
+    if (keySet.size === 0) return
+    setSkillEmployeeProgress((prev) => {
+      if (!prev || typeof prev !== 'object') return prev
+      let changed = false
+      const next = { ...prev }
+      for (const empId of Object.keys(next)) {
+        const prog = next[empId]
+        if (!prog || typeof prog !== 'object' || Array.isArray(prog)) continue
+        const empNext = { ...prog }
+        let empChanged = false
+        for (const sid of keySet) {
+          if (Object.prototype.hasOwnProperty.call(empNext, sid)) {
+            delete empNext[sid]
+            empChanged = true
+          }
+        }
+        if (empChanged) {
+          next[empId] = empNext
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [])
+
+  const submitPromotionRequest = useCallback((employeeId, employeeName, fromGrade) => {
+    const id = String(employeeId ?? '').trim()
+    const toGrade = nextPromotionGrade(fromGrade)
+    if (!id || !toGrade) {
+      window.alert('これ以上昇級できない等級です。')
+      return
+    }
+    let didAdd = false
+    setPromotionRequests((prev) => {
+      if (prev.some((r) => String(r.employeeId) === id && r.status === 'pending')) return prev
+      didAdd = true
+      return [
+        ...prev,
+        {
+          id: `promo_${Date.now()}_${id}`,
+          employeeId: id,
+          employeeName: String(employeeName ?? '').trim() || id,
+          fromGrade: normalizeEmployeeGrade(fromGrade),
+          toGrade,
+          status: 'pending',
+          requestedAt: new Date().toISOString(),
+          reviewedAt: '',
+        },
+      ]
+    })
+    if (didAdd) {
+      window.alert(
+        '昇級の申請を送信しました。\n\n管理者ダッシュボードに「昇級の申請があります。管理者は許可または却下をしてください。」と表示されます。承認までお待ちください。',
+      )
+    } else {
+      window.alert('この社員にはすでに処理待ちの昇級申請があります。')
+    }
+  }, [])
+
+  const approvePromotionRequest = useCallback(
+    (requestId) => {
+      setPromotionRequests((prev) => {
+        const req = prev.find((r) => r.id === requestId && r.status === 'pending')
+        if (!req) return prev
+        return prev.map((r) =>
+          r.id === requestId ? { ...r, status: 'approved', reviewedAt: new Date().toISOString() } : r,
+        )
+      })
+
+      const req = promotionRequests.find((r) => r.id === requestId && r.status === 'pending')
+      if (!req) return
+      const employeeId = String(req.employeeId ?? '').trim()
+      const toGrade = normalizeEmployeeGrade(req.toGrade)
+      let matched = false
+      setEmployeeDirectoryRows((rows) =>
+        rows.map((row) => {
+          if (String(row.id ?? '').trim() !== employeeId) return row
+          matched = true
+          return { ...row, grade: toGrade }
+        }),
+      )
+      if (!matched) {
+        window.alert(
+          '昇級は記録しましたが、従業員一覧に該当する社員Cが見つかりませんでした。社員Cの表記（空白の有無など）が申請時と一致しているか確認してください。',
+        )
+        return
+      }
+      clearSkillProgressForEmployees([employeeId])
+      deleteKeyedObjectEntryByTrimmedId(setSelfEvalByEmployee, employeeId)
+      deleteKeyedObjectEntryByTrimmedId(setSupervisorEvalByEmployee, employeeId)
+      window.alert(
+        '昇級を許可しました。等級を更新し、スキル進捗・自己評価・上司評価をリセットしました。（役員評価はそのまま残します）',
+      )
+    },
+    [clearSkillProgressForEmployees, deleteKeyedObjectEntryByTrimmedId, promotionRequests],
+  )
+
+  const rejectPromotionRequest = useCallback((requestId) => {
+    if (!window.confirm('この昇級申請を却下しますか？')) return
+    setPromotionRequests((prev) => {
+      const req = prev.find((r) => r.id === requestId && r.status === 'pending')
+      if (!req) return prev
+      return prev.map((r) =>
+        r.id === requestId ? { ...r, status: 'rejected', reviewedAt: new Date().toISOString() } : r,
+      )
+    })
+  }, [])
+
   const menuRoleKey = useMemo(
     () => resolveMenuRoleKey(email.trim().toLowerCase(), employeeDirectoryRows),
     [email, employeeDirectoryRows],
   )
 
+  const extraVisibleMenuKeysForCurrentUser = useMemo(() => {
+    if (loginMode === 'admin') return []
+    const employeeId = String(loggedInEmployeeId ?? '').trim()
+    if (!employeeId) return []
+    const row = employeeDirectoryRows.find((r) => String(r.id ?? '').trim() === employeeId)
+    return normalizeEmployeeExtraMenuKeys(row?.extraMenuKeys)
+  }, [loginMode, loggedInEmployeeId, employeeDirectoryRows])
+
   const isWorkspaceMenuVisible = useCallback(
-    (key) => isWorkspaceVisibleForRole(key, menuRoleKey, menuVisibilityByRole),
-    [menuRoleKey, menuVisibilityByRole],
+    (key) => {
+      if (extraVisibleMenuKeysForCurrentUser.includes(key)) return true
+      return isWorkspaceVisibleForRole(key, menuRoleKey, menuVisibilityByRole)
+    },
+    [menuRoleKey, menuVisibilityByRole, extraVisibleMenuKeysForCurrentUser],
   )
 
   useEffect(() => {
@@ -1235,6 +1727,8 @@ function App() {
     if (isWorkspaceMenuVisible(workspaceView)) return
     const order = [
       'gyoseki',
+      'count',
+      'honsu',
       'settings',
       'admin',
       'employee',
@@ -1374,6 +1868,9 @@ function App() {
       selfEvalByEmployee,
       supervisorEvalByEmployee,
       executiveEvalByEmployee,
+      countCurrent,
+      countHourlyTarget,
+      countIsRunning,
       departmentSalesDenture,
       departmentSalesCk,
       performanceRatePercentDenture,
@@ -1386,6 +1883,8 @@ function App() {
       settingsTab,
       activePage,
       snapshotPeriod,
+      employeeDeptOptions,
+      promotionRequests,
     }
     if (includeSensitive) payload.adminPassword = adminPassword
     return payload
@@ -1395,7 +1894,18 @@ function App() {
     const cloudRows = Array.isArray(payload.rows) && payload.rows.length > 0 ? payload.rows : null
     if (cloudRows) setRows(cloudRows)
     if (Array.isArray(payload.employeeDirectoryRows) && payload.employeeDirectoryRows.length > 0) {
-      setEmployeeDirectoryRows(payload.employeeDirectoryRows)
+      setEmployeeDirectoryRows(normalizeEmployeeDirectoryRows(payload.employeeDirectoryRows))
+    }
+    if (Array.isArray(payload.employeeDeptOptions)) {
+      const rowsForDept =
+        Array.isArray(payload.employeeDirectoryRows) && payload.employeeDirectoryRows.length > 0
+          ? normalizeEmployeeDirectoryRows(payload.employeeDirectoryRows)
+          : undefined
+      setEmployeeDeptOptions(mergeEmployeeDeptOptionsFromRows(payload.employeeDeptOptions, rowsForDept))
+    } else if (Array.isArray(payload.employeeDirectoryRows) && payload.employeeDirectoryRows.length > 0) {
+      setEmployeeDeptOptions((prev) =>
+        mergeEmployeeDeptOptionsFromRows(prev, normalizeEmployeeDirectoryRows(payload.employeeDirectoryRows)),
+      )
     }
     if (Array.isArray(payload.skillSettings)) {
       setSkillSettings(
@@ -1478,6 +1988,9 @@ function App() {
     if (typeof payload.adminPassword === 'string' && payload.adminPassword) {
       setAdminPassword(payload.adminPassword)
     }
+    if (Array.isArray(payload.promotionRequests)) {
+      setPromotionRequests(normalizePromotionRequests(payload.promotionRequests))
+    }
     if (Array.isArray(payload.skillSections) && payload.skillSections.length > 0) {
       const cleaned = payload.skillSections.filter(
         (s) => s && typeof s.id === 'string' && typeof s.label === 'string',
@@ -1525,6 +2038,8 @@ function App() {
     if (payload.sortOrder === 'asc' || payload.sortOrder === 'desc') setSortOrder(payload.sortOrder)
     if (
       payload.workspaceView === 'gyoseki' ||
+      payload.workspaceView === 'count' ||
+      payload.workspaceView === 'honsu' ||
       payload.workspaceView === 'admin' ||
       payload.workspaceView === 'employee' ||
       payload.workspaceView === 'skill' ||
@@ -1550,11 +2065,17 @@ function App() {
     if (
       payload.settingsTab === 'skill' ||
       payload.settingsTab === 'evalcriteria' ||
-      payload.settingsTab === 'menusettings'
+      payload.settingsTab === 'menusettings' ||
+      payload.settingsTab === 'departments'
     ) {
       setSettingsTab(payload.settingsTab)
     }
     if (payload.activePage === 'input' || payload.activePage === 'calc') setActivePage(payload.activePage)
+    if (Number.isFinite(Number(payload.countCurrent))) setCountCurrent(Math.max(0, Math.trunc(Number(payload.countCurrent))))
+    if (Number.isFinite(Number(payload.countHourlyTarget))) {
+      setCountHourlyTarget(Math.max(1, Math.trunc(Number(payload.countHourlyTarget))))
+    }
+    if (typeof payload.countIsRunning === 'boolean') setCountIsRunning(payload.countIsRunning)
     if (typeof payload.snapshotPeriod === 'string' && payload.snapshotPeriod) {
       setSnapshotPeriod(payload.snapshotPeriod)
     }
@@ -1692,6 +2213,8 @@ function App() {
     settingsTab,
     activePage,
     snapshotPeriod,
+    employeeDeptOptions,
+    promotionRequests,
   ])
 
   useEffect(() => {
@@ -1707,6 +2230,7 @@ function App() {
   }, [
     rows,
     employeeDirectoryRows,
+    employeeDeptOptions,
     skillSettings,
     skillSections,
     skillGrades,
@@ -1732,9 +2256,18 @@ function App() {
     settingsTab,
     activePage,
     snapshotPeriod,
+    promotionRequests,
     isCloudReady,
     saveCloudState,
   ])
+
+  useEffect(() => {
+    setEmployeeDeptOptions((prev) => {
+      const next = mergeEmployeeDeptOptionsFromRows(prev, employeeDirectoryRows)
+      if (next.length === prev.length && next.every((d, i) => d === prev[i])) return prev
+      return next
+    })
+  }, [employeeDirectoryRows])
 
   useEffect(() => {
     if (!supabase || !isCloudReady) return
@@ -1841,7 +2374,7 @@ function App() {
                   <h3>{loginMode === 'admin' ? 'スキル設定' : '働き方'}</h3>
                   <p>
                     {loginMode === 'admin'
-                      ? '部署別必須スキルと難易度の設定'
+                      ? '部署別スキルと難易度の設定'
                       : '作業数を見える化することで、時間厳守と無駄を減らす実現する職場づくりを支えます'}
                   </p>
                 </div>
@@ -2364,11 +2897,13 @@ function App() {
                 directoryRows={employeeDirectoryRows}
                 skills={skillSettings}
                 skillProgress={skillEmployeeProgress}
+                setSkillEmployeeProgress={setSkillEmployeeProgress}
                 skillProgressUpdatedAtByEmployee={skillProgressUpdatedAtByEmployee}
                 selfEvalByEmployee={selfEvalByEmployee}
                 supervisorEvalByEmployee={supervisorEvalByEmployee}
                 executiveEvalByEmployee={executiveEvalByEmployee}
                 goalsByEmployee={goalsByEmployee}
+                hideGradeSelfEvalAndGradeStats={menuRoleKey === MENU_ROLE_YAKUIN}
                 forcedSelectedMemberId={adminSelectedMemberId}
                 forcedDetailTab={adminDetailTab}
                 onSelectMember={(employeeId) => setAdminSelectedMemberId(employeeId)}
@@ -2380,7 +2915,7 @@ function App() {
                   setWorkspaceView('bossEval')
                 }}
                 onStartExecutiveEval={(employeeId) => {
-                  if (menuRoleKey !== MENU_ROLE_ADMIN) {
+                  if (menuRoleKey !== MENU_ROLE_ADMIN && menuRoleKey !== MENU_ROLE_YAKUIN) {
                     window.alert('権限がありません。')
                     return
                   }
@@ -2388,17 +2923,39 @@ function App() {
                   setSelectedEvalEmployeeId(employeeId)
                   setWorkspaceView('execEval')
                 }}
+                promotionRequests={promotionRequests}
+                canApprovePromotions={menuRoleKey === MENU_ROLE_ADMIN}
+                onSubmitPromotionRequest={submitPromotionRequest}
+                onApprovePromotionRequest={approvePromotionRequest}
+                onRejectPromotionRequest={rejectPromotionRequest}
               />
+            ) : null}
+            {workspaceView === 'count' ? (
+              <CountWorkspacePage
+                count={countCurrent}
+                setCount={setCountCurrent}
+                hourlyTarget={countHourlyTarget}
+                setHourlyTarget={setCountHourlyTarget}
+                isRunning={countIsRunning}
+                setIsRunning={setCountIsRunning}
+              />
+            ) : null}
+            {workspaceView === 'honsu' ? (
+              <HonsuWorkspacePage />
             ) : null}
             {workspaceView === 'employee' ? (
               <EmployeeManagePage
                 rows={employeeDirectoryRows}
                 setRows={setEmployeeDirectoryRows}
+                deptOptions={employeeDeptOptions}
                 skills={skillSettings}
                 skillProgress={skillEmployeeProgress}
                 selfEvalByEmployee={selfEvalByEmployee}
                 supervisorEvalByEmployee={supervisorEvalByEmployee}
                 executiveEvalByEmployee={executiveEvalByEmployee}
+                hideGradeAndTotalScore={menuRoleKey === MENU_ROLE_YAKUIN}
+                onEmployeeIdRename={renameEmployeeIdInAppState}
+                onClearSkillProgressForEmployees={clearSkillProgressForEmployees}
               />
             ) : null}
             {workspaceView === 'settings' ? (
@@ -2425,6 +2982,13 @@ function App() {
                   >
                     表示設定
                   </button>
+                  <button
+                    type="button"
+                    className={`settingsHubTab ${settingsTab === 'departments' ? 'isActive' : ''}`}
+                    onClick={() => setSettingsTab('departments')}
+                  >
+                    部署マスタ
+                  </button>
                 </nav>
                 {settingsTab === 'skill' ? (
                   <SkillSettingsPage
@@ -2436,6 +3000,8 @@ function App() {
                     setGrades={setSkillGrades}
                     activeGradeId={skillActiveGradeId}
                     setActiveGradeId={setSkillActiveGradeId}
+                    deptChoices={employeeDeptOptions}
+                    onRemoveSkillProgressKeysGlobally={removeSkillProgressKeysGlobally}
                   />
                 ) : null}
                 {settingsTab === 'evalcriteria' ? (
@@ -2443,6 +3009,14 @@ function App() {
                 ) : null}
                 {settingsTab === 'menusettings' ? (
                   <MenuDisplaySettingsPage menuVisibilityByRole={menuVisibilityByRole} setMenuVisibilityByRole={setMenuVisibilityByRole} />
+                ) : null}
+                {settingsTab === 'departments' ? (
+                  <DepartmentSettingsPage
+                    deptOptions={employeeDeptOptions}
+                    setDeptOptions={setEmployeeDeptOptions}
+                    employeeDirectoryRows={employeeDirectoryRows}
+                    skillSettings={skillSettings}
+                  />
                 ) : null}
               </section>
             ) : null}
@@ -2496,9 +3070,207 @@ function StubWorkspacePage({ title, description }) {
   )
 }
 
+function CountWorkspacePage({ count, setCount, hourlyTarget, setHourlyTarget, isRunning, setIsRunning }) {
+  const today = useMemo(
+    () =>
+      new Date().toLocaleDateString('ja-JP', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }),
+    [],
+  )
+
+  const decrement = () => setCount((prev) => Math.max(0, Number(prev || 0) - 1))
+  const increment = () => setCount((prev) => Math.max(0, Number(prev || 0) + 1))
+  const handleTargetChange = (event) => {
+    const next = Math.max(1, Number(event.target.value) || 1)
+    setHourlyTarget(Math.trunc(next))
+  }
+
+  return (
+    <section className="countPage">
+      <header className="countPageHeader">
+        <h2>カウントアプリ</h2>
+        <span className="countDate">{today}</span>
+      </header>
+
+      <p className="countTargetLabel">1時間当たりの製作目標個数</p>
+      <div className="countTargetRow">
+        <input
+          className="countTargetInput"
+          type="number"
+          min={1}
+          step={1}
+          value={hourlyTarget}
+          onChange={handleTargetChange}
+        />
+        <span className="countTargetUnit">個/時間</span>
+      </div>
+
+      <div className="countCounterRow">
+        <button type="button" className="countButton countButtonMinus" onClick={decrement}>
+          －
+        </button>
+        <div className="countCurrent">{count}</div>
+        <button type="button" className="countButton countButtonPlus" onClick={increment}>
+          ＋
+        </button>
+      </div>
+
+      <button
+        type="button"
+        className={`countToggleButton ${isRunning ? 'isStop' : 'isStart'}`}
+        onClick={() => setIsRunning((prev) => !prev)}
+      >
+        {isRunning ? '終了' : '開始'}
+      </button>
+    </section>
+  )
+}
+
+function HonsuWorkspacePage() {
+  const HONSU_TABS = [
+    { key: 'nightguard', label: 'ナイトガード' },
+    { key: 'cadOno', label: 'CAD小野さん' },
+    { key: 'cadEto', label: 'CAD衛藤さん' },
+  ]
+  const [activeTab, setActiveTab] = useState(HONSU_TABS[0].key)
+  const activeLabel = HONSU_TABS.find((tab) => tab.key === activeTab)?.label ?? HONSU_TABS[0].label
+
+  return (
+    <section className="honsuPage">
+      <header className="honsuHeader">
+        <h2>本数表</h2>
+        <p>項目を切り替えて内容を管理します。</p>
+      </header>
+
+      <div className="pageTabs pageTabsSub honsuTabs" role="tablist" aria-label="本数表の切り替え">
+        {HONSU_TABS.map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === tab.key}
+            className={`tabButton ${activeTab === tab.key ? 'isActive' : ''}`}
+            onClick={() => setActiveTab(tab.key)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      <section className="honsuPanel">
+        <h3>{activeLabel}</h3>
+        <p>このタブの中身は次に一緒に作っていきましょう。</p>
+      </section>
+    </section>
+  )
+}
+
+function DepartmentSettingsPage({ deptOptions, setDeptOptions, employeeDirectoryRows, skillSettings }) {
+  const [newDept, setNewDept] = useState('')
+
+  const deptUsage = useMemo(() => {
+    const map = new Map()
+    for (const d of deptOptions) map.set(d, { employees: 0, skills: 0 })
+    for (const row of employeeDirectoryRows || []) {
+      const d = String(row?.dept ?? '').trim()
+      if (!map.has(d)) continue
+      map.get(d).employees += 1
+    }
+    for (const sk of skillSettings || []) {
+      const deps = sk.departments || []
+      if (deps.includes('all')) continue
+      for (const d of deps) {
+        if (!map.has(d)) continue
+        map.get(d).skills += 1
+      }
+    }
+    return map
+  }, [deptOptions, employeeDirectoryRows, skillSettings])
+
+  const handleAdd = () => {
+    const v = newDept.trim()
+    if (!v) return
+    if (deptOptions.includes(v)) {
+      window.alert('同じ名前の部署がすでにあります。')
+      return
+    }
+    setDeptOptions((prev) => [...prev, v])
+    setNewDept('')
+  }
+
+  const handleRemove = (name) => {
+    if (deptOptions.length <= 1) {
+      window.alert('部署は1つ以上残してください。')
+      return
+    }
+    const u = deptUsage.get(name) ?? { employees: 0, skills: 0 }
+    if (u.employees > 0 || u.skills > 0) {
+      window.alert(
+        `「${name}」は使用中のため削除できません。\n・従業員: ${u.employees}人\n・スキル設定（対象部署）: ${u.skills}件\n先に従業員の部署やスキルの対象部署を変更してください。`,
+      )
+      return
+    }
+    setDeptOptions((prev) => prev.filter((d) => d !== name))
+  }
+
+  return (
+    <section className="deptSettingsPage">
+      <header className="deptSettingsHeader">
+        <h2>部署マスタ</h2>
+        <p className="deptSettingsLead">
+          従業員管理・スキル設定の「部署」に使う名前を登録します。追加した部署はすぐにプルダウンに反映されます。
+        </p>
+      </header>
+
+      <div className="deptSettingsAddRow">
+        <label className="deptSettingsAddLabel">
+          <span>部署名を追加</span>
+          <input
+            type="text"
+            value={newDept}
+            onChange={(e) => setNewDept(e.target.value)}
+            placeholder="例: 開発"
+            maxLength={40}
+          />
+        </label>
+        <button type="button" className="deptSettingsAddBtn" onClick={handleAdd}>
+          追加
+        </button>
+      </div>
+
+      <ul className="deptSettingsList">
+        {deptOptions.map((name) => {
+          const u = deptUsage.get(name) ?? { employees: 0, skills: 0 }
+          const inUse = u.employees > 0 || u.skills > 0
+          return (
+            <li key={name} className="deptSettingsItem">
+              <span className="deptSettingsName">{name}</span>
+              <span className="deptSettingsMeta">
+                {inUse ? `使用中（従業員 ${u.employees}人 / スキル ${u.skills}件）` : '未使用'}
+              </span>
+              <button
+                type="button"
+                className="deptSettingsRemoveBtn"
+                onClick={() => handleRemove(name)}
+                disabled={deptOptions.length <= 1}
+              >
+                削除
+              </button>
+            </li>
+          )
+        })}
+      </ul>
+    </section>
+  )
+}
+
 const MENU_DISPLAY_ROLE_CARDS = [
   { key: MENU_ROLE_IPPAN, badge: '一般', title: '一般従業員', cardClass: 'menuDispCardIppan' },
   { key: MENU_ROLE_JOUSHI, badge: '上司', title: '上司', cardClass: 'menuDispCardJoushi' },
+  { key: MENU_ROLE_YAKUIN, badge: '役員', title: '役員', cardClass: 'menuDispCardYakuin' },
   { key: MENU_ROLE_ADMIN, badge: '管理', title: '管理者', cardClass: 'menuDispCardAdmin' },
 ]
 
@@ -2599,6 +3371,8 @@ function EvaluationCriteriaPage({ grades, criteria, setCriteria }) {
     weightPct: 20,
     scores: ['', '', '', '', ''],
   })
+  const evalCritCsvFileRef = useRef(null)
+  const [evalCritCsvMessage, setEvalCritCsvMessage] = useState('')
 
   useEffect(() => {
     if (!grades.some((g) => g.id === activeGradeId)) {
@@ -2606,12 +3380,34 @@ function EvaluationCriteriaPage({ grades, criteria, setCriteria }) {
     }
   }, [grades, activeGradeId])
 
-  const majors = criteria[activeGradeId] ?? []
+  const sharedMajors = criteria?.sharedMajors ?? []
+  const minorsForGrade = useMemo(() => {
+    const blob = criteria?.minorsByGrade?.[activeGradeId]
+    return blob && typeof blob === 'object' && !Array.isArray(blob) ? blob : {}
+  }, [criteria, activeGradeId])
 
-  const updateMajors = (updater) => {
+  const majors = useMemo(
+    () =>
+      sharedMajors.map((sm) => ({
+        id: sm.id,
+        title: sm.title,
+        minors: Array.isArray(minorsForGrade[sm.id]) ? minorsForGrade[sm.id] : [],
+      })),
+    [sharedMajors, minorsForGrade],
+  )
+
+  const gradeLabel = grades.find((g) => g.id === activeGradeId)?.label ?? activeGradeId
+
+  const updateMinorsPatch = (majorId, nextList) => {
     setCriteria((prev) => ({
       ...prev,
-      [activeGradeId]: typeof updater === 'function' ? updater(prev[activeGradeId] ?? []) : updater,
+      minorsByGrade: {
+        ...(prev.minorsByGrade ?? {}),
+        [activeGradeId]: {
+          ...((prev.minorsByGrade ?? {})[activeGradeId] ?? {}),
+          [majorId]: nextList,
+        },
+      },
     }))
   }
 
@@ -2634,16 +3430,42 @@ function EvaluationCriteriaPage({ grades, criteria, setCriteria }) {
       return
     }
     if (majorModal.mode === 'add') {
-      updateMajors((prev) => [...prev, { id: newEvaluationId('maj'), title: t, minors: [] }])
+      const id = newEvaluationId('maj')
+      setCriteria((prev) => {
+        const nextShared = [...(prev.sharedMajors ?? []), { id, title: t }]
+        const nextMinors = { ...(prev.minorsByGrade ?? {}) }
+        for (const g of grades) {
+          const gid = g.id
+          const cur = { ...(nextMinors[gid] ?? {}) }
+          cur[id] = []
+          nextMinors[gid] = cur
+        }
+        return { ...prev, sharedMajors: nextShared, minorsByGrade: nextMinors }
+      })
     } else {
-      updateMajors((prev) => prev.map((m) => (m.id === majorModal.majorId ? { ...m, title: t } : m)))
+      setCriteria((prev) => ({
+        ...prev,
+        sharedMajors: (prev.sharedMajors ?? []).map((m) =>
+          m.id === majorModal.majorId ? { ...m, title: t } : m,
+        ),
+      }))
     }
     closeMajorModal()
   }
 
   const deleteMajor = (majorId) => {
-    if (!window.confirm('この大項目と配下の小項目をすべて削除しますか？')) return
-    updateMajors((prev) => prev.filter((m) => m.id !== majorId))
+    if (!window.confirm('この大項目と、全等級の配下小項目をすべて削除しますか？')) return
+    setCriteria((prev) => {
+      const nextShared = (prev.sharedMajors ?? []).filter((m) => m.id !== majorId)
+      const nextMinors = {}
+      for (const [gid, blob] of Object.entries(prev.minorsByGrade ?? {})) {
+        if (typeof blob !== 'object' || Array.isArray(blob)) continue
+        const cur = { ...blob }
+        delete cur[majorId]
+        nextMinors[gid] = cur
+      }
+      return { ...prev, sharedMajors: nextShared, minorsByGrade: nextMinors }
+    })
     setOpenMajors((prev) => {
       const next = { ...prev }
       delete next[majorId]
@@ -2679,27 +3501,18 @@ function EvaluationCriteriaPage({ grades, criteria, setCriteria }) {
       return
     }
     const weightPct = Math.min(100, Math.max(0, Number(minorDraft.weightPct === '' ? 0 : minorDraft.weightPct) || 0))
+    const curMinors = majors.find((m) => m.id === minorModal.majorId)?.minors ?? []
     if (minorModal.mode === 'add') {
-      updateMajors((prev) =>
-        prev.map((m) => {
-          if (m.id !== minorModal.majorId) return m
-          return {
-            ...m,
-            minors: [...m.minors, { id: newEvaluationId('min'), title: t, weightPct, scoreCriteria: scores }],
-          }
-        }),
-      )
+      updateMinorsPatch(minorModal.majorId, [
+        ...curMinors,
+        { id: newEvaluationId('min'), title: t, weightPct, scoreCriteria: scores },
+      ])
     } else {
-      updateMajors((prev) =>
-        prev.map((m) => {
-          if (m.id !== minorModal.majorId) return m
-          return {
-            ...m,
-            minors: m.minors.map((mi) =>
-              mi.id === minorModal.minorId ? { ...mi, title: t, weightPct, scoreCriteria: scores } : mi,
-            ),
-          }
-        }),
+      updateMinorsPatch(
+        minorModal.majorId,
+        curMinors.map((mi) =>
+          mi.id === minorModal.minorId ? { ...mi, title: t, weightPct, scoreCriteria: scores } : mi,
+        ),
       )
     }
     closeMinorModal()
@@ -2707,44 +3520,281 @@ function EvaluationCriteriaPage({ grades, criteria, setCriteria }) {
 
   const deleteMinor = (majorId, minorId) => {
     if (!window.confirm('この小項目を削除しますか？')) return
-    updateMajors((prev) =>
-      prev.map((m) => {
-        if (m.id !== majorId) return m
-        return { ...m, minors: m.minors.filter((mi) => mi.id !== minorId) }
-      }),
-    )
+    const curMinors = majors.find((m) => m.id === majorId)?.minors ?? []
+    updateMinorsPatch(majorId, curMinors.filter((mi) => mi.id !== minorId))
   }
 
   const toggleMajorOpen = (majorId) => {
     setOpenMajors((prev) => ({ ...prev, [majorId]: !prev[majorId] }))
   }
 
+  const handleExportCriteriaCsv = () => {
+    const headers = [
+      '等級ID',
+      '等級名',
+      '大項目ID',
+      '大項目名',
+      '小項目ID',
+      '小項目名',
+      'ウェイト',
+      '1点基準',
+      '2点基準',
+      '3点基準',
+      '4点基準',
+      '5点基準',
+    ]
+    const gradeLabelById = Object.fromEntries(grades.map((g) => [g.id, g.label ?? g.id]))
+    const sm = criteria?.sharedMajors ?? []
+    const byGrade = criteria?.minorsByGrade ?? {}
+    const body = []
+    for (const g of grades) {
+      const gradeId = g.id
+      const gradeBlob = byGrade[gradeId] && typeof byGrade[gradeId] === 'object' && !Array.isArray(byGrade[gradeId])
+        ? byGrade[gradeId]
+        : {}
+      for (const major of sm) {
+        const minors = Array.isArray(gradeBlob[major.id]) ? gradeBlob[major.id] : []
+        if (minors.length === 0) {
+          body.push(
+            [
+              escapeCsvField(gradeId),
+              escapeCsvField(gradeLabelById[gradeId] ?? gradeId),
+              escapeCsvField(major.id),
+              escapeCsvField(major.title),
+              escapeCsvField(''),
+              escapeCsvField(''),
+              escapeCsvField(''),
+              escapeCsvField(''),
+              escapeCsvField(''),
+              escapeCsvField(''),
+              escapeCsvField(''),
+              escapeCsvField(''),
+            ].join(','),
+          )
+          continue
+        }
+        for (const minor of minors) {
+          const scoreCriteria = [...(minor.scoreCriteria ?? []), '', '', '', '', ''].slice(0, 5)
+          body.push(
+            [
+              escapeCsvField(gradeId),
+              escapeCsvField(gradeLabelById[gradeId] ?? gradeId),
+              escapeCsvField(major.id),
+              escapeCsvField(major.title),
+              escapeCsvField(minor.id),
+              escapeCsvField(minor.title),
+              escapeCsvField(minor.weightPct ?? 0),
+              escapeCsvField(scoreCriteria[0]),
+              escapeCsvField(scoreCriteria[1]),
+              escapeCsvField(scoreCriteria[2]),
+              escapeCsvField(scoreCriteria[3]),
+              escapeCsvField(scoreCriteria[4]),
+            ].join(','),
+          )
+        }
+      }
+    }
+    const csvContent = [headers.map(escapeCsvField).join(','), ...body].join('\r\n')
+    const bom = '\uFEFF'
+    const blob = new Blob([bom + csvContent], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    const date = new Date().toISOString().slice(0, 10)
+    link.href = url
+    link.download = `evaluation_criteria_${date}.csv`
+    link.click()
+    URL.revokeObjectURL(url)
+    setEvalCritCsvMessage(`${body.length}件をCSVエクスポートしました。`)
+  }
+
+  const handleExportCriteriaTemplateCsv = () => {
+    const headers = [
+      '等級ID',
+      '等級名',
+      '大項目ID',
+      '大項目名',
+      '小項目ID',
+      '小項目名',
+      'ウェイト',
+      '1点基準',
+      '2点基準',
+      '3点基準',
+      '4点基準',
+      '5点基準',
+    ]
+    const csvContent = headers.map(escapeCsvField).join(',')
+    const bom = '\uFEFF'
+    const blob = new Blob([bom + csvContent], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = 'evaluation_criteria_template.csv'
+    link.click()
+    URL.revokeObjectURL(url)
+    setEvalCritCsvMessage('ヘッダー行のみのテンプレートをダウンロードしました。2行目以降にデータを入力してインポートしてください。')
+  }
+
+  const handleImportCriteriaCsv = async (event) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    try {
+      const content = await file.text()
+      const lines = content
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line !== '')
+      if (lines.length < 2) {
+        setEvalCritCsvMessage('CSVにデータ行がありません。')
+        return
+      }
+      const headers = parseCsvLine(lines[0])
+      const gradeIdIdx = findHeaderIndex(headers, ['等級ID', 'gradeId'])
+      const majorTitleIdx = findHeaderIndex(headers, ['大項目名', 'majorTitle'])
+      const majorIdIdx = findHeaderIndex(headers, ['大項目ID', 'majorId'])
+      const minorTitleIdx = findHeaderIndex(headers, ['小項目名', 'minorTitle'])
+      const minorIdIdx = findHeaderIndex(headers, ['小項目ID', 'minorId'])
+      const weightIdx = findHeaderIndex(headers, ['ウェイト', 'weightPct'])
+      const s1Idx = findHeaderIndex(headers, ['1点基準', 'score1'])
+      const s2Idx = findHeaderIndex(headers, ['2点基準', 'score2'])
+      const s3Idx = findHeaderIndex(headers, ['3点基準', 'score3'])
+      const s4Idx = findHeaderIndex(headers, ['4点基準', 'score4'])
+      const s5Idx = findHeaderIndex(headers, ['5点基準', 'score5'])
+      if (gradeIdIdx < 0 || majorTitleIdx < 0) {
+        setEvalCritCsvMessage('CSVヘッダーに「等級ID」「大項目名」が必要です。')
+        return
+      }
+
+      const byGrade = {}
+      let importedMinorCount = 0
+      let importedMajorCount = 0
+
+      for (let i = 1; i < lines.length; i++) {
+        const cols = parseCsvLine(lines[i])
+        const gradeIdRaw = String(cols[gradeIdIdx] ?? '').trim()
+        const majorTitle = String(cols[majorTitleIdx] ?? '').trim()
+        if (!gradeIdRaw || !majorTitle) continue
+
+        const gradeId = grades.some((g) => g.id === gradeIdRaw) ? gradeIdRaw : null
+        if (!gradeId) continue
+
+        if (!byGrade[gradeId]) byGrade[gradeId] = new Map()
+        const majorId = String(cols[majorIdIdx] ?? '').trim() || `maj_csv_${majorTitle}`
+        if (!byGrade[gradeId].has(majorId)) {
+          byGrade[gradeId].set(majorId, { id: majorId, title: majorTitle, minors: [] })
+          importedMajorCount += 1
+        } else {
+          const existingMajor = byGrade[gradeId].get(majorId)
+          existingMajor.title = majorTitle
+        }
+
+        const minorTitle = minorTitleIdx >= 0 ? String(cols[minorTitleIdx] ?? '').trim() : ''
+        if (!minorTitle) continue
+
+        const minorId = String(cols[minorIdIdx] ?? '').trim() || `min_csv_${minorTitle}`
+        const weightPct = Math.min(100, Math.max(0, Number(cols[weightIdx] ?? 0) || 0))
+        const scores = [
+          String(cols[s1Idx] ?? '').trim(),
+          String(cols[s2Idx] ?? '').trim(),
+          String(cols[s3Idx] ?? '').trim(),
+          String(cols[s4Idx] ?? '').trim(),
+          String(cols[s5Idx] ?? '').trim(),
+        ]
+        const majorRef = byGrade[gradeId].get(majorId)
+        const idx = majorRef.minors.findIndex((m) => m.id === minorId)
+        const nextMinor = { id: minorId, title: minorTitle, weightPct, scoreCriteria: scores }
+        if (idx >= 0) majorRef.minors[idx] = nextMinor
+        else majorRef.minors.push(nextMinor)
+        importedMinorCount += 1
+      }
+
+      const importedGradeIds = Object.keys(byGrade)
+      if (importedGradeIds.length === 0) {
+        setEvalCritCsvMessage('取り込める評価基準データがありませんでした。')
+        return
+      }
+
+      setCriteria((prev) => {
+        const prevNorm = normalizeEvaluationCriteriaStore(prev, grades)
+        const legacy = {}
+        for (const g of grades) {
+          const gid = g.id
+          if (importedGradeIds.includes(gid)) {
+            legacy[gid] = Array.from(byGrade[gid].values())
+          } else {
+            legacy[gid] = prevNorm.sharedMajors.map((sm) => ({
+              id: sm.id,
+              title: sm.title,
+              minors: [...(prevNorm.minorsByGrade[gid]?.[sm.id] ?? [])],
+            }))
+          }
+        }
+        return migrateLegacyEvaluationCriteriaToShared(legacy, grades)
+      })
+      setEvalCritCsvMessage(
+        `${importedGradeIds.length}等級 / 大項目${importedMajorCount}件 / 小項目${importedMinorCount}件をCSVインポートしました。`,
+      )
+    } catch {
+      setEvalCritCsvMessage('CSVの読み込みに失敗しました。形式を確認してください。')
+    } finally {
+      event.target.value = ''
+    }
+  }
+
   return (
     <section className="evalCritPage">
       <header className="evalCritHeader">
         <h2>評価基準設定</h2>
-        <p className="evalCritLead">等級別の評価項目と基準を設定します</p>
+        <p className="evalCritLead">
+          大項目（評価の大目標）は等級によらず共通です（G1〜G6で同じ構成になります）。小項目・ウエイト・1〜5点の基準は、等級を切り替えて等級ごとに設定します。
+        </p>
       </header>
 
       <div className="evalCritToolbar">
-        <label className="evalCritGradeSelect">
-          等級選択
-          <select value={activeGradeId} onChange={(event) => setActiveGradeId(event.target.value)}>
-            {grades.map((g) => (
-              <option key={g.id} value={g.id}>
-                {g.label ?? g.id}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button type="button" className="evalCritAddMajorBtn" onClick={openAddMajor}>
-          + 大項目を追加
-        </button>
+        <div className="evalCritToolbarLeft evalCritToolbarLeftStack">
+          <button type="button" className="evalCritAddMajorBtn" onClick={openAddMajor}>
+            + 大項目を追加（全等級共通）
+          </button>
+          <label className="evalCritGradeSelect">
+            小項目・ウエイトを編集する等級
+            <select value={activeGradeId} onChange={(event) => setActiveGradeId(event.target.value)}>
+              {grades.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.label ?? g.id}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="evalCritToolbarRight">
+          <button type="button" className="btn export" onClick={handleExportCriteriaCsv}>
+            CSVエクスポート
+          </button>
+          <button type="button" className="btn import" onClick={() => evalCritCsvFileRef.current?.click()}>
+            CSVインポート
+          </button>
+          <button type="button" className="btn template" onClick={handleExportCriteriaTemplateCsv}>
+            CSVテンプレート
+          </button>
+          <input
+            ref={evalCritCsvFileRef}
+            type="file"
+            accept=".csv,text/csv"
+            className="employeeCsvHiddenInput"
+            onChange={handleImportCriteriaCsv}
+          />
+        </div>
       </div>
+      {evalCritCsvMessage ? <p className="evalCritCsvMessage">{evalCritCsvMessage}</p> : null}
+
+      <p className="evalCritGradeEditHint">
+        表示中: <strong>{gradeLabel}</strong> の小項目・ウエイト・評価基準を編集しています。
+      </p>
 
       <div className="evalCritBoard">
         {majors.length === 0 ? (
-          <p className="evalCritEmpty">この等級にはまだ大項目がありません。「+ 大項目を追加」から追加してください。</p>
+          <p className="evalCritEmpty">
+            大項目がありません。「+ 大項目を追加（全等級共通）」から追加してください。
+          </p>
         ) : (
           <div className="evalCritMajorList">
             {majors.map((maj) => {
@@ -2814,7 +3864,7 @@ function EvaluationCriteriaPage({ grades, criteria, setCriteria }) {
               ×
             </button>
             <h3>{majorModal.mode === 'add' ? '大項目を追加' : '大項目を編集'}</h3>
-            <p className="evalCritModalSub">評価カテゴリの大項目を設定します。</p>
+            <p className="evalCritModalSub">全等級で共通の大目標（大項目）です。名称の変更はすべての等級に反映されます。</p>
             <label className="evalCritFormLabel">
               大項目名
               <input
@@ -2843,7 +3893,9 @@ function EvaluationCriteriaPage({ grades, criteria, setCriteria }) {
               ×
             </button>
             <h3>{minorModal.mode === 'add' ? '小項目を追加' : '小項目を編集'}</h3>
-            <p className="evalCritModalSub">評価項目の詳細と評価基準を設定します。</p>
+            <p className="evalCritModalSub">
+              等級「{gradeLabel}」向けの小項目です。ウエイトと1〜5点の基準は等級ごとに変えられます。
+            </p>
             <div className="evalCritFormStack">
               <label className="evalCritFormLabel">
                 小項目名 <span className="evalCritReq">*</span>
@@ -2937,7 +3989,6 @@ function SkillUpPage({ employees, skills, sections, progress }) {
 
   const filteredSkills = useMemo(() => {
     if (skillListFilter === 'all') return gradeSkills
-    if (skillListFilter === 'required') return gradeSkills.filter((s) => s.required)
     return gradeSkills.filter((s) => s.sectionId === skillListFilter)
   }, [gradeSkills, skillListFilter])
 
@@ -2995,13 +4046,6 @@ function SkillUpPage({ employees, skills, sections, progress }) {
         >
           全て
         </button>
-        <button
-          type="button"
-          className={`skillUpFilterTab ${skillListFilter === 'required' ? 'isActive' : ''}`}
-          onClick={() => setSkillListFilter('required')}
-        >
-          必須
-        </button>
         {sections.map((sec) => (
           <button
             key={sec.id}
@@ -3037,7 +4081,6 @@ function SkillUpPage({ employees, skills, sections, progress }) {
                   </button>
                 </div>
                 <div className="skillUpSkillTags">
-                  {s.required ? <span className="skillUpTag skillUpTagReq">必須</span> : null}
                   <span className="skillUpTag skillUpTagSec">{sectionLabel(s.sectionId)}</span>
                 </div>
                 <p className="skillUpSkillProgressText">
@@ -3108,6 +4151,17 @@ function EvalQuestionnairePage({ variant, employees, evalState, setEvalState, pe
 
   const allItems = useMemo(() => SELF_EVAL_CATEGORIES.flatMap((c) => c.items), [])
   const totalCount = allItems.length
+
+  const superGroupedCategories = useMemo(() => {
+    const blocks = []
+    for (const cat of SELF_EVAL_CATEGORIES) {
+      const key = cat.superGroup === 'interpersonal' ? 'interpersonal' : 'business'
+      const tail = blocks[blocks.length - 1]
+      if (tail && tail.key === key) tail.cats.push(cat)
+      else blocks.push({ key, cats: [cat] })
+    }
+    return blocks
+  }, [])
 
   const [openCats, setOpenCats] = useState(() =>
     Object.fromEntries(SELF_EVAL_CATEGORIES.map((c, i) => [c.id, i === 0])),
@@ -3183,89 +4237,102 @@ function EvalQuestionnairePage({ variant, employees, evalState, setEvalState, pe
       </div>
 
       <div className="selfEvalCategories">
-        {SELF_EVAL_CATEGORIES.map((cat) => {
-          const done = categoryDoneCount(cat)
-          const open = !!openCats[cat.id]
+        {superGroupedCategories.map((block) => {
+          const meta = SELF_EVAL_SUPER_GROUP[block.key]
           return (
-            <section key={cat.id} className="selfEvalCategory">
-              <button
-                type="button"
-                className="selfEvalCategoryHead"
-                onClick={() => setOpenCats((prev) => ({ ...prev, [cat.id]: !prev[cat.id] }))}
-                aria-expanded={open}
-              >
-                <span className="selfEvalChevron" aria-hidden>
-                  {open ? '▼' : '▶'}
-                </span>
-                <span className="selfEvalCategoryTitle">{cat.title}</span>
-                <span className="selfEvalCategoryBadge">
-                  {done} / {cat.items.length} 完了
-                </span>
-              </button>
-              {open ? (
-                <div className="selfEvalCategoryBody">
-                  {cat.items.map((it) => {
-                    const selfPts = String(peerScores[it.id] ?? '').trim()
-                    return (
-                      <article key={it.id} className="selfEvalItemCard">
-                        <div className="selfEvalItemCardTop">
-                          <h4 className="selfEvalItemTitle">{it.title}</h4>
+            <div key={block.key} className={`selfEvalSuperGroup selfEvalSuperGroup--${block.key}`}>
+              <div className="selfEvalSuperGroupLabel">
+                <span className="selfEvalSuperGroupTitle">{meta.label}</span>
+                <span className="selfEvalSuperGroupDesc">{meta.description}</span>
+              </div>
+              <div className="selfEvalSuperGroupInner">
+                {block.cats.map((cat) => {
+                  const done = categoryDoneCount(cat)
+                  const open = !!openCats[cat.id]
+                  return (
+                    <section key={cat.id} className={`selfEvalCategory selfEvalCategory--${block.key}`}>
+                      <button
+                        type="button"
+                        className="selfEvalCategoryHead"
+                        onClick={() => setOpenCats((prev) => ({ ...prev, [cat.id]: !prev[cat.id] }))}
+                        aria-expanded={open}
+                      >
+                        <span className="selfEvalChevron" aria-hidden>
+                          {open ? '▼' : '▶'}
+                        </span>
+                        <span className="selfEvalCategoryTitle">{cat.title}</span>
+                        <span className="selfEvalCategoryBadge">
+                          {done} / {cat.items.length} 完了
+                        </span>
+                      </button>
+                      {open ? (
+                        <div className="selfEvalCategoryBody">
+                          {cat.items.map((it) => {
+                            const selfPts = String(peerScores[it.id] ?? '').trim()
+                            return (
+                              <article key={it.id} className="selfEvalItemCard">
+                                <div className="selfEvalItemCardTop">
+                                  <h4 className="selfEvalItemTitle">{it.title}</h4>
+                                </div>
+                                {isBoss ? (
+                                  <p className="bossEvalSelfNote">
+                                    自己評価の点数: {selfPts ? `${selfPts}点` : '（未入力）'}
+                                  </p>
+                                ) : null}
+                                <div className={`selfEvalItemGrid${isBoss ? '' : ' isSingleField'}`}>
+                                  <label className="selfEvalFieldLabel">
+                                    <span className="selfEvalFieldHead">
+                                      <span>{isBoss ? '上司評価の点数' : '評価点数'}</span>
+                                      <button
+                                        type="button"
+                                        className="selfEvalDetailLink"
+                                        onClick={() => setDetailItem(it)}
+                                        aria-label={`${it.title} の詳細を表示`}
+                                        title="詳細を表示"
+                                      >
+                                        ⓘ
+                                      </button>
+                                    </span>
+                                    <div className="selfEvalScoreSegment" role="group" aria-label={`${it.title}の評価点数`}>
+                                      {[1, 2, 3, 4, 5].map((n) => {
+                                        const value = String(n)
+                                        const selected = String(scores[it.id] ?? '') === value
+                                        return (
+                                          <button
+                                            key={n}
+                                            type="button"
+                                            className={`selfEvalScorePill${selected ? ' isActive' : ''}`}
+                                            onClick={() => patchScore(it.id, value)}
+                                            aria-pressed={selected}
+                                          >
+                                            {n}
+                                          </button>
+                                        )
+                                      })}
+                                    </div>
+                                  </label>
+                                  {isBoss ? (
+                                    <label className="selfEvalFieldLabel">
+                                      <span>コメント（評価の根拠など）</span>
+                                      <input
+                                        type="text"
+                                        value={comments[it.id] ?? ''}
+                                        onChange={(event) => patchComment(it.id, event.target.value)}
+                                        placeholder="評価の根拠や補足があれば入力"
+                                      />
+                                    </label>
+                                  ) : null}
+                                </div>
+                              </article>
+                            )
+                          })}
                         </div>
-                        {isBoss ? (
-                          <p className="bossEvalSelfNote">
-                            自己評価の点数: {selfPts ? `${selfPts}点` : '（未入力）'}
-                          </p>
-                        ) : null}
-                        <div className={`selfEvalItemGrid${isBoss ? '' : ' isSingleField'}`}>
-                          <label className="selfEvalFieldLabel">
-                            <span className="selfEvalFieldHead">
-                              <span>{isBoss ? '上司評価の点数' : '評価点数'}</span>
-                              <button
-                                type="button"
-                                className="selfEvalDetailLink"
-                                onClick={() => setDetailItem(it)}
-                                aria-label={`${it.title} の詳細を表示`}
-                                title="詳細を表示"
-                              >
-                                ⓘ
-                              </button>
-                            </span>
-                            <div className="selfEvalScoreSegment" role="group" aria-label={`${it.title}の評価点数`}>
-                              {[1, 2, 3, 4, 5].map((n) => {
-                                const value = String(n)
-                                const selected = String(scores[it.id] ?? '') === value
-                                return (
-                                  <button
-                                    key={n}
-                                    type="button"
-                                    className={`selfEvalScorePill${selected ? ' isActive' : ''}`}
-                                    onClick={() => patchScore(it.id, value)}
-                                    aria-pressed={selected}
-                                  >
-                                    {n}
-                                  </button>
-                                )
-                              })}
-                            </div>
-                          </label>
-                          {isBoss ? (
-                            <label className="selfEvalFieldLabel">
-                              <span>コメント（評価の根拠など）</span>
-                              <input
-                                type="text"
-                                value={comments[it.id] ?? ''}
-                                onChange={(event) => patchComment(it.id, event.target.value)}
-                                placeholder="評価の根拠や補足があれば入力"
-                              />
-                            </label>
-                          ) : null}
-                        </div>
-                      </article>
-                    )
-                  })}
-                </div>
-              ) : null}
-            </section>
+                      ) : null}
+                    </section>
+                  )
+                })}
+              </div>
+            </div>
           )
         })}
       </div>
@@ -3668,9 +4735,19 @@ function GoalManagementPage({ employee, goals, setGoals }) {
   )
 }
 
-const SKILL_DEPT_CHOICES = ['製造', '営業', '品質']
-
-function SkillSettingsPage({ skills, setSkills, sections, setSections, grades, setGrades, activeGradeId, setActiveGradeId }) {
+function SkillSettingsPage({
+  skills,
+  setSkills,
+  sections,
+  setSections,
+  grades,
+  setGrades,
+  activeGradeId,
+  setActiveGradeId,
+  deptChoices,
+  onRemoveSkillProgressKeysGlobally,
+}) {
+  const deptList = Array.isArray(deptChoices) && deptChoices.length > 0 ? deptChoices : DEFAULT_EMPLOYEE_DEPTS
   const [modalOpen, setModalOpen] = useState(false)
   const [sectionModalOpen, setSectionModalOpen] = useState(false)
   const [gradeModalOpen, setGradeModalOpen] = useState(false)
@@ -3685,7 +4762,6 @@ function SkillSettingsPage({ skills, setSkills, sections, setSections, grades, s
     stages: 3,
     levelStars: 5,
     maxStars: 15,
-    required: true,
     allDepts: true,
     depts: [],
     levelCriteria: ['', '', ''],
@@ -3710,7 +4786,6 @@ function SkillSettingsPage({ skills, setSkills, sections, setSections, grades, s
       stages: 3,
       levelStars: 5,
       maxStars: 15,
-      required: true,
       allDepts: true,
       depts: [],
       levelCriteria: ['', '', ''],
@@ -3737,9 +4812,8 @@ function SkillSettingsPage({ skills, setSkills, sections, setSections, grades, s
       stages: st,
       levelStars: Number(skill.levelStars) || 0,
       maxStars: Number(skill.maxStars) || 0,
-      required: !!skill.required,
       allDepts,
-      depts: allDepts ? [] : depts.filter((d) => d !== 'all'),
+      depts: allDepts ? [] : depts.filter((d) => d !== 'all' && deptList.includes(d)),
       levelCriteria,
     })
     setModalOpen(true)
@@ -3758,11 +4832,12 @@ function SkillSettingsPage({ skills, setSkills, sections, setSections, grades, s
     const title = draft.title.trim()
     if (!title) return
 
-    const departments = draft.allDepts
-      ? ['all']
-      : draft.depts.length > 0
-        ? [...draft.depts]
-        : ['製造']
+    const validDepts = draft.depts.filter((d) => deptList.includes(d))
+    if (!draft.allDepts && validDepts.length === 0) {
+      window.alert('「全部署」にチェックを入れるか、部署マスタに登録されている部署を1つ以上選んでください。')
+      return
+    }
+    const departments = draft.allDepts ? ['all'] : [...validDepts]
 
     const stagesNum = Math.min(20, Math.max(1, Number(draft.stages) || 3))
     const levelCriteria = resizeLevelCriteriaArray(draft.levelCriteria, stagesNum)
@@ -3777,7 +4852,7 @@ function SkillSettingsPage({ skills, setSkills, sections, setSections, grades, s
       levelCriteria,
       levelStars: Math.max(0, Number(draft.levelStars) || 0),
       maxStars: Math.max(0, Number(draft.maxStars) || 0),
-      required: !!draft.required,
+      required: true,
       departments,
     }
 
@@ -3795,9 +4870,34 @@ function SkillSettingsPage({ skills, setSkills, sections, setSections, grades, s
     setSkills((prev) => prev.filter((s) => s.id !== id))
   }
 
-  const openAddSectionModal = () => {
-    setNewSectionLabel('')
-    setSectionModalOpen(true)
+  const openSectionEditModal = () => {
+    window.alert('区分は「評価基準設定」の大項目と連動しています。区分の追加・編集・削除は評価基準設定で行ってください。')
+  }
+
+  const handleDeleteSection = (sectionId) => {
+    if (sections.length <= 1) {
+      window.alert('区分は最低1つ必要です。')
+      return
+    }
+    const sec = sections.find((s) => s.id === sectionId)
+    const label = sec?.label ?? sectionId
+    const inSection = skills.filter((s) => s.sectionId === sectionId)
+    const detail =
+      inSection.length > 0
+        ? `この区分に属するスキルが全等級あわせて${inSection.length}件あります。区分とこれらのスキルを削除し、従業員の進捗から該当スキル分を取り除きます。`
+        : 'この区分にスキルはありません。区分だけを削除します。'
+    const ok = window.confirm(
+      `区分「${label}」を削除しますか？\n\n${detail}\n\n「OK」で削除、「キャンセル」で中止します。`,
+    )
+    if (!ok) return
+    const skillIds = inSection.map((s) => s.id)
+    onRemoveSkillProgressKeysGlobally?.(skillIds)
+    const remainingFirst = sections.find((s) => s.id !== sectionId)?.id
+    setSkills((prev) => prev.filter((s) => s.sectionId !== sectionId))
+    setSections((prev) => prev.filter((s) => s.id !== sectionId))
+    if (remainingFirst) {
+      setDraft((prev) => (prev.sectionId === sectionId ? { ...prev, sectionId: remainingFirst } : prev))
+    }
   }
 
   const handleSaveNewSection = (event) => {
@@ -3806,7 +4906,6 @@ function SkillSettingsPage({ skills, setSkills, sections, setSections, grades, s
     if (!label) return
     const id = `sec_${Date.now()}`
     setSections((prev) => [...prev, { id, label }])
-    setSectionModalOpen(false)
     setNewSectionLabel('')
   }
 
@@ -3831,11 +4930,11 @@ function SkillSettingsPage({ skills, setSkills, sections, setSections, grades, s
       <header className="skillSettingsHeader">
         <div>
           <h2>スキル設定管理</h2>
-          <p>スキルの設定を確認・編集できます</p>
+          <p>スキルの設定を確認・編集できます（区分は評価基準の大項目と連動）</p>
         </div>
         <div className="skillSettingsHeaderActions">
-          <button type="button" className="skillSectionAddButton" onClick={openAddSectionModal}>
-            + 区分を追加
+          <button type="button" className="skillSectionAddButton" onClick={openSectionEditModal}>
+            区分は評価基準と連動
           </button>
           <button type="button" className="skillAddButton" onClick={openCreate}>
             + 新規スキル追加
@@ -3877,7 +4976,6 @@ function SkillSettingsPage({ skills, setSkills, sections, setSections, grades, s
                     <th>段階数</th>
                     <th>★/レベル</th>
                     <th>最大★</th>
-                    <th>必須/任意</th>
                     <th>対象部署</th>
                     <th>操作</th>
                   </tr>
@@ -3885,7 +4983,7 @@ function SkillSettingsPage({ skills, setSkills, sections, setSections, grades, s
                 <tbody>
                   {sectionSkills.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="skillTableEmpty">
+                      <td colSpan={6} className="skillTableEmpty">
                         この区分にスキルはまだありません。
                       </td>
                     </tr>
@@ -3910,13 +5008,6 @@ function SkillSettingsPage({ skills, setSkills, sections, setSections, grades, s
                             ★
                           </span>{' '}
                           {skill.maxStars}★
-                        </td>
-                        <td>
-                          {skill.required ? (
-                            <span className="reqPill required">必須</span>
-                          ) : (
-                            <span className="reqPill optional">任意</span>
-                          )}
                         </td>
                         <td>
                           <div className="deptBadges">
@@ -4086,21 +5177,11 @@ function SkillSettingsPage({ skills, setSkills, sections, setSections, grades, s
                 />
               </label>
 
-              <label>
-                必須/任意 *
-                <select
-                  value={draft.required ? 'required' : 'optional'}
-                  onChange={(event) =>
-                    setDraft((prev) => ({ ...prev, required: event.target.value === 'required' }))
-                  }
-                >
-                  <option value="required">必須</option>
-                  <option value="optional">任意</option>
-                </select>
-              </label>
-
               <fieldset className="skillDeptFieldset">
-                <legend>対象部署</legend>
+                <legend>対象部署（部署マスタと連動）</legend>
+                <p className="skillDeptMasterHelp">
+                  チェック一覧は「設定」→「部署マスタ」の部署名と同じです。部署の追加・削除は部署マスタで行ってください。
+                </p>
                 <label className="skillCheckboxRow">
                   <input
                     type="checkbox"
@@ -4117,16 +5198,20 @@ function SkillSettingsPage({ skills, setSkills, sections, setSections, grades, s
                 </label>
                 {!draft.allDepts ? (
                   <div className="skillDeptChecks">
-                    {SKILL_DEPT_CHOICES.map((d) => (
-                      <label key={d} className="skillCheckboxRow">
-                        <input
-                          type="checkbox"
-                          checked={draft.depts.includes(d)}
-                          onChange={() => toggleDept(d)}
-                        />
-                        {d}
-                      </label>
-                    ))}
+                    {deptList.length === 0 ? (
+                      <p className="skillDeptMasterEmpty">部署マスタに部署がまだありません。先に部署を登録してください。</p>
+                    ) : (
+                      deptList.map((d) => (
+                        <label key={d} className="skillCheckboxRow">
+                          <input
+                            type="checkbox"
+                            checked={draft.depts.includes(d)}
+                            onChange={() => toggleDept(d)}
+                          />
+                          {d}
+                        </label>
+                      ))
+                    )}
                   </div>
                 ) : null}
               </fieldset>
@@ -4150,10 +5235,35 @@ function SkillSettingsPage({ skills, setSkills, sections, setSections, grades, s
             <button className="modalClose" type="button" onClick={() => setSectionModalOpen(false)}>
               ×
             </button>
-            <h3>区分を追加</h3>
-            <p>一覧に表示する区分名を入力して保存してください。</p>
+            <h3>区分の編集</h3>
+            <p>区分の削除や、新しい区分の追加ができます。区分を削除すると、その区分内のスキル（全等級）もまとめて削除されます。</p>
 
-            <form className="employeeForm" onSubmit={handleSaveNewSection}>
+            <ul className="skillSectionEditList">
+              {sections.map((s) => {
+                const count = skills.filter((sk) => sk.sectionId === s.id).length
+                const onlyOne = sections.length <= 1
+                return (
+                  <li key={s.id} className="skillSectionEditRow">
+                    <div>
+                      <strong>{s.label}</strong>
+                      <span className="skillSectionEditMeta">{count > 0 ? `スキル ${count}件` : 'スキルなし'}</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="skillSectionDeleteBtn"
+                      disabled={onlyOne}
+                      title={onlyOne ? '区分は最低1つ必要です' : 'この区分を削除'}
+                      onClick={() => handleDeleteSection(s.id)}
+                    >
+                      削除
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+
+            <form className="employeeForm skillSectionAddForm" onSubmit={handleSaveNewSection}>
+              <h4 className="skillSectionAddFormTitle">新しい区分を追加</h4>
               <label>
                 区分名 *
                 <input
@@ -4167,7 +5277,7 @@ function SkillSettingsPage({ skills, setSkills, sections, setSections, grades, s
 
               <div className="modalActions">
                 <button type="button" className="cancel" onClick={() => setSectionModalOpen(false)}>
-                  キャンセル
+                  閉じる
                 </button>
                 <button type="submit" className="submit">
                   追加
@@ -4219,20 +5329,39 @@ function AdminMockPage({
   directoryRows,
   skills,
   skillProgress,
+  setSkillEmployeeProgress,
   skillProgressUpdatedAtByEmployee,
   selfEvalByEmployee,
   supervisorEvalByEmployee,
   executiveEvalByEmployee,
   goalsByEmployee,
+  hideGradeSelfEvalAndGradeStats = false,
   forcedSelectedMemberId,
   forcedDetailTab,
   onSelectMember,
   onChangeDetailTab,
   onStartSupervisorEval,
   onStartExecutiveEval,
+  promotionRequests,
+  canApprovePromotions,
+  onSubmitPromotionRequest,
+  onApprovePromotionRequest,
+  onRejectPromotionRequest,
 }) {
   const [selectedMemberId, setSelectedMemberId] = useState(null)
   const [detailTab, setDetailTab] = useState('skill')
+  const [adminMemberSearch, setAdminMemberSearch] = useState('')
+  const [adminMemberDept, setAdminMemberDept] = useState('')
+  const [adminMemberGrade, setAdminMemberGrade] = useState('')
+  /** all | active | retired */
+  const [adminMemberEmployment, setAdminMemberEmployment] = useState('active')
+  /** name | id | grade | retiredFirst */
+  const [adminMemberSort, setAdminMemberSort] = useState('name')
+
+  const pendingPromotionRequests = useMemo(
+    () => (promotionRequests ?? []).filter((r) => r.status === 'pending'),
+    [promotionRequests],
+  )
 
   const memberRows = useMemo(
     () =>
@@ -4245,35 +5374,113 @@ function AdminMockPage({
         stars: calcEmployeeSkillStars(skills, skillProgress?.[row.id] ?? {}),
         role: row.role ?? '一般従業員',
         joinDate: row.joinDate ?? '',
+        retired: isEmployeeDirectoryRetired(row),
       })),
     [directoryRows, skills, skillProgress],
   )
 
+  const adminDeptOptions = useMemo(() => {
+    const set = new Set()
+    for (const row of directoryRows) {
+      const d = String(row.dept ?? '').trim()
+      if (d) set.add(d)
+    }
+    return [...set].sort((a, b) => a.localeCompare(b, 'ja'))
+  }, [directoryRows])
+
+  const adminGradeOptions = useMemo(() => {
+    const set = new Set()
+    for (const row of directoryRows) {
+      const g = String(row.grade ?? '').trim()
+      if (g) set.add(g)
+    }
+    return [...set].sort((a, b) => a.localeCompare(b, 'ja'))
+  }, [directoryRows])
+
+  const adminFilteredMemberRows = useMemo(() => {
+    const q = adminMemberSearch.trim().toLowerCase()
+    let list = memberRows.filter((m) => {
+      if (adminMemberEmployment === 'active' && m.retired) return false
+      if (adminMemberEmployment === 'retired' && !m.retired) return false
+      if (adminMemberDept && m.dept !== adminMemberDept) return false
+      if (adminMemberGrade && m.grade !== adminMemberGrade) return false
+      if (q && !String(m.name ?? '').toLowerCase().includes(q)) return false
+      return true
+    })
+    const gradeOrder = (g) => {
+      const m = /^G(\d)/i.exec(String(g))
+      return m ? -Number(m[1]) : 0
+    }
+    const sorted = [...list]
+    if (adminMemberSort === 'retiredFirst') {
+      sorted.sort((a, b) => Number(b.retired) - Number(a.retired) || String(a.name).localeCompare(String(b.name), 'ja'))
+    } else if (adminMemberSort === 'id') {
+      sorted.sort((a, b) => String(a.id).localeCompare(String(b.id), 'ja'))
+    } else if (adminMemberSort === 'grade') {
+      sorted.sort((a, b) => gradeOrder(a.grade) - gradeOrder(b.grade) || String(a.name).localeCompare(String(b.name), 'ja'))
+    } else {
+      sorted.sort((a, b) => String(a.name).localeCompare(String(b.name), 'ja'))
+    }
+    return sorted
+  }, [memberRows, adminMemberSearch, adminMemberDept, adminMemberGrade, adminMemberEmployment, adminMemberSort])
+
   useEffect(() => {
-    if (!memberRows.length) {
+    if (!adminFilteredMemberRows.length) {
       setSelectedMemberId(null)
       return
     }
-    if (!selectedMemberId || !memberRows.some((m) => m.id === selectedMemberId)) {
-      setSelectedMemberId(memberRows[0].id)
+    if (!selectedMemberId || !adminFilteredMemberRows.some((m) => m.id === selectedMemberId)) {
+      setSelectedMemberId(adminFilteredMemberRows[0].id)
     }
-  }, [memberRows, selectedMemberId])
+  }, [adminFilteredMemberRows, selectedMemberId])
 
   useEffect(() => {
     if (!forcedSelectedMemberId) return
-    if (memberRows.some((m) => m.id === forcedSelectedMemberId)) {
+    const row = directoryRows.find((r) => String(r.id) === String(forcedSelectedMemberId))
+    if (row && isEmployeeDirectoryRetired(row) && adminMemberEmployment === 'active') {
+      setAdminMemberEmployment('all')
+    }
+  }, [forcedSelectedMemberId, directoryRows, adminMemberEmployment])
+
+  useEffect(() => {
+    if (!forcedSelectedMemberId) return
+    if (adminFilteredMemberRows.some((m) => m.id === forcedSelectedMemberId)) {
       setSelectedMemberId(forcedSelectedMemberId)
     }
-  }, [forcedSelectedMemberId, memberRows])
+  }, [forcedSelectedMemberId, adminFilteredMemberRows])
 
   useEffect(() => {
     if (!forcedDetailTab) return
     setDetailTab(forcedDetailTab)
   }, [forcedDetailTab])
 
+  useEffect(() => {
+    if (!hideGradeSelfEvalAndGradeStats) return
+    if (detailTab === 'self') {
+      setDetailTab('skill')
+      onChangeDetailTab?.('skill')
+    }
+  }, [hideGradeSelfEvalAndGradeStats, detailTab, onChangeDetailTab])
+
+  useEffect(() => {
+    if (!hideGradeSelfEvalAndGradeStats) return
+    if (adminMemberSort === 'grade') setAdminMemberSort('name')
+  }, [hideGradeSelfEvalAndGradeStats, adminMemberSort])
+
   const selectedMember = useMemo(
-    () => memberRows.find((m) => m.id === selectedMemberId) ?? null,
-    [memberRows, selectedMemberId],
+    () => adminFilteredMemberRows.find((m) => m.id === selectedMemberId) ?? null,
+    [adminFilteredMemberRows, selectedMemberId],
+  )
+  const selectedMemberPromotionTarget = useMemo(
+    () => (selectedMember ? nextPromotionGrade(selectedMember.grade) : null),
+    [selectedMember],
+  )
+  const selectedMemberHasPendingPromotion = useMemo(
+    () =>
+      selectedMember
+        ? pendingPromotionRequests.some((r) => String(r.employeeId) === String(selectedMember.id))
+        : false,
+    [pendingPromotionRequests, selectedMember],
   )
   const selectedMemberSkills = useMemo(() => {
     if (!selectedMember) return []
@@ -4283,7 +5490,7 @@ function AdminMockPage({
       .map((s) => {
         const current = Math.max(0, Number(rawProgress[s.id] ?? 0))
         const max = Math.max(1, Number(s.stages) || 1)
-        return { id: s.id, title: s.title, description: s.description, required: !!s.required, current, max }
+        return { id: s.id, title: s.title, description: s.description, current, max }
       })
   }, [selectedMember, skills, skillProgress])
   const evalItems = useMemo(() => SELF_EVAL_CATEGORIES.flatMap((cat) => cat.items), [])
@@ -4321,10 +5528,11 @@ function AdminMockPage({
     const order = ['G6', 'G5', 'G4', 'G3', 'G2', 'G1']
     const toneMap = { G6: 'gold', G5: 'orange', G4: 'blue', G3: 'green', G2: 'purple', G1: 'gray' }
     const counts = Object.fromEntries(order.map((g) => [g, 0]))
-    for (const row of directoryRows) {
+    const statsRows = directoryRows.filter(isDirectoryRowCountedForGradeStats)
+    for (const row of statsRows) {
       if (counts[row.grade] !== undefined) counts[row.grade] += 1
     }
-    const total = directoryRows.length || 1
+    const total = statsRows.length || 1
     return order.map((badge) => ({
       badge,
       label: badge,
@@ -4340,13 +5548,23 @@ function AdminMockPage({
       const m = /^G(\d)$/.exec(g)
       return m ? Number(m[1]) : null
     }
-    const values = directoryRows.map((r) => gradeToNum(r.grade)).filter((v) => v != null)
+    const statsRows = directoryRows.filter(isDirectoryRowCountedForGradeStats)
+    const values = statsRows.map((r) => gradeToNum(r.grade)).filter((v) => v != null)
     if (!values.length) return '—'
     const avg = values.reduce((a, b) => a + b, 0) / values.length
     return `G${avg.toFixed(1)}`
   }, [directoryRows])
 
+  const gradeStatsEligibleCount = useMemo(
+    () => directoryRows.filter(isDirectoryRowCountedForGradeStats).length,
+    [directoryRows],
+  )
+
   const totalCount = directoryRows.length
+  const activeDirectoryCount = useMemo(
+    () => directoryRows.filter((row) => !isEmployeeDirectoryRetired(row)).length,
+    [directoryRows],
+  )
   const stagnationAlerts = useMemo(() => {
     const nowMs = Date.now()
     const threeMonthsMs = 1000 * 60 * 60 * 24 * 90
@@ -4359,6 +5577,8 @@ function AdminMockPage({
 
     return directoryRows
       .map((row) => {
+        if (isEmployeeDirectoryRetired(row)) return null
+        if (String(row.role ?? '').trim() === '役員') return null
         const lastUpdatedRaw = skillProgressUpdatedAtByEmployee?.[row.id]
         const lastUpdatedMs = lastUpdatedRaw ? Date.parse(lastUpdatedRaw) : Number.NaN
         const hasSkillUpdateDate = Number.isFinite(lastUpdatedMs)
@@ -4404,6 +5624,47 @@ function AdminMockPage({
             <p>従業員のスキル状況を管理し、成長をサポートします</p>
           </header>
 
+          {pendingPromotionRequests.length ? (
+            <section className="promotionRequestBanner" role="status" aria-live="polite">
+              <div className="promotionRequestBannerHead">
+                <span className="promotionRequestBannerIcon" aria-hidden>
+                  📋
+                </span>
+                <div>
+                  <h3 className="promotionRequestBannerTitle">昇級の申請があります</h3>
+                  <p className="promotionRequestBannerLead">
+                    {canApprovePromotions
+                      ? '管理者は、各申請に対して許可または却下をしてください。許可すると等級が更新され、スキル進捗はリセットされます。'
+                      : '管理者が許可または却下するまでお待ちください。'}
+                  </p>
+                </div>
+              </div>
+              <ul className="promotionRequestList">
+                {pendingPromotionRequests.map((req) => (
+                  <li key={req.id} className="promotionRequestItem">
+                    <div className="promotionRequestItemMain">
+                      <strong>{req.employeeName}</strong>
+                      <span className="promotionRequestItemMeta">
+                        社員C: {req.employeeId} / {req.fromGrade} → <em>{req.toGrade}</em> /{' '}
+                        {new Date(req.requestedAt).toLocaleString('ja-JP')}
+                      </span>
+                    </div>
+                    {canApprovePromotions ? (
+                      <div className="promotionRequestItemActions">
+                        <button type="button" className="promotionApproveBtn" onClick={() => onApprovePromotionRequest?.(req.id)}>
+                          許可
+                        </button>
+                        <button type="button" className="promotionRejectBtn" onClick={() => onRejectPromotionRequest?.(req.id)}>
+                          却下
+                        </button>
+                      </div>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+
           <section className="stagnationAlert">
             <h3>⚠ スキルアップ停滞アラート</h3>
             <p>
@@ -4431,8 +5692,11 @@ function AdminMockPage({
 
           <div className="summaryCards">
             <article>
-              <p>総従業員数</p>
-              <strong>{totalCount}</strong>
+              <p>総従業員数（在籍）</p>
+              <strong>{activeDirectoryCount}</strong>
+              {totalCount > activeDirectoryCount ? (
+                <p className="summaryCardsSub">退職 {totalCount - activeDirectoryCount}名</p>
+              ) : null}
             </article>
             <article>
               <p>登録スキル数</p>
@@ -4449,30 +5713,63 @@ function AdminMockPage({
           <header className="listHeader">
             <h3>従業員一覧</h3>
             <span>
-              {totalCount}人 / {totalCount}人
+              {adminFilteredMemberRows.length}人 / {totalCount}人
             </span>
           </header>
-          <div className="filters">
-            <input type="text" placeholder="名前で検索..." />
-            <select>
-              <option>全部署</option>
+          <div className="filters filtersAdminMember">
+            <input
+              type="text"
+              placeholder="名前で検索..."
+              value={adminMemberSearch}
+              onChange={(event) => setAdminMemberSearch(event.target.value)}
+            />
+            <select value={adminMemberDept} onChange={(event) => setAdminMemberDept(event.target.value)}>
+              <option value="">全部署</option>
+              {adminDeptOptions.map((d) => (
+                <option key={d} value={d}>
+                  {d}
+                </option>
+              ))}
             </select>
-            <select>
-              <option>全等級</option>
+            {hideGradeSelfEvalAndGradeStats ? null : (
+              <select value={adminMemberGrade} onChange={(event) => setAdminMemberGrade(event.target.value)}>
+                <option value="">全等級</option>
+                {adminGradeOptions.map((g) => (
+                  <option key={g} value={g}>
+                    {g}
+                  </option>
+                ))}
+              </select>
+            )}
+            <select value={adminMemberEmployment} onChange={(event) => setAdminMemberEmployment(event.target.value)}>
+              <option value="all">全員</option>
+              <option value="active">在籍のみ</option>
+              <option value="retired">退職のみ</option>
             </select>
-            <select>
-              <option>全従業員</option>
+            <select value={adminMemberSort} onChange={(event) => setAdminMemberSort(event.target.value)}>
+              <option value="name">並び: 名前</option>
+              <option value="id">並び: 社員C</option>
+              {hideGradeSelfEvalAndGradeStats ? null : <option value="grade">並び: 等級</option>}
+              <option value="retiredFirst">並び: 退職を上</option>
             </select>
           </div>
-          <div className="memberTable">
+          <p className="adminMemberRetireHint">
+            退職者は従業員管理で社員Cを「退職」または「退職_元のID」（例: 退職_e1）にすると、ここで「退職のみ」表示できます。
+          </p>
+          <div className={`memberTable${hideGradeSelfEvalAndGradeStats ? ' memberTable--yakuin' : ''}`}>
             <div className="row head">
+              <span>社員C</span>
               <span>名前</span>
               <span>部署</span>
-              <span>等級</span>
+              {hideGradeSelfEvalAndGradeStats ? null : <span>等級</span>}
               <span>★数</span>
             </div>
-            {memberRows.map((member) => (
-              <div className="row" key={member.id}>
+            {adminFilteredMemberRows.map((member) => (
+              <div className={`row${member.retired ? ' isRetiredMember' : ''}`} key={member.id}>
+                <span className="memberIdCell" title={member.retired ? '退職扱い' : ''}>
+                  {member.id}
+                  {member.retired ? <em className="retiredBadge">退職</em> : null}
+                </span>
                 <span>
                   <button
                     type="button"
@@ -4486,7 +5783,7 @@ function AdminMockPage({
                   </button>
                 </span>
                 <span>{member.dept}</span>
-                <span>{member.grade}</span>
+                {hideGradeSelfEvalAndGradeStats ? null : <span>{member.grade}</span>}
                 <span className="stars">★ {member.stars}</span>
               </div>
             ))}
@@ -4506,10 +5803,40 @@ function AdminMockPage({
                   <strong className="memberDetailStar">★ {selectedMember.stars}</strong>
                 </div>
                 <div className="memberDetailMetricGrid">
-                  <article>
-                    <span>現在の等級</span>
-                    <strong>{selectedMember.grade}</strong>
-                  </article>
+                  {hideGradeSelfEvalAndGradeStats ? null : (
+                    <article className="memberDetailGradeArticle">
+                      <span>現在の等級</span>
+                      <div className="memberDetailGradeRow">
+                        <strong>{selectedMember.grade}</strong>
+                        <button
+                          type="button"
+                          className="memberPromoteBtn"
+                          disabled={
+                            selectedMember.retired ||
+                            !selectedMemberPromotionTarget ||
+                            selectedMemberHasPendingPromotion
+                          }
+                          title={
+                            selectedMemberHasPendingPromotion
+                              ? 'すでに昇級申請が出ています'
+                              : !selectedMemberPromotionTarget
+                                ? 'これ以上昇級できません'
+                                : ''
+                          }
+                          onClick={() => {
+                            if (!selectedMember || !selectedMemberPromotionTarget) return
+                            onSubmitPromotionRequest?.(
+                              selectedMember.id,
+                              selectedMember.name,
+                              selectedMember.grade,
+                            )
+                          }}
+                        >
+                          昇級
+                        </button>
+                      </div>
+                    </article>
+                  )}
                   <article>
                     <span>獲得★数</span>
                     <strong>{selectedMember.stars}★</strong>
@@ -4519,7 +5846,9 @@ function AdminMockPage({
                     <strong>{selectedMemberAcquiredSkillCount}</strong>
                   </article>
                 </div>
-                <div className="memberDetailActions">
+                <div
+                  className={`memberDetailActions${hideGradeSelfEvalAndGradeStats ? ' memberDetailActions--three' : ''}`}
+                >
                   <button
                     type="button"
                     onClick={() => {
@@ -4538,6 +5867,28 @@ function AdminMockPage({
                   >
                     ★ 経営層評価を実施
                   </button>
+                  {hideGradeSelfEvalAndGradeStats ? (
+                    <button
+                      type="button"
+                      className="memberDetailPromoteBtn"
+                      disabled={
+                        !selectedMember ||
+                        selectedMember.retired ||
+                        !selectedMemberPromotionTarget ||
+                        selectedMemberHasPendingPromotion
+                      }
+                      onClick={() => {
+                        if (!selectedMember || !selectedMemberPromotionTarget) return
+                        onSubmitPromotionRequest?.(
+                          selectedMember.id,
+                          selectedMember.name,
+                          selectedMember.grade,
+                        )
+                      }}
+                    >
+                      📋 昇級申請
+                    </button>
+                  ) : null}
                 </div>
               </header>
 
@@ -4552,16 +5903,18 @@ function AdminMockPage({
                 >
                   スキル習得状況
                 </button>
-                <button
-                  type="button"
-                  className={detailTab === 'self' ? 'isActive' : ''}
-                  onClick={() => {
-                    setDetailTab('self')
-                    onChangeDetailTab?.('self')
-                  }}
-                >
-                  自己評価
-                </button>
+                {hideGradeSelfEvalAndGradeStats ? null : (
+                  <button
+                    type="button"
+                    className={detailTab === 'self' ? 'isActive' : ''}
+                    onClick={() => {
+                      setDetailTab('self')
+                      onChangeDetailTab?.('self')
+                    }}
+                  >
+                    自己評価
+                  </button>
+                )}
                 <button
                   type="button"
                   className={detailTab === 'boss' ? 'isActive' : ''}
@@ -4587,21 +5940,55 @@ function AdminMockPage({
               <div className="memberDetailTabPanel">
                 {detailTab === 'skill' ? (
                   selectedMemberSkills.length ? (
-                    <ul className="memberSkillList">
-                      {selectedMemberSkills.map((s) => (
-                        <li key={s.id}>
-                          <p className="memberSkillTitle">{s.title}</p>
-                          <p className="memberSkillMeta">
-                            {s.required ? '必須' : '任意'} / Lv.{s.current}/{s.max}
-                          </p>
-                        </li>
-                      ))}
-                    </ul>
+                    <>
+                      <p className="memberSkillEditHint">
+                        面談などのタイミングで進捗レベルを更新できます（0＝未習得、保存は自動です）。
+                      </p>
+                      <ul className="memberSkillList">
+                        {selectedMemberSkills.map((s) => (
+                          <li key={s.id} className="memberSkillRow">
+                            <div className="memberSkillRowMain">
+                              <p className="memberSkillTitle">{s.title}</p>
+                              <p className="memberSkillMeta">最大 Lv.{s.max}</p>
+                            </div>
+                            <label className="memberSkillLevelLabel">
+                              <span className="memberSkillLevelLabelText">進捗</span>
+                              <select
+                                className="memberSkillLevelSelect"
+                                value={s.current}
+                                aria-label={`${s.title}の習得レベル`}
+                                onChange={(event) => {
+                                  if (!selectedMember || !setSkillEmployeeProgress) return
+                                  const n = Math.max(
+                                    0,
+                                    Math.min(s.max, Math.trunc(Number(event.target.value)) || 0),
+                                  )
+                                  setSkillEmployeeProgress((prev) => ({
+                                    ...prev,
+                                    [selectedMember.id]: {
+                                      ...(prev[selectedMember.id] ?? {}),
+                                      [s.id]: n,
+                                    },
+                                  }))
+                                }}
+                              >
+                                {Array.from({ length: s.max + 1 }, (_, lv) => (
+                                  <option key={lv} value={lv}>
+                                    Lv.{lv}
+                                    {lv === 0 ? '（未習得）' : ''}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
                   ) : (
                     <p className="memberDetailEmpty">この等級のスキル設定がありません。</p>
                   )
                 ) : null}
-                {detailTab === 'self' ? (
+                {!hideGradeSelfEvalAndGradeStats && detailTab === 'self' ? (
                   selectedMemberSelfEvalRows.length ? (
                     <ul className="memberEvalList">
                       {selectedMemberSelfEvalRows.map((row) => (
@@ -4659,35 +6046,37 @@ function AdminMockPage({
           ) : null}
         </section>
 
-        <section className="adminPanel">
-          <header className="listHeader">
-            <h3>等級別人数分布</h3>
-          </header>
-          <div className="gradeDistribution">
-            {gradeRows.map((row, index) => (
-              <article className="gradeRow" key={`${row.label}-${index}`}>
-                <div className="gradeMeta">
-                  <span className={`gradeBadge ${row.tone}`}>{row.badge}</span>
-                  <span className="gradeLabel">{row.label}</span>
-                  <span className="gradeCount">
-                    {row.count}人 <small>({row.percent.toFixed(1)}%)</small>
-                  </span>
-                </div>
-                <div className="gradeBar">
-                  <span className={`barTone ${row.barTone}`} style={{ width: `${row.percent}%` }} />
-                </div>
-              </article>
-            ))}
-          </div>
-          <div className="gradeSummary">
-            <p>
-              総従業員数: <strong>{totalCount}</strong>
-            </p>
-            <p>
-              平均等級: <strong>{averageGradeLabel}</strong>
-            </p>
-          </div>
-        </section>
+        {hideGradeSelfEvalAndGradeStats ? null : (
+          <section className="adminPanel">
+            <header className="listHeader">
+              <h3>等級別人数分布</h3>
+            </header>
+            <div className="gradeDistribution">
+              {gradeRows.map((row, index) => (
+                <article className="gradeRow" key={`${row.label}-${index}`}>
+                  <div className="gradeMeta">
+                    <span className={`gradeBadge ${row.tone}`}>{row.badge}</span>
+                    <span className="gradeLabel">{row.label}</span>
+                    <span className="gradeCount">
+                      {row.count}人 <small>({row.percent.toFixed(1)}%)</small>
+                    </span>
+                  </div>
+                  <div className="gradeBar">
+                    <span className={`barTone ${row.barTone}`} style={{ width: `${row.percent}%` }} />
+                  </div>
+                </article>
+              ))}
+            </div>
+            <div className="gradeSummary">
+              <p>
+                総従業員数: <strong>{gradeStatsEligibleCount}</strong>
+              </p>
+              <p>
+                平均等級: <strong>{averageGradeLabel}</strong>
+              </p>
+            </div>
+          </section>
+        )}
       </div>
     </section>
   )
@@ -4696,15 +6085,28 @@ function AdminMockPage({
 function EmployeeManagePage({
   rows,
   setRows,
+  deptOptions,
   skills,
   skillProgress,
   selfEvalByEmployee,
   supervisorEvalByEmployee,
   executiveEvalByEmployee,
+  hideGradeAndTotalScore = false,
+  onEmployeeIdRename,
+  onClearSkillProgressForEmployees,
 }) {
+  const deptList = Array.isArray(deptOptions) && deptOptions.length > 0 ? deptOptions : DEFAULT_EMPLOYEE_DEPTS
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
   const [isEditModalOpen, setIsEditModalOpen] = useState(false)
   const [editingRow, setEditingRow] = useState(null)
+  const [editingOriginalId, setEditingOriginalId] = useState(null)
+
+  const closeEmployeeEditModal = () => {
+    setIsEditModalOpen(false)
+    setEditingRow(null)
+    setEditingOriginalId(null)
+  }
+
   const [newEmployee, setNewEmployee] = useState({
     id: '',
     name: '',
@@ -4712,7 +6114,23 @@ function EmployeeManagePage({
     role: '一般従業員',
     grade: 'G1',
     password: '',
+    extraMenuKeys: [],
   })
+
+  useEffect(() => {
+    setNewEmployee((prev) => {
+      if (deptList.includes(prev.dept)) return prev
+      return { ...prev, dept: deptList[0] ?? '製造' }
+    })
+  }, [deptList])
+
+  useEffect(() => {
+    setEditingRow((prev) => {
+      if (!prev) return prev
+      if (deptList.includes(prev.dept)) return prev
+      return { ...prev, dept: deptList[0] ?? '製造' }
+    })
+  }, [deptList])
 
   const handleCreateEmployee = (event) => {
     event.preventDefault()
@@ -4723,39 +6141,69 @@ function EmployeeManagePage({
       {
         id: newEmployee.id.trim(),
         name: newEmployee.name.trim(),
-        dept: newEmployee.dept,
+        dept: normalizeEmployeeDept(newEmployee.dept, deptList),
         grade: newEmployee.grade,
         score: '0.0点',
         role: newEmployee.role,
         password: newEmployee.password,
+        extraMenuKeys: normalizeEmployeeExtraMenuKeys(newEmployee.extraMenuKeys),
       },
     ])
     setIsCreateModalOpen(false)
     setNewEmployee({
       id: '',
       name: '',
-      dept: '製造',
+      dept: deptList[0] ?? '製造',
       role: '一般従業員',
       grade: 'G1',
       password: '',
+      extraMenuKeys: [],
     })
   }
 
   const handleStartEdit = (row) => {
-    setEditingRow({ ...row })
+    setEditingOriginalId(row.id)
+    setEditingRow({ ...row, extraMenuKeys: normalizeEmployeeExtraMenuKeys(row?.extraMenuKeys) })
     setIsEditModalOpen(true)
   }
 
   const handleSaveEdit = (event) => {
     event.preventDefault()
-    if (!editingRow) return
+    if (!editingRow || editingOriginalId == null) return
 
     const trimmedName = editingRow.name.trim()
     if (!trimmedName) return
 
-    setRows((prev) => prev.map((row) => (row.id === editingRow.id ? { ...row, ...editingRow, name: trimmedName } : row)))
-    setIsEditModalOpen(false)
-    setEditingRow(null)
+    const nextId = String(editingRow.id ?? '').trim()
+    if (!nextId) {
+      window.alert('社員Cを入力してください。')
+      return
+    }
+    if (nextId !== editingOriginalId && rows.some((r) => r.id === nextId)) {
+      window.alert('その社員Cは既に使われています。')
+      return
+    }
+
+    const normalizedEdit = {
+      ...editingRow,
+      id: nextId,
+      name: trimmedName,
+      dept: normalizeEmployeeDept(editingRow.dept, deptList),
+      grade: normalizeEmployeeGrade(editingRow.grade),
+      extraMenuKeys: normalizeEmployeeExtraMenuKeys(editingRow.extraMenuKeys),
+    }
+    const prevRow = rows.find((r) => r.id === editingOriginalId)
+    const gradeChanged =
+      prevRow != null &&
+      String(prevRow.grade ?? '').trim() !== String(normalizedEdit.grade ?? '').trim()
+    if (nextId !== editingOriginalId) {
+      onEmployeeIdRename?.(editingOriginalId, nextId)
+    }
+    setRows((prev) => prev.map((row) => (row.id === editingOriginalId ? { ...row, ...normalizedEdit } : row)))
+    if (gradeChanged) {
+      onClearSkillProgressForEmployees?.([nextId])
+    }
+    closeEmployeeEditModal()
   }
 
   const handleDeleteRow = (rowId) => {
@@ -4765,9 +6213,8 @@ function EmployeeManagePage({
     if (!shouldDelete) return
 
     setRows((prev) => prev.filter((row) => row.id !== rowId))
-    if (editingRow?.id === rowId) {
-      setIsEditModalOpen(false)
-      setEditingRow(null)
+    if (editingRow?.id === rowId || editingOriginalId === rowId) {
+      closeEmployeeEditModal()
     }
   }
 
@@ -4776,8 +6223,15 @@ function EmployeeManagePage({
 
   const scoreByEmployeeId = useMemo(() => {
     const itemIds = SELF_EVAL_CATEGORIES.flatMap((c) => c.items.map((it) => it.id))
+    const evalEntryForEmployee = (evalMap, employeeId) => {
+      if (!evalMap || typeof evalMap !== 'object') return undefined
+      const t = String(employeeId ?? '').trim()
+      if (!t) return undefined
+      const key = Object.keys(evalMap).find((k) => String(k ?? '').trim() === t)
+      return key !== undefined ? evalMap[key] : undefined
+    }
     const evalScoreTo100 = (evalMap, employeeId) => {
-      const scores = evalMap?.[employeeId]?.scores ?? {}
+      const scores = evalEntryForEmployee(evalMap, employeeId)?.scores ?? {}
       const values = itemIds
         .map((id) => Number(scores[id]))
         .filter((n) => Number.isFinite(n) && n >= 1 && n <= 5)
@@ -4798,7 +6252,7 @@ function EmployeeManagePage({
       return ratioAvg * 100
     }
     const executiveScoreTo100 = (employeeId) => {
-      const ex = executiveEvalByEmployee?.[employeeId]
+      const ex = evalEntryForEmployee(executiveEvalByEmployee, employeeId)
       if (!ex) return 0
       const base = Number(ex.baseScore ?? 0) || 0
       const commentTotal = Array.isArray(ex.commentHistory)
@@ -4819,7 +6273,7 @@ function EmployeeManagePage({
   }, [rows, skills, skillProgress, selfEvalByEmployee, supervisorEvalByEmployee, executiveEvalByEmployee])
 
   const handleEmployeeExportCsv = () => {
-    const headers = ['社員C', '名前', '部署', '等級', '総合得点', '役割']
+    const headers = EMPLOYEE_DIRECTORY_CSV_HEADERS
     const body = rows.map((row) =>
       [
         escapeCsvField(row.id),
@@ -4828,9 +6282,10 @@ function EmployeeManagePage({
         escapeCsvField(row.grade),
         escapeCsvField(scoreByEmployeeId[row.id] ?? '0.0点'),
         escapeCsvField(row.role),
+        escapeCsvField(row.password ?? ''),
       ].join(','),
     )
-    const csvContent = [headers.join(','), ...body].join('\r\n')
+    const csvContent = [headers.map(escapeCsvField).join(','), ...body].join('\r\n')
     const bom = '\uFEFF'
     const blob = new Blob([bom + csvContent], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
@@ -4841,6 +6296,19 @@ function EmployeeManagePage({
     link.click()
     URL.revokeObjectURL(url)
     setDirectoryCsvMessage(`${rows.length}件をCSVに出力しました。`)
+  }
+
+  const handleEmployeeTemplateCsv = () => {
+    const csvContent = EMPLOYEE_DIRECTORY_CSV_HEADERS.map(escapeCsvField).join(',')
+    const bom = '\uFEFF'
+    const blob = new Blob([bom + csvContent], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = 'employees_template.csv'
+    link.click()
+    URL.revokeObjectURL(url)
+    setDirectoryCsvMessage('ヘッダー行のみのテンプレートをダウンロードしました。2行目以降にデータを入力してインポートしてください。')
   }
 
   const handleEmployeeImportCsv = async (event) => {
@@ -4866,6 +6334,7 @@ function EmployeeManagePage({
       const gradeIdx = findHeaderIndex(headers, ['等級', 'グレード'])
       const scoreIdx = findHeaderIndex(headers, ['総合得点'])
       const roleIdx = findHeaderIndex(headers, ['役割'])
+      const passwordIdx = findHeaderIndex(headers, ['パスワード', 'password', 'Password'])
 
       if (nameIdx < 0) {
         setDirectoryCsvMessage('CSVヘッダーに「名前」または「社員名」列が必要です。')
@@ -4886,15 +6355,26 @@ function EmployeeManagePage({
           generated += 1
         }
 
-        imported.push({
-          id,
-          name,
-          dept: deptIdx >= 0 ? normalizeEmployeeDept(cols[deptIdx]) : '製造',
-          grade: gradeIdx >= 0 ? normalizeEmployeeGrade(cols[gradeIdx]) : 'G1',
-          score: scoreIdx >= 0 ? normalizeEmployeeDirectoryScore(cols[scoreIdx]) : '0.0点',
-          role: roleIdx >= 0 ? normalizeEmployeeRole(cols[roleIdx]) : '一般従業員',
-          password: '',
-        })
+        const passwordRaw = passwordIdx >= 0 ? String(cols[passwordIdx] ?? '') : ''
+        const passwordTrimmed = passwordRaw.trim()
+
+        const patch = { id, name }
+        if (deptIdx >= 0 && String(cols[deptIdx] ?? '').trim()) {
+          patch.dept = normalizeEmployeeDept(cols[deptIdx], deptList)
+        }
+        if (gradeIdx >= 0 && String(cols[gradeIdx] ?? '').trim()) {
+          patch.grade = normalizeEmployeeGrade(cols[gradeIdx])
+        }
+        if (scoreIdx >= 0 && String(cols[scoreIdx] ?? '').trim()) {
+          patch.score = normalizeEmployeeDirectoryScore(cols[scoreIdx])
+        }
+        if (roleIdx >= 0 && String(cols[roleIdx] ?? '').trim()) {
+          patch.role = normalizeEmployeeRole(cols[roleIdx])
+        }
+        if (passwordTrimmed) {
+          patch.password = passwordTrimmed
+        }
+        imported.push(patch)
       }
 
       if (imported.length === 0) {
@@ -4902,9 +6382,31 @@ function EmployeeManagePage({
         return
       }
 
-      setRows((prev) => mergeEmployeeDirectoryRows(prev, imported))
+      let csvGradeChangeClearIds = []
+      setRows((prev) => {
+        const filled = imported.map((imp) => {
+          const exists = prev.some((r) => String(r.id) === String(imp.id))
+          if (exists) return imp
+          return {
+            ...imp,
+            dept: Object.prototype.hasOwnProperty.call(imp, 'dept') ? imp.dept : (deptList[0] ?? '製造'),
+            grade: Object.prototype.hasOwnProperty.call(imp, 'grade') ? imp.grade : 'G1',
+            score: Object.prototype.hasOwnProperty.call(imp, 'score') ? imp.score : '0.0点',
+            role: Object.prototype.hasOwnProperty.call(imp, 'role') ? imp.role : '一般従業員',
+            joinDate: imp.joinDate ?? '',
+            email: imp.email ?? '',
+            extraMenuKeys: normalizeEmployeeExtraMenuKeys(imp.extraMenuKeys),
+          }
+        })
+        const { merged, employeeIdsToClearSkillProgress } = mergeEmployeeDirectoryRows(prev, filled)
+        csvGradeChangeClearIds = employeeIdsToClearSkillProgress
+        return merged
+      })
+      if (csvGradeChangeClearIds.length) {
+        onClearSkillProgressForEmployees?.(csvGradeChangeClearIds)
+      }
       setDirectoryCsvMessage(
-        `${imported.length}件を取り込みました（同一の社員Cは上書き、それ以外はそのまま残ります）。`,
+        `${imported.length}件を取り込みました（同一の社員Cは上書き。空欄の列は既存の値を維持します。等級が変わった行はスキル進捗をリセットします。パスワード列が空の行は既存パスワードを維持します）。`,
       )
     } catch {
       setDirectoryCsvMessage('CSVの読み込みに失敗しました。形式を確認してください。')
@@ -4928,6 +6430,9 @@ function EmployeeManagePage({
           <button type="button" className="btn import" onClick={() => employeeCsvFileRef.current?.click()}>
             CSVインポート
           </button>
+          <button type="button" className="btn template" onClick={handleEmployeeTemplateCsv}>
+            CSVテンプレート
+          </button>
           <input
             ref={employeeCsvFileRef}
             type="file"
@@ -4943,13 +6448,27 @@ function EmployeeManagePage({
 
       {directoryCsvMessage ? <p className="employeeCsvMessage">{directoryCsvMessage}</p> : null}
 
-      <div className="employeeTable">
+      <p className="employeeCsvHeaderHint">
+        <span className="employeeCsvHeaderHintLabel">CSV 1行目（ヘッダー・推奨）</span>
+        <code className="employeeCsvHeaderLine">{EMPLOYEE_DIRECTORY_CSV_HEADERS.map(escapeCsvField).join(',')}</code>
+        <span className="employeeCsvHeaderHintNote">
+          パスワード列は任意です。空欄のまま取り込むと、既存ユーザーのパスワードは変わりません。
+          退職者は社員Cを「退職」または「退職_元のID」（例: 退職_e1）にすると、管理者ダッシュボードの一覧で「退職のみ」表示できます。
+          部署列は「設定 → 部署マスタ」に登録した名前と一致させてください（未登録の名前は先頭の部署に置き換わります）。
+        </span>
+      </p>
+
+      <div className={`employeeTable${hideGradeAndTotalScore ? ' employeeTable--yakuin' : ''}`}>
         <div className="row head">
           <span>ID</span>
           <span>名前</span>
           <span>部署</span>
-          <span>等級</span>
-          <span>総合得点</span>
+          {hideGradeAndTotalScore ? null : (
+            <>
+              <span>等級</span>
+              <span>総合得点</span>
+            </>
+          )}
           <span>役割</span>
           <span>パスワード</span>
           <span>操作</span>
@@ -4959,8 +6478,12 @@ function EmployeeManagePage({
             <span>{row.id}</span>
             <span>{row.name}</span>
             <span>{row.dept}</span>
-            <span className="grade">{row.grade}</span>
-            <span className="score">{scoreByEmployeeId[row.id] ?? '0.0点'}</span>
+            {hideGradeAndTotalScore ? null : (
+              <>
+                <span className="grade">{row.grade}</span>
+                <span className="score">{scoreByEmployeeId[row.id] ?? '0.0点'}</span>
+              </>
+            )}
             <span>
               <em className="roleTag">{row.role}</em>
             </span>
@@ -5004,6 +6527,7 @@ function EmployeeManagePage({
                   required
                 />
                 <small>ログイン時に使用します（編集不可）</small>
+                <small>退職者は「退職」または「退職_元ID」（例: 退職_e1）を入力できます。</small>
               </label>
 
               <label>
@@ -5023,9 +6547,11 @@ function EmployeeManagePage({
                   value={newEmployee.dept}
                   onChange={(event) => setNewEmployee((prev) => ({ ...prev, dept: event.target.value }))}
                 >
-                  <option>製造</option>
-                  <option>営業</option>
-                  <option>品質</option>
+                  {deptList.map((d) => (
+                    <option key={d} value={d}>
+                      {d}
+                    </option>
+                  ))}
                 </select>
               </label>
 
@@ -5037,9 +6563,34 @@ function EmployeeManagePage({
                 >
                   <option>一般従業員</option>
                   <option>上司</option>
+                  <option>役員</option>
                   <option>管理者</option>
                 </select>
               </label>
+
+              <fieldset className="employeeExtraTabsField">
+                <legend>個別表示タブ（このユーザーのみ）</legend>
+                <p className="employeeExtraTabsHelp">役割設定に加えて表示するタブを複数選択できます。</p>
+                <div className="employeeExtraTabsGrid">
+                  {MAIN_WORKSPACE_TAB_ORDER.map((tab) => (
+                    <label key={tab.key} className="employeeExtraTabsOption">
+                      <input
+                        type="checkbox"
+                        checked={(newEmployee.extraMenuKeys ?? []).includes(tab.key)}
+                        onChange={() =>
+                          setNewEmployee((prev) => {
+                            const list = normalizeEmployeeExtraMenuKeys(prev.extraMenuKeys)
+                            const has = list.includes(tab.key)
+                            const next = has ? list.filter((k) => k !== tab.key) : [...list, tab.key]
+                            return { ...prev, extraMenuKeys: next }
+                          })
+                        }
+                      />
+                      <span>{tab.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
 
               <label>
                 グレード *
@@ -5082,9 +6633,9 @@ function EmployeeManagePage({
         </div>
       ) : null}
       {isEditModalOpen && editingRow ? (
-        <div className="employeeModalOverlay" onClick={() => setIsEditModalOpen(false)}>
+        <div className="employeeModalOverlay" onClick={closeEmployeeEditModal}>
           <div className="employeeModal" onClick={(event) => event.stopPropagation()}>
-            <button className="modalClose" type="button" onClick={() => setIsEditModalOpen(false)}>
+            <button className="modalClose" type="button" onClick={closeEmployeeEditModal}>
               ×
             </button>
             <h3>従業員情報を編集</h3>
@@ -5093,7 +6644,15 @@ function EmployeeManagePage({
             <form className="employeeForm" onSubmit={handleSaveEdit}>
               <label>
                 社員C
-                <input type="text" value={editingRow.id} disabled />
+                <input
+                  type="text"
+                  value={editingRow.id}
+                  onChange={(event) => setEditingRow((prev) => ({ ...prev, id: event.target.value }))}
+                  required
+                />
+                <small>
+                  ログインIDとして使います。退職扱いは「退職」または「退職_元ID」（例: 退職_e1）。社員Cを変えるとスキル・評価・目標の紐づけを引き継ぎます。
+                </small>
               </label>
 
               <label>
@@ -5112,9 +6671,11 @@ function EmployeeManagePage({
                   value={editingRow.dept}
                   onChange={(event) => setEditingRow((prev) => ({ ...prev, dept: event.target.value }))}
                 >
-                  <option>製造</option>
-                  <option>営業</option>
-                  <option>品質</option>
+                  {deptList.map((d) => (
+                    <option key={d} value={d}>
+                      {d}
+                    </option>
+                  ))}
                 </select>
               </label>
 
@@ -5126,9 +6687,34 @@ function EmployeeManagePage({
                 >
                   <option>一般従業員</option>
                   <option>上司</option>
+                  <option>役員</option>
                   <option>管理者</option>
                 </select>
               </label>
+
+              <fieldset className="employeeExtraTabsField">
+                <legend>個別表示タブ（このユーザーのみ）</legend>
+                <p className="employeeExtraTabsHelp">役割設定に加えて表示するタブを複数選択できます。</p>
+                <div className="employeeExtraTabsGrid">
+                  {MAIN_WORKSPACE_TAB_ORDER.map((tab) => (
+                    <label key={tab.key} className="employeeExtraTabsOption">
+                      <input
+                        type="checkbox"
+                        checked={normalizeEmployeeExtraMenuKeys(editingRow.extraMenuKeys).includes(tab.key)}
+                        onChange={() =>
+                          setEditingRow((prev) => {
+                            const list = normalizeEmployeeExtraMenuKeys(prev?.extraMenuKeys)
+                            const has = list.includes(tab.key)
+                            const next = has ? list.filter((k) => k !== tab.key) : [...list, tab.key]
+                            return { ...prev, extraMenuKeys: next }
+                          })
+                        }
+                      />
+                      <span>{tab.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
 
               <label>
                 グレード *
@@ -5158,14 +6744,7 @@ function EmployeeManagePage({
               </label>
 
               <div className="modalActions">
-                <button
-                  type="button"
-                  className="cancel"
-                  onClick={() => {
-                    setIsEditModalOpen(false)
-                    setEditingRow(null)
-                  }}
-                >
+                <button type="button" className="cancel" onClick={closeEmployeeEditModal}>
                   キャンセル
                 </button>
                 <button type="submit" className="submit">

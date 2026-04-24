@@ -1159,6 +1159,24 @@ select:focus {
   background: #f9fafb;
 }
 
+.filters.filtersAdminMember {
+  grid-template-columns: 1.15fr repeat(4, minmax(0, 1fr));
+}
+
+.adminMemberRetireHint {
+  margin: 0 0 10px;
+  font-size: 11px;
+  color: #64748b;
+  line-height: 1.45;
+}
+
+.summaryCardsSub {
+  margin: 6px 0 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+}
+
 .memberTable {
   border: 1px solid #dbe1f3;
   border-radius: 10px;
@@ -1167,12 +1185,43 @@ select:focus {
 
 .memberTable .row {
   display: grid;
-  grid-template-columns: 1.6fr 1fr 0.8fr 0.9fr;
+  grid-template-columns: 1fr 1.25fr 0.95fr 0.65fr 0.65fr;
   gap: 10px;
   padding: 9px 10px;
   border-top: 1px solid #edf0f8;
   font-size: 13px;
   align-items: center;
+}
+
+.memberTable.memberTable--yakuin .row {
+  grid-template-columns: 1fr 1.25fr 0.95fr 0.65fr;
+}
+
+.memberTable .row.isRetiredMember {
+  opacity: 0.88;
+  background: #fefce8;
+}
+
+.memberIdCell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+  word-break: break-all;
+}
+
+.retiredBadge {
+  flex: 0 0 auto;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 800;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #fde68a;
+  color: #854d0e;
 }
 
 .memberTable .row:nth-child(even):not(.head) {
@@ -1342,6 +1391,175 @@ select:focus {
   gap: 8px;
 }
 
+.memberDetailActions--three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.memberDetailGradeArticle .memberDetailGradeRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 10px;
+  margin-top: 4px;
+}
+
+.memberPromoteBtn {
+  flex-shrink: 0;
+  padding: 4px 12px;
+  border-radius: 8px;
+  border: 1px solid #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.memberPromoteBtn:hover:not(:disabled) {
+  background: #dbeafe;
+}
+
+.memberPromoteBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.memberDetailPromoteBtn {
+  border-radius: 8px;
+  border: 1px solid #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.memberDetailPromoteBtn:hover:not(:disabled) {
+  background: #dbeafe;
+}
+
+.memberDetailPromoteBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.promotionRequestBanner {
+  margin: 0 0 14px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid #bfdbfe;
+  background: linear-gradient(135deg, #eff6ff 0%, #f8fafc 100%);
+}
+
+.promotionRequestBannerHead {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.promotionRequestBannerIcon {
+  font-size: 28px;
+  line-height: 1;
+}
+
+.promotionRequestBannerTitle {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 800;
+  color: #1e3a8a;
+}
+
+.promotionRequestBannerLead {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #334155;
+}
+
+.promotionRequestList {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.promotionRequestItem {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 1px solid #dbeafe;
+}
+
+.promotionRequestItemMain {
+  min-width: 0;
+  flex: 1 1 200px;
+}
+
+.promotionRequestItemMain strong {
+  display: block;
+  font-size: 14px;
+  color: #0f172a;
+}
+
+.promotionRequestItemMeta {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.promotionRequestItemMeta em {
+  font-style: normal;
+  font-weight: 800;
+  color: #1d4ed8;
+}
+
+.promotionRequestItemActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.promotionApproveBtn,
+.promotionRejectBtn {
+  padding: 7px 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.promotionApproveBtn {
+  border: 1px solid #16a34a;
+  background: #f0fdf4;
+  color: #15803d;
+}
+
+.promotionApproveBtn:hover {
+  background: #dcfce7;
+}
+
+.promotionRejectBtn {
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #64748b;
+}
+
+.promotionRejectBtn:hover {
+  background: #f1f5f9;
+}
+
 .memberDetailActions button {
   border-radius: 8px;
   border: 1px solid #d1d5db;
@@ -1380,6 +1598,13 @@ select:focus {
   padding: 12px 14px;
 }
 
+.memberSkillEditHint {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #64748b;
+}
+
 .memberSkillList {
   list-style: none;
   margin: 0;
@@ -1388,11 +1613,58 @@ select:focus {
   gap: 8px;
 }
 
-.memberSkillList li {
+.memberSkillList li,
+.memberSkillRow {
   border: 1px solid #e5e7eb;
   border-radius: 8px;
   padding: 8px 10px;
   background: #ffffff;
+}
+
+.memberSkillRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 14px;
+}
+
+.memberSkillRowMain {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.memberSkillLevelLabel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: #475569;
+}
+
+.memberSkillLevelLabelText {
+  white-space: nowrap;
+}
+
+.memberSkillLevelSelect {
+  min-width: 120px;
+  padding: 6px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #0f172a;
+  background: #f8fafc;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.memberSkillLevelSelect:focus {
+  outline: 2px solid #93c5fd;
+  outline-offset: 1px;
 }
 
 .memberSkillTitle {
@@ -1702,6 +1974,10 @@ select:focus {
   background: #9333ea;
 }
 
+.employeeToolbar .btn.template {
+  background: #64748b;
+}
+
 .employeeToolbar .btn.add {
   background: #2563eb;
 }
@@ -1714,6 +1990,43 @@ select:focus {
   margin: 8px 0 0;
   font-size: 13px;
   color: #334155;
+}
+
+.employeeCsvHeaderHint {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.employeeCsvHeaderHintLabel {
+  font-size: 12px;
+  font-weight: 800;
+  color: #334155;
+}
+
+.employeeCsvHeaderLine {
+  display: block;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #0f172a;
+  word-break: break-all;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+}
+
+.employeeCsvHeaderHintNote {
+  font-size: 11px;
+  color: #64748b;
+  line-height: 1.45;
 }
 
 .employeeTable {
@@ -1731,6 +2044,10 @@ select:focus {
   border-top: 1px solid #edf0f8;
   align-items: center;
   font-size: 13px;
+}
+
+.employeeTable.employeeTable--yakuin .row {
+  grid-template-columns: 0.7fr 1.5fr 1fr 1fr 1.15fr 1fr;
 }
 
 .employeeTable .row.head {
@@ -1916,6 +2233,42 @@ select:focus {
   font-weight: 500;
 }
 
+.employeeExtraTabsField {
+  margin: 2px 0 0;
+  border: 1px solid #d1d5db;
+  border-radius: 12px;
+  padding: 10px 12px 12px;
+  background: #f9fafb;
+}
+
+.employeeExtraTabsField legend {
+  padding: 0 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.employeeExtraTabsHelp {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.employeeExtraTabsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 10px;
+}
+
+.employeeExtraTabsOption {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
 .modalActions {
   display: flex;
   justify-content: flex-end;
@@ -1988,6 +2341,72 @@ select:focus {
 .skillSectionAddButton:hover {
   background: #f8fafc;
   border-color: #94a3b8;
+}
+
+.skillSectionEditList {
+  list-style: none;
+  margin: 0 0 20px;
+  padding: 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #f8fafc;
+}
+
+.skillSectionEditRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #ffffff;
+}
+
+.skillSectionEditRow:last-child {
+  border-bottom: none;
+}
+
+.skillSectionEditMeta {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.skillSectionDeleteBtn {
+  flex-shrink: 0;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #b91c1c;
+  background: #fef2f2;
+  cursor: pointer;
+}
+
+.skillSectionDeleteBtn:hover:not(:disabled) {
+  background: #fee2e2;
+  border-color: #f87171;
+}
+
+.skillSectionDeleteBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.skillSectionAddForm {
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.skillSectionAddFormTitle {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 800;
+  color: #0f172a;
 }
 
 .skillGradeTabs {
@@ -2243,6 +2662,19 @@ select:focus {
   font-weight: 700;
   color: #111827;
   padding: 0 6px;
+}
+
+.skillDeptMasterHelp {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #64748b;
+}
+
+.skillDeptMasterEmpty {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: #b45309;
 }
 
 .skillCheckboxRow {
@@ -2877,6 +3309,10 @@ select:focus {
     min-width: 520px;
   }
 
+  .memberTable.memberTable--yakuin .row {
+    min-width: 420px;
+  }
+
   .skillUpProfileCard {
     grid-column: 1;
     grid-row: 1;
@@ -3010,7 +3446,55 @@ select:focus {
 .selfEvalCategories {
   display: flex;
   flex-direction: column;
+  gap: 20px;
+}
+
+.selfEvalSuperGroup {
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.08);
+  border: 1px solid #e2e8f0;
+}
+
+.selfEvalSuperGroupLabel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 14px;
+  padding: 12px 16px;
+  font-family: inherit;
+}
+
+.selfEvalSuperGroupTitle {
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.selfEvalSuperGroupDesc {
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.88;
+}
+
+.selfEvalSuperGroup--business .selfEvalSuperGroupLabel {
+  background: linear-gradient(90deg, #dbeafe 0%, #eff6ff 55%, #f8fafc 100%);
+  color: #1e3a8a;
+  border-bottom: 2px solid #3b82f6;
+}
+
+.selfEvalSuperGroup--interpersonal .selfEvalSuperGroupLabel {
+  background: linear-gradient(90deg, #fef9c3 0%, #fffbeb 50%, #fffef8 100%);
+  color: #713f12;
+  border-bottom: 2px solid #eab308;
+}
+
+.selfEvalSuperGroupInner {
+  display: flex;
+  flex-direction: column;
   gap: 12px;
+  padding: 14px 14px 16px;
+  background: #f8fafc;
 }
 
 .selfEvalCategory {
@@ -3026,13 +3510,26 @@ select:focus {
   gap: 10px;
   padding: 14px 16px;
   border: none;
-  background: linear-gradient(90deg, #2563eb, #1d4ed8);
-  color: #ffffff;
   font-family: inherit;
   font-size: 15px;
   font-weight: 700;
   cursor: pointer;
   text-align: left;
+}
+
+.selfEvalCategory--business .selfEvalCategoryHead {
+  background: linear-gradient(90deg, #2563eb, #1d4ed8);
+  color: #ffffff;
+}
+
+.selfEvalCategory--interpersonal .selfEvalCategoryHead {
+  background: linear-gradient(90deg, #facc15, #eab308);
+  color: #1c1917;
+}
+
+.selfEvalCategory--interpersonal .selfEvalCategoryBadge {
+  background: rgba(0, 0, 0, 0.12);
+  color: #1c1917;
 }
 
 .selfEvalCategoryHead:hover {
@@ -3301,8 +3798,18 @@ select:focus {
   background: linear-gradient(90deg, #7c3aed, #6d28d9);
 }
 
-.bossEvalPage .selfEvalCategoryHead {
-  background: linear-gradient(90deg, #7c3aed, #5b21b6);
+.bossEvalPage .selfEvalCategory--business .selfEvalCategoryHead {
+  background: linear-gradient(90deg, #4f46e5, #4338ca);
+}
+
+.bossEvalPage .selfEvalCategory--interpersonal .selfEvalCategoryHead {
+  background: linear-gradient(90deg, #d97706, #b45309);
+  color: #fffbeb;
+}
+
+.bossEvalPage .selfEvalCategory--interpersonal .selfEvalCategoryBadge {
+  background: rgba(255, 255, 255, 0.22);
+  color: #fffbeb;
 }
 
 .bossEvalSelfNote {
@@ -3696,6 +4203,59 @@ select:focus {
   justify-content: space-between;
   gap: 14px;
   margin-bottom: 16px;
+}
+
+.evalCritToolbarLeft,
+.evalCritToolbarRight {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.evalCritToolbarLeftStack {
+  flex-direction: column;
+  align-items: flex-start;
+  align-self: flex-start;
+}
+
+.evalCritGradeEditHint {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: #475569;
+}
+
+.evalCritGradeEditHint strong {
+  color: #0f172a;
+}
+
+.evalCritToolbarRight .btn {
+  border: none;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffffff;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.evalCritToolbarRight .btn.export {
+  background: #334155;
+}
+
+.evalCritToolbarRight .btn.import {
+  background: #0ea5e9;
+}
+
+.evalCritToolbarRight .btn.template {
+  background: #64748b;
+}
+
+.evalCritCsvMessage {
+  margin: -4px 0 12px;
+  font-size: 12px;
+  color: #334155;
 }
 
 .evalCritGradeSelect {
@@ -4100,6 +4660,160 @@ select:focus {
   line-height: 1.6;
 }
 
+.countPage {
+  max-width: 720px;
+  margin: 0 auto 32px;
+  padding: 24px 20px;
+  border-radius: 16px;
+  border: 1px solid #dbeafe;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  box-shadow: 0 12px 32px rgba(37, 99, 235, 0.08);
+  text-align: center;
+}
+
+.countPageHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 8px;
+  text-align: left;
+}
+
+.countPageHeader h2 {
+  margin: 0;
+  font-size: 24px;
+  color: #0f172a;
+}
+
+.countDate {
+  font-size: 12px;
+  font-weight: 700;
+  color: #475569;
+}
+
+.countTargetLabel {
+  margin: 4px 0 8px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.countTargetRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.countTargetInput {
+  width: 110px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 14px;
+  font-weight: 700;
+  text-align: right;
+}
+
+.countTargetUnit {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.countCounterRow {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.countCurrent {
+  font-size: clamp(64px, 16vw, 120px);
+  font-weight: 900;
+  line-height: 1;
+  color: #0f172a;
+  min-width: 1.8em;
+  margin: 0;
+}
+
+.countButton {
+  width: 84px;
+  height: 54px;
+  border: none;
+  border-radius: 12px;
+  font-size: 28px;
+  font-weight: 800;
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.countButtonMinus {
+  background: #ef4444;
+}
+
+.countButtonPlus {
+  background: #22c55e;
+}
+
+.countToggleButton {
+  min-width: 160px;
+  border: none;
+  border-radius: 12px;
+  padding: 12px 18px;
+  font-size: 16px;
+  font-weight: 800;
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.countToggleButton.isStart {
+  background: #2563eb;
+}
+
+.countToggleButton.isStop {
+  background: #0f766e;
+}
+
+.honsuPage {
+  max-width: 860px;
+  margin: 0 auto 28px;
+}
+
+.honsuHeader h2 {
+  margin: 0 0 6px;
+  font-size: 28px;
+  color: #0f172a;
+}
+
+.honsuHeader p {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: #64748b;
+}
+
+.honsuTabs {
+  margin-bottom: 10px;
+}
+
+.honsuPanel {
+  border: 1px solid #dbeafe;
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 16px 14px;
+}
+
+.honsuPanel h3 {
+  margin: 0 0 8px;
+  font-size: 20px;
+  color: #0f172a;
+}
+
+.honsuPanel p {
+  margin: 0;
+  color: #64748b;
+}
+
 .menuDispPage {
   max-width: 1100px;
   margin: 0 auto 36px;
@@ -4159,7 +4873,7 @@ select:focus {
 
 .menuDispGrid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 16px;
   margin-bottom: 24px;
 }
@@ -4205,6 +4919,10 @@ select:focus {
 
 .menuDispCardJoushi .menuDispBadge {
   background: linear-gradient(135deg, #f97316, #ea580c);
+}
+
+.menuDispCardYakuin .menuDispBadge {
+  background: linear-gradient(135deg, #d97706, #b45309);
 }
 
 .menuDispCardAdmin .menuDispBadge {
@@ -4383,6 +5101,124 @@ select:focus {
   background: #2563eb;
   border-color: #2563eb;
   color: #ffffff;
+}
+
+/* --- 部署マスタ（設定） --- */
+.deptSettingsPage {
+  max-width: 720px;
+  margin: 0 auto 36px;
+  padding: 8px 4px 24px;
+}
+
+.deptSettingsHeader h2 {
+  margin: 0 0 6px;
+  font-size: 28px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.deptSettingsLead {
+  margin: 0;
+  font-size: 14px;
+  color: #64748b;
+  line-height: 1.55;
+}
+
+.deptSettingsAddRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+  margin: 20px 0 16px;
+}
+
+.deptSettingsAddLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #334155;
+  min-width: 200px;
+  flex: 1 1 200px;
+}
+
+.deptSettingsAddLabel input {
+  padding: 9px 11px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.deptSettingsAddBtn {
+  padding: 9px 18px;
+  border-radius: 8px;
+  border: none;
+  background: #2563eb;
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.deptSettingsAddBtn:hover {
+  background: #1d4ed8;
+}
+
+.deptSettingsList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid #dbe1f3;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.deptSettingsItem {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, auto);
+  gap: 10px 14px;
+  align-items: center;
+  padding: 12px 14px;
+  border-top: 1px solid #edf0f8;
+  font-size: 14px;
+}
+
+.deptSettingsItem:first-child {
+  border-top: none;
+}
+
+.deptSettingsName {
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.deptSettingsMeta {
+  font-size: 12px;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.deptSettingsRemoveBtn {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid #fecaca;
+  background: #fff1f2;
+  color: #b91c1c;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.deptSettingsRemoveBtn:hover:not(:disabled) {
+  background: #fee2e2;
+}
+
+.deptSettingsRemoveBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 /* --- 経営層評価 --- */
@@ -4762,9 +5598,17 @@ select:focus {
   }
 
   .memberTable .row {
-    grid-template-columns: 1.2fr 0.9fr 0.6fr 0.9fr 0.8fr;
+    grid-template-columns: 0.85fr 1.1fr 0.75fr 0.55fr 0.55fr;
     gap: 6px;
-    font-size: 12px;
+    font-size: 11px;
+  }
+
+  .employeeTable.employeeTable--yakuin .row {
+    grid-template-columns: 0.7fr 1.3fr 0.9fr 1fr 1.05fr 0.85fr;
+  }
+
+  .memberTable.memberTable--yakuin .row {
+    grid-template-columns: 0.85fr 1.1fr 0.75fr 0.55fr;
   }
 
   .listHeader h3 {
@@ -4919,6 +5763,10 @@ select:focus {
     min-width: 640px;
   }
 
+  .employeeTable.employeeTable--yakuin .row {
+    min-width: 500px;
+  }
+
   .memberTable {
     overflow-x: auto;
     overflow-y: hidden;
@@ -4926,6 +5774,10 @@ select:focus {
 
   .memberTable .row {
     min-width: 560px;
+  }
+
+  .memberTable.memberTable--yakuin .row {
+    min-width: 440px;
   }
 
   .skillUpPageHeader h2 {
@@ -5114,5 +5966,38 @@ select:focus {
 
   .allowanceTable {
     min-width: 560px;
+  }
+}
+
+@media (max-width: 640px) {
+  .employeeExtraTabsGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .countPage {
+    padding: 16px 12px;
+  }
+
+  .countPageHeader h2 {
+    font-size: 20px;
+  }
+
+  .countTargetInput {
+    width: 94px;
+  }
+
+  .countButton {
+    width: 74px;
+    height: 48px;
+    font-size: 24px;
+  }
+
+  .countToggleButton {
+    min-width: 128px;
+    font-size: 14px;
+  }
+
+  .honsuHeader h2 {
+    font-size: 24px;
   }
 }
