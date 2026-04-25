@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import './App.css'
 import { supabase } from './lib/supabaseClient'
@@ -1220,6 +1220,22 @@ function areShallowStringMapEqual(a, b) {
   return true
 }
 
+function areEvalStateMapsEqual(a, b) {
+  const ao = a && typeof a === 'object' && !Array.isArray(a) ? a : {}
+  const bo = b && typeof b === 'object' && !Array.isArray(b) ? b : {}
+  const aKeys = Object.keys(ao)
+  const bKeys = Object.keys(bo)
+  if (aKeys.length !== bKeys.length) return false
+  for (const empId of aKeys) {
+    if (!Object.prototype.hasOwnProperty.call(bo, empId)) return false
+    const ae = ao[empId] ?? {}
+    const be = bo[empId] ?? {}
+    if (!areShallowStringMapEqual(ae.scores, be.scores)) return false
+    if (!areShallowStringMapEqual(ae.comments, be.comments)) return false
+  }
+  return true
+}
+
 function resizeLevelCriteriaArray(prev, newLen) {
   const next = [...(prev || [])]
   while (next.length < newLen) next.push('')
@@ -2212,8 +2228,12 @@ function App() {
       }
       return normalizer(perEmp)
     }
-    setSelfEvalByEmployee(fromHistory(selfEvalHistoryByEmployee, normalizeEvalByEmployeeMap))
-    setSupervisorEvalByEmployee(fromHistory(supervisorEvalHistoryByEmployee, normalizeEvalByEmployeeMap))
+    const nextSelf = fromHistory(selfEvalHistoryByEmployee, normalizeEvalByEmployeeMap)
+    const nextSupervisor = fromHistory(supervisorEvalHistoryByEmployee, normalizeEvalByEmployeeMap)
+    setSelfEvalByEmployee((prev) => (areEvalStateMapsEqual(prev, nextSelf) ? prev : nextSelf))
+    setSupervisorEvalByEmployee((prev) =>
+      areEvalStateMapsEqual(prev, nextSupervisor) ? prev : nextSupervisor,
+    )
   }, [activeEvalPeriodKey, selfEvalHistoryByEmployee, supervisorEvalHistoryByEmployee])
 
   const activeEvalPeriodRef = useRef(activeEvalPeriodKey)
@@ -7221,6 +7241,97 @@ function AdminDashAccordion({ id, title, titleMeta, defaultOpen = true, classNam
   )
 }
 
+const MemberSelfEvalTab = memo(function MemberSelfEvalTab({ rows }) {
+  return rows.length ? (
+    <ul className="memberEvalList">
+      {rows.map((row) => (
+        <li key={row.id} className="memberEvalItem">
+          <div className="memberEvalHead">
+            <p className="memberEvalTitle">{row.title}</p>
+            <span className="memberEvalScore">{row.score}点</span>
+          </div>
+        </li>
+      ))}
+    </ul>
+  ) : (
+    <p className="memberDetailEmpty">自己評価の入力はまだありません。</p>
+  )
+})
+
+const MemberBossEvalTab = memo(function MemberBossEvalTab({ rows }) {
+  return rows.length ? (
+    <ul className="memberEvalList">
+      {rows.map((row) => (
+        <li key={row.id} className="memberEvalItem">
+          <div className="memberEvalHead">
+            <p className="memberEvalTitle">{row.title}</p>
+            <span className="memberEvalScore">{row.score ? `${row.score}点` : '未入力'}</span>
+          </div>
+          {row.comment ? <p className="memberEvalComment">{row.comment}</p> : null}
+        </li>
+      ))}
+    </ul>
+  ) : (
+    <p className="memberDetailEmpty">上司評価の入力はまだありません。</p>
+  )
+})
+
+const MemberHistoryTab = memo(function MemberHistoryTab({ rows, summary }) {
+  return rows.length ? (
+    <div className="memberEvalHistoryBlock">
+      {summary ? (
+        <div className="memberEvalHistorySummary">
+          <p>
+            最新期: <strong>{summary.latestPeriod}</strong>
+            {summary.previousPeriod ? `（前回: ${summary.previousPeriod}）` : ''}
+          </p>
+          <p>
+            自己: <strong>{summary.selfTrend}</strong> / 上司: <strong>{summary.bossTrend}</strong> / 経営層:{' '}
+            <strong>{summary.execTrend}</strong>
+          </p>
+          <p>{summary.focusLabel}</p>
+        </div>
+      ) : null}
+      <div className="memberEvalHistoryWrap">
+        <table className="memberEvalHistoryTable">
+          <thead>
+            <tr>
+              <th>評価期</th>
+              <th>自己評価</th>
+              <th>前期比</th>
+              <th>上司評価</th>
+              <th>前期比</th>
+              <th>経営層評価</th>
+              <th>前期比</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.periodKey}>
+                <td>{row.periodKey}</td>
+                <td>{row.selfLabel}</td>
+                <td className={String(row.selfDelta).startsWith('+') ? 'isUp' : String(row.selfDelta).startsWith('-') ? 'isDown' : ''}>
+                  {row.selfDelta}
+                </td>
+                <td>{row.bossLabel}</td>
+                <td className={String(row.bossDelta).startsWith('+') ? 'isUp' : String(row.bossDelta).startsWith('-') ? 'isDown' : ''}>
+                  {row.bossDelta}
+                </td>
+                <td>{row.execLabel}</td>
+                <td className={String(row.execDelta).startsWith('+') ? 'isUp' : String(row.execDelta).startsWith('-') ? 'isDown' : ''}>
+                  {row.execDelta}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  ) : (
+    <p className="memberDetailEmpty">評価履歴はまだありません。</p>
+  )
+})
+
 function AdminMockPage({
   directoryRows,
   skills,
@@ -7554,6 +7665,7 @@ function AdminMockPage({
     return cats.flatMap((cat) => cat.items)
   }, [evaluationCriteria, selectedMember?.grade])
   const selectedMemberSelfEvalRows = useMemo(() => {
+    if (detailTab !== 'self') return []
     if (!selectedMember) return []
     const evalState = selfEvalByEmployee?.[selectedMember.id]
     const scores = evalState?.scores ?? {}
@@ -7564,8 +7676,9 @@ function AdminMockPage({
         return { id: item.id, title: item.title, score }
       })
       .filter(Boolean)
-  }, [selectedMember, selfEvalByEmployee, selectedMemberEvalItems])
+  }, [detailTab, selectedMember, selfEvalByEmployee, selectedMemberEvalItems])
   const selectedMemberBossEvalRows = useMemo(() => {
+    if (detailTab !== 'boss') return []
     if (!selectedMember) return []
     const evalState = supervisorEvalByEmployee?.[selectedMember.id]
     const scores = evalState?.scores ?? {}
@@ -7578,7 +7691,7 @@ function AdminMockPage({
         return { id: item.id, title: item.title, score, comment }
       })
       .filter(Boolean)
-  }, [selectedMember, supervisorEvalByEmployee, selectedMemberEvalItems])
+  }, [detailTab, selectedMember, supervisorEvalByEmployee, selectedMemberEvalItems])
   const selectedMemberGoals = selectedMember ? goalsByEmployee?.[selectedMember.id] ?? [] : []
   const selectedMemberGoalCount = selectedMemberGoals.length
   const selectedMemberAcquiredSkillCount = selectedMemberSkills.filter((x) => x.current > 0).length
@@ -7594,6 +7707,7 @@ function AdminMockPage({
   }, [selectedMember, executiveEvalByEmployee])
 
   const selectedMemberEvalHistoryRows = useMemo(() => {
+    if (detailTab !== 'history') return []
     if (!selectedMember) return []
     const empId = selectedMember.id
     const selfPeriods = Object.keys(selfEvalHistoryByEmployee?.[empId] ?? {})
@@ -7647,6 +7761,7 @@ function AdminMockPage({
       }
     })
   }, [
+    detailTab,
     selectedMember,
     selfEvalHistoryByEmployee,
     supervisorEvalHistoryByEmployee,
@@ -7655,6 +7770,7 @@ function AdminMockPage({
   ])
 
   const selectedMemberEvalHistorySummary = useMemo(() => {
+    if (detailTab !== 'history') return null
     const rows = selectedMemberEvalHistoryRows
     if (!rows.length) return null
     const latest = rows[0]
@@ -7687,7 +7803,7 @@ function AdminMockPage({
       execTrend: trend(execD),
       focusLabel: maxAbs ? `${maxAbs.key} ${maxAbs.v > 0 ? '改善' : '要確認'}（${maxAbs.v > 0 ? '+' : ''}${maxAbs.v.toFixed(1)}）` : '比較データ不足',
     }
-  }, [selectedMemberEvalHistoryRows])
+  }, [detailTab, selectedMemberEvalHistoryRows])
 
   const formatExecutiveCommentDate = (iso) => {
     const d = new Date(iso)
@@ -8111,37 +8227,10 @@ function AdminMockPage({
                   )
                 ) : null}
                 {!hideGradeSelfEvalAndGradeStats && detailTab === 'self' ? (
-                  selectedMemberSelfEvalRows.length ? (
-                    <ul className="memberEvalList">
-                      {selectedMemberSelfEvalRows.map((row) => (
-                        <li key={row.id} className="memberEvalItem">
-                          <div className="memberEvalHead">
-                            <p className="memberEvalTitle">{row.title}</p>
-                            <span className="memberEvalScore">{row.score}点</span>
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="memberDetailEmpty">自己評価の入力はまだありません。</p>
-                  )
+                  <MemberSelfEvalTab rows={selectedMemberSelfEvalRows} />
                 ) : null}
                 {detailTab === 'boss' ? (
-                  selectedMemberBossEvalRows.length ? (
-                    <ul className="memberEvalList">
-                      {selectedMemberBossEvalRows.map((row) => (
-                        <li key={row.id} className="memberEvalItem">
-                          <div className="memberEvalHead">
-                            <p className="memberEvalTitle">{row.title}</p>
-                            <span className="memberEvalScore">{row.score ? `${row.score}点` : '未入力'}</span>
-                          </div>
-                          {row.comment ? <p className="memberEvalComment">{row.comment}</p> : null}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="memberDetailEmpty">上司評価の入力はまだありません。</p>
-                  )
+                  <MemberBossEvalTab rows={selectedMemberBossEvalRows} />
                 ) : null}
                 {detailTab === 'goal' ? (
                   selectedMemberGoalCount > 0 ? (
@@ -8207,62 +8296,7 @@ function AdminMockPage({
                   </div>
                 ) : null}
                 {detailTab === 'history' ? (
-                  selectedMemberEvalHistoryRows.length ? (
-                    <div className="memberEvalHistoryBlock">
-                      {selectedMemberEvalHistorySummary ? (
-                        <div className="memberEvalHistorySummary">
-                          <p>
-                            最新期: <strong>{selectedMemberEvalHistorySummary.latestPeriod}</strong>
-                            {selectedMemberEvalHistorySummary.previousPeriod
-                              ? `（前回: ${selectedMemberEvalHistorySummary.previousPeriod}）`
-                              : ''}
-                          </p>
-                          <p>
-                            自己: <strong>{selectedMemberEvalHistorySummary.selfTrend}</strong> / 上司:{' '}
-                            <strong>{selectedMemberEvalHistorySummary.bossTrend}</strong> / 経営層:{' '}
-                            <strong>{selectedMemberEvalHistorySummary.execTrend}</strong>
-                          </p>
-                          <p>{selectedMemberEvalHistorySummary.focusLabel}</p>
-                        </div>
-                      ) : null}
-                      <div className="memberEvalHistoryWrap">
-                        <table className="memberEvalHistoryTable">
-                          <thead>
-                            <tr>
-                              <th>評価期</th>
-                              <th>自己評価</th>
-                              <th>前期比</th>
-                              <th>上司評価</th>
-                              <th>前期比</th>
-                              <th>経営層評価</th>
-                              <th>前期比</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {selectedMemberEvalHistoryRows.map((row) => (
-                              <tr key={row.periodKey}>
-                                <td>{row.periodKey}</td>
-                                <td>{row.selfLabel}</td>
-                                <td className={String(row.selfDelta).startsWith('+') ? 'isUp' : String(row.selfDelta).startsWith('-') ? 'isDown' : ''}>
-                                  {row.selfDelta}
-                                </td>
-                                <td>{row.bossLabel}</td>
-                                <td className={String(row.bossDelta).startsWith('+') ? 'isUp' : String(row.bossDelta).startsWith('-') ? 'isDown' : ''}>
-                                  {row.bossDelta}
-                                </td>
-                                <td>{row.execLabel}</td>
-                                <td className={String(row.execDelta).startsWith('+') ? 'isUp' : String(row.execDelta).startsWith('-') ? 'isDown' : ''}>
-                                  {row.execDelta}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="memberDetailEmpty">評価履歴はまだありません。</p>
-                  )
+                  <MemberHistoryTab rows={selectedMemberEvalHistoryRows} summary={selectedMemberEvalHistorySummary} />
                 ) : null}
               </div>
             </section>
