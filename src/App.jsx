@@ -1318,7 +1318,7 @@ function GyosekiIconSortDesc() {
   )
 }
 
-function sortGyosekiAllowanceRows(list, sortKey, sortOrder) {
+function sortGyosekiAllowanceRows(list, sortKey, sortOrder, gradeOrderIds = null) {
   const direction = sortOrder === 'asc' ? 1 : -1
   const toString = (value) => String(value ?? '').toLowerCase()
   return [...list].sort((a, b) => {
@@ -1337,7 +1337,16 @@ function sortGyosekiAllowanceRows(list, sortKey, sortOrder) {
     if (sortKey === 'performanceAllowance')
       return (a.performanceAllowance - b.performanceAllowance) * direction
     if (sortKey === 'thirdBonus') return (a.thirdBonus - b.thirdBonus) * direction
-    if (sortKey === 'grade') return (gradeRates[a.grade] - gradeRates[b.grade]) * direction
+    if (sortKey === 'grade') {
+      if (Array.isArray(gradeOrderIds) && gradeOrderIds.length) {
+        const rank = (g) => {
+          const i = gradeOrderIds.indexOf(String(g ?? ''))
+          return i >= 0 ? i : 9999
+        }
+        return (rank(a.grade) - rank(b.grade)) * direction
+      }
+      return ((gradeRates[a.grade] ?? 0) - (gradeRates[b.grade] ?? 0)) * direction
+    }
     if (sortKey === 'team') return toString(a.team).localeCompare(toString(b.team), 'ja') * direction
 
     return toString(a[sortKey]).localeCompare(toString(b[sortKey]), 'ja') * direction
@@ -1398,6 +1407,7 @@ function App() {
   )
   const [csvMessage, setCsvMessage] = useState('')
   const [gyosekiCsvModalOpen, setGyosekiCsvModalOpen] = useState(false)
+  const [gyosekiInfoModalOpen, setGyosekiInfoModalOpen] = useState(false)
   const [gyosekiCsvColumnOrder, setGyosekiCsvColumnOrder] = useState(() => GYOSEKI_CSV_COLUMNS.map((c) => c.key))
   const [gyosekiCsvColumnEnabled, setGyosekiCsvColumnEnabled] = useState(() =>
     Object.fromEntries(GYOSEKI_CSV_COLUMNS.map((c) => [c.key, true])),
@@ -1420,6 +1430,16 @@ function App() {
     const base = Array.isArray(saved) && saved.length > 0 ? saved : defaultEmployeeDirectoryRows
     return normalizeEmployeeDirectoryRows(base)
   })
+  const employeeGradeByNo = useMemo(() => {
+    const out = new Map()
+    for (const row of employeeDirectoryRows ?? []) {
+      const empNo = String(row?.id ?? '').trim()
+      const grade = String(row?.grade ?? '').trim()
+      if (!empNo || !grade) continue
+      out.set(empNo, grade)
+    }
+    return out
+  }, [employeeDirectoryRows])
   const [employeeDeptOptions, setEmployeeDeptOptions] = useState(() => {
     const saved = savedData?.employeeDirectoryRows
     const base = Array.isArray(saved) && saved.length > 0 ? saved : defaultEmployeeDirectoryRows
@@ -1452,6 +1472,41 @@ function App() {
     const cleaned = saved.filter((g) => g && typeof g.id === 'string' && typeof g.label === 'string')
     return cleaned.length > 0 ? cleaned : defaultSkillGrades
   })
+
+  /** 業績手当の等級はスキル／評価の等級マスタのみ。マスタに無い値は先頭等級へ寄せる */
+  useEffect(() => {
+    const ids = skillGrades.map((g) => g.id).filter(Boolean)
+    if (!ids.length) return
+    const allowed = new Set(ids)
+    setRows((prev) => {
+      let changed = false
+      const next = prev.map((row) => {
+        if (allowed.has(String(row.grade ?? ''))) return row
+        changed = true
+        return { ...row, grade: ids[0] }
+      })
+      return changed ? next : prev
+    })
+  }, [skillGrades])
+
+  /** 業績手当: 社員番号(社員C)が従業員管理に一致する行は、従業員管理の等級へ自動同期する */
+  useEffect(() => {
+    if (!rows.length || !employeeGradeByNo.size) return
+    setRows((prev) => {
+      let changed = false
+      const next = prev.map((row) => {
+        const empNo = String(row.employeeNo ?? '').trim()
+        if (!empNo) return row
+        const linkedGrade = employeeGradeByNo.get(empNo)
+        if (!linkedGrade) return row
+        if (String(row.grade ?? '').trim() === linkedGrade) return row
+        changed = true
+        return { ...row, grade: linkedGrade }
+      })
+      return changed ? next : prev
+    })
+  }, [rows, employeeGradeByNo])
+
   const [skillActiveGradeId, setSkillActiveGradeId] = useState(() => {
     const g = savedData?.skillActiveGradeId
     return typeof g === 'string' && g ? g : 'G1'
@@ -1682,7 +1737,9 @@ function App() {
   }
 
   const addRow = () => {
-    setRows((prev) => [...prev, createRow(prev.length)])
+    const grades = skillGrades.length ? skillGrades : defaultSkillGrades
+    const defaultGradeId = grades.some((g) => g.id === 'G3') ? 'G3' : grades[0]?.id ?? 'G3'
+    setRows((prev) => [...prev, { ...createRow(prev.length), grade: defaultGradeId }])
   }
 
   const removeRow = (id) => {
@@ -1830,7 +1887,12 @@ function App() {
       .filter(Boolean)
     const headers = selectedColumns.map((c) => c.label)
     const escapeCsvValue = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`
-    const rowsForExport = sortGyosekiAllowanceRows(computedRows, sortKey, sortOrder).map((row) =>
+    const rowsForExport = sortGyosekiAllowanceRows(
+      computedRows,
+      sortKey,
+      sortOrder,
+      skillGrades.map((g) => g.id),
+    ).map((row) =>
       selectedColumns.map((c) => c.value(row)),
     )
     return [headers, ...rowsForExport]
@@ -1970,8 +2032,8 @@ function App() {
   }, [computedRows, gyosekiTeamFilter])
 
   const sortedRows = useMemo(
-    () => sortGyosekiAllowanceRows(gyosekiFilteredRows, sortKey, sortOrder),
-    [gyosekiFilteredRows, sortKey, sortOrder],
+    () => sortGyosekiAllowanceRows(gyosekiFilteredRows, sortKey, sortOrder, skillGrades.map((g) => g.id)),
+    [gyosekiFilteredRows, sortKey, sortOrder, skillGrades],
   )
 
   const salesDentureValue = Number(departmentSalesDenture === '' ? 0 : departmentSalesDenture) || 0
@@ -3428,13 +3490,24 @@ function App() {
                   </button>
                 </div>
                 <p className="syncMessage">{syncMessage}</p>
-                <button
-                  type="button"
-                  className="gyosekiViewToggle"
-                  onClick={() => setGyosekiRowView((prev) => (prev === 'detail' ? 'simple' : 'detail'))}
-                >
-                  {gyosekiRowView === 'detail' ? '簡易表示' : '詳細表示'}
-                </button>
+                <div className="gyosekiViewToggleRow">
+                  <button
+                    type="button"
+                    className="gyosekiViewToggle"
+                    onClick={() => setGyosekiRowView((prev) => (prev === 'detail' ? 'simple' : 'detail'))}
+                  >
+                    {gyosekiRowView === 'detail' ? '簡易表示' : '詳細表示'}
+                  </button>
+                  <button
+                    type="button"
+                    className="gyosekiInfoBtn"
+                    aria-label="業績手当ロジックの説明を開く"
+                    title="業績手当ロジックの説明"
+                    onClick={() => setGyosekiInfoModalOpen(true)}
+                  >
+                    ⓘ
+                  </button>
+                </div>
                 {syncError ? (
                   <div className="syncErrorBanner" role="alert">
                     <p>{syncError}</p>
@@ -3444,6 +3517,34 @@ function App() {
                   </div>
                 ) : null}
                 {csvMessage ? <p className="csvMessage">{csvMessage}</p> : null}
+                {gyosekiInfoModalOpen ? (
+                  <div className="employeeModalOverlay" onClick={() => setGyosekiInfoModalOpen(false)}>
+                    <div className="employeeModal gyosekiInfoModal" onClick={(event) => event.stopPropagation()}>
+                      <button type="button" className="modalClose" onClick={() => setGyosekiInfoModalOpen(false)}>
+                        ×
+                      </button>
+                      <h3>業績手当のロジックメモ</h3>
+                      <p>忘れやすい仕様をまとめています。</p>
+                      <ul className="gyosekiInfoList">
+                        <li>
+                          <strong>等級は社員番号リンク:</strong> 業績手当の社員番号（社員C）が従業員管理の社員Cと一致すると、等級は自動同期されます。
+                        </li>
+                        <li>
+                          <strong>リンク中の等級は編集不可:</strong> 一致している行の等級セレクトはロックされ、従業員管理側の等級が正になります。
+                        </li>
+                        <li>
+                          <strong>等級候補は評価と共通:</strong> 等級の候補リストはスキル/評価で使っている等級マスタ（設定）と同一です。
+                        </li>
+                        <li>
+                          <strong>CSV取り込み時のキー:</strong> 社員番号が一致すれば既存行を上書き、無ければ新規追加します。
+                        </li>
+                        <li>
+                          <strong>等級ソート順:</strong> 業績手当の等級ソートは、等級マスタの並び順に従います。
+                        </li>
+                      </ul>
+                    </div>
+                  </div>
+                ) : null}
                 {gyosekiCsvModalOpen ? (
                   <div className="employeeModalOverlay" onClick={() => setGyosekiCsvModalOpen(false)}>
                     <div className="employeeModal gyosekiCsvModal" onClick={(event) => event.stopPropagation()}>
@@ -3636,20 +3737,18 @@ function App() {
                                       value={row.grade}
                                       onChange={(event) => updateRow(row.id, 'grade', event.target.value)}
                                       aria-label="等級"
+                                      disabled={Boolean(employeeGradeByNo.get(String(row.employeeNo ?? '').trim()))}
+                                      title={
+                                        employeeGradeByNo.get(String(row.employeeNo ?? '').trim())
+                                          ? '従業員管理の等級と自動同期中（社員番号リンク）'
+                                          : '等級'
+                                      }
                                     >
-                                      <option value="G1">G1</option>
-                                      <option value="G2">G2</option>
-                                      <option value="G3">G3</option>
-                                      <option value="G4">G4</option>
-                                      <option value="G5">G5</option>
-                                      <option value="G6">G6</option>
-                                      <option value="P3">P3</option>
-                                      <option value="G1J">G1準社員</option>
-                                      <option value="G2J">G2準社員</option>
-                                      <option value="G3J">G3準社員</option>
-                                      <option value="G4J">G4準社員</option>
-                                      <option value="G5J">G5準社員</option>
-                                      <option value="G6J">G6準社員</option>
+                                      {(skillGrades.length ? skillGrades : defaultSkillGrades).map((g) => (
+                                        <option key={g.id} value={g.id}>
+                                          {g.label ?? g.id}
+                                        </option>
+                                      ))}
                                     </select>
                                   </label>
                                   <label className="employeeFieldScore">
@@ -5520,19 +5619,78 @@ function weightedEvalScore100ByItems(items, scoresMap) {
   return (weightedNormSum / weightSum) * 100
 }
 
+/** 基本評価（100/80/60/40/20）の段階色と経営層スコアカードを揃える（未設定時は最終スコアから帯を推定） */
+function executiveEvalScoreCardToneClass(baseScore, finalScore) {
+  const b = Math.max(0, Math.min(100, Number(baseScore) || 0))
+  const f = Math.max(0, Math.min(100, Number(finalScore) || 0))
+  const fromFinal = () => {
+    if (f >= 90) return 'execEvalToneBase100'
+    if (f >= 70) return 'execEvalToneBase80'
+    if (f >= 50) return 'execEvalToneBase60'
+    if (f >= 30) return 'execEvalToneBase40'
+    return 'execEvalToneBase20'
+  }
+  if (b === 100) return 'execEvalToneBase100'
+  if (b === 80) return 'execEvalToneBase80'
+  if (b === 60) return 'execEvalToneBase60'
+  if (b === 40) return 'execEvalToneBase40'
+  if (b === 20) return 'execEvalToneBase20'
+  if (b > 0) return fromFinal()
+  return f > 0 ? fromFinal() : 'execEvalToneNeutral'
+}
+
+/** レーダー軸の大項目名：長い場合は2行＋省略（見切れ対策） */
+function splitRadarCategoryLabel(title, maxFirstLine) {
+  const raw = String(title ?? '').trim()
+  if (!raw) return ['']
+  const max1 = Math.max(4, Math.min(16, maxFirstLine))
+  if (raw.length <= max1) return [raw]
+  const breakBefore = (i) => {
+    if (i <= 0) return false
+    const ch = raw[i - 1]
+    return /[ 　・／/\u3000-\u303f]/.test(ch) || ch === '(' || ch === '（' || ch === '['
+  }
+  let cut = max1
+  for (let i = Math.min(max1, raw.length - 1); i >= Math.max(4, Math.floor(max1 * 0.5)); i--) {
+    if (breakBefore(i)) {
+      cut = i
+      break
+    }
+  }
+  const line1 = raw.slice(0, cut).trimEnd()
+  let line2 = raw.slice(cut).trimStart()
+  const max2 = max1 + 4
+  if (line2.length > max2) {
+    line2 = `${line2.slice(0, Math.max(1, max2 - 1))}…`
+  }
+  return line2 ? [line1, line2] : [line1]
+}
+
 const MemberEvalRadarChart = memo(function MemberEvalRadarChart({ rows, compact = false }) {
   if (!Array.isArray(rows) || rows.length < 3) return null
-  const size = compact ? 180 : 260
+  const n = rows.length
+  /** 軸ラベル2行分の余白を確保 */
+  const size = compact ? 292 : 328
   const center = size / 2
-  const radius = compact ? 64 : 92
+  const radius = compact ? 52 : 72
+  const labelRadius = radius + (compact ? 36 : 28)
   const ringLevels = [20, 40, 60, 80, 100]
+  const angleAt = (index) => (-Math.PI / 2) + ((Math.PI * 2 * index) / n)
   const toPoint = (index, value100, r = radius) => {
-    const angle = (-Math.PI / 2) + ((Math.PI * 2 * index) / rows.length)
+    const angle = angleAt(index)
     const vv = Math.max(0, Math.min(100, Number(value100) || 0))
     const rr = (vv / 100) * r
     return {
       x: center + Math.cos(angle) * rr,
       y: center + Math.sin(angle) * rr,
+    }
+  }
+  const labelPoint = (index) => {
+    const angle = angleAt(index)
+    return {
+      x: center + Math.cos(angle) * labelRadius,
+      y: center + Math.sin(angle) * labelRadius,
+      angle,
     }
   }
   const axisEnds = rows.map((_, idx) => toPoint(idx, 100))
@@ -5550,7 +5708,7 @@ const MemberEvalRadarChart = memo(function MemberEvalRadarChart({ rows, compact 
     <section className={wrapperClass}>
       {compact ? (
         <div className="memberEvalRadarHead">
-          <h4>評価差分</h4>
+          <h4>評価差分（カテゴリ別）</h4>
           <p>{Number.isFinite(avgGap) ? `${avgGap.toFixed(1)}点` : '—'}</p>
         </div>
       ) : (
@@ -5582,18 +5740,38 @@ const MemberEvalRadarChart = memo(function MemberEvalRadarChart({ rows, compact 
           ))}
           <polygon points={selfPolygon.join(' ')} className="memberEvalRadarPolySelf" />
           <polygon points={bossPolygon.join(' ')} className="memberEvalRadarPolyBoss" />
-          {compact
-            ? null
-            : rows.map((row, idx) => {
-                const pt = axisEnds[idx]
-                const anchor = pt.x > center + 6 ? 'start' : pt.x < center - 6 ? 'end' : 'middle'
-                const yy = pt.y < center ? pt.y - 6 : pt.y + 14
-                return (
-                  <text key={`label-${row.id}`} x={pt.x} y={yy} textAnchor={anchor} className="memberEvalRadarLabel">
-                    {row.title}
-                  </text>
-                )
-              })}
+          {rows.map((row, idx) => {
+            const { x, y, angle } = labelPoint(idx)
+            const c = Math.cos(angle)
+            let textAnchor = 'middle'
+            if (c > 0.25) textAnchor = 'start'
+            else if (c < -0.25) textAnchor = 'end'
+            const s = Math.sin(angle)
+            const singleDy = s > 0.35 ? '0.42em' : s < -0.35 ? '-0.12em' : '0.28em'
+            const lines = splitRadarCategoryLabel(row.title, compact ? 8 : 11)
+            const lineGap = compact ? '0.95em' : '1.08em'
+            const twoLineFirstDy =
+              s > 0.35 ? '-0.18em' : s < -0.35 ? '-0.72em' : s > 0 ? '0.05em' : '-0.42em'
+            return (
+              <text
+                key={`label-${row.id}`}
+                x={x}
+                y={y}
+                textAnchor={textAnchor}
+                className={`memberEvalRadarLabel${compact ? ' isCompact' : ''}`}
+              >
+                <title>{row.title}</title>
+                <tspan x={x} dy={lines.length < 2 ? singleDy : twoLineFirstDy}>
+                  {lines[0]}
+                </tspan>
+                {lines[1] ? (
+                  <tspan x={x} dy={lineGap}>
+                    {lines[1]}
+                  </tspan>
+                ) : null}
+              </text>
+            )
+          })}
         </svg>
         <div className="memberEvalRadarLegend">
           <span className="isSelf">自己評価</span>
@@ -6414,7 +6592,7 @@ function ExecutiveEvaluationPage({
         <p className="execEvalTarget">経営層評価は評価期に依存せず、累積スコアとして管理します。</p>
       </header>
 
-      <article className="execEvalScoreCard">
+      <article className={`execEvalScoreCard ${executiveEvalScoreCardToneClass(baseScore, finalScore)}`}>
         <p className="execEvalScoreLabel">最終スコア</p>
         <p className="execEvalScoreValue">
           {finalScore}
@@ -6508,8 +6686,10 @@ function ExecutiveEvaluationPage({
 
 function GoalManagementPage({ employee, goals, setGoals }) {
   const [addOpen, setAddOpen] = useState(false)
-  const [draftTitle, setDraftTitle] = useState('')
-  const [draftDetail, setDraftDetail] = useState('')
+  const [draftPlan, setDraftPlan] = useState('')
+  const [draftDo, setDraftDo] = useState('')
+  const [draftCheck, setDraftCheck] = useState('')
+  const [draftAction, setDraftAction] = useState('')
   const [draftDeadline, setDraftDeadline] = useState('')
 
   const periodLabel = useMemo(() => formatQuarterLabel(new Date()), [])
@@ -6519,8 +6699,10 @@ function GoalManagementPage({ employee, goals, setGoals }) {
   const ratePct = total === 0 ? 0 : Math.round((achieved / total) * 100)
 
   const openAddModal = () => {
-    setDraftTitle('')
-    setDraftDetail('')
+    setDraftPlan('')
+    setDraftDo('')
+    setDraftCheck('')
+    setDraftAction('')
     setDraftDeadline('')
     setAddOpen(true)
   }
@@ -6528,13 +6710,22 @@ function GoalManagementPage({ employee, goals, setGoals }) {
   const closeAddModal = () => setAddOpen(false)
 
   const handleCreateGoal = () => {
-    const title = draftTitle.trim()
-    const detail = draftDetail.trim()
+    const plan = draftPlan.trim()
+    const doText = draftDo.trim()
+    const checkText = draftCheck.trim()
+    const actionText = draftAction.trim()
     const deadline = draftDeadline.trim()
-    if (!title || !detail || !deadline) {
-      window.alert('必須項目（目標タイトル・目標詳細・目標期日）を入力してください。')
+    if (!plan || !deadline) {
+      window.alert('必須項目（P: Plan・目標期日）を入力してください。')
       return
     }
+    const detailLines = [
+      `D（実行）: ${doText || '（未入力）'}`,
+      `C（評価）: ${checkText || '（未入力）'}`,
+      `A（改善）: ${actionText || '（未入力）'}`,
+    ]
+    const title = plan
+    const detail = detailLines.join('\n')
     const id = `goal-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
     setGoals((prev) => [...prev, { id, title, detail, deadline, achieved: false }])
     closeAddModal()
@@ -6649,26 +6840,59 @@ function GoalManagementPage({ employee, goals, setGoals }) {
             <button type="button" className="modalClose" onClick={closeAddModal}>
               ×
             </button>
-            <h3>新しい目標を追加</h3>
-            <p className="goalMgmtModalSub">新しい目標の内容を入力してください。</p>
+            <h3>新しい目標を追加（PDCA）</h3>
+            <p className="goalMgmtModalSub">P / D / C / A の順で入力してください。</p>
+            <div className="goalMgmtPdcaHint">
+              <p className="goalMgmtPdcaHintTitle">PDCAの書き方ヒント</p>
+              <ul>
+                <li>P（計画）: 何を改善したいか、目標と具体的な計画を明確にする</li>
+                <li>D（実行）: まず小さく試し、実行内容と結果を記録する</li>
+                <li>C（評価）: 目標に対して結果がどうだったかを確認する</li>
+                <li>A（改善）: 成功は展開、課題は見直して次の行動につなげる</li>
+              </ul>
+              <p className="goalMgmtPdcaHintExample">
+                例）P: 毎日30分英単語 / D: 1週間実施 / C: テスト結果確認 / A: 学習方法を改善
+              </p>
+            </div>
             <div className="goalMgmtFormFields">
               <label className="goalMgmtFormLabel">
-                目標タイトル <span className="goalMgmtReq">*</span>
+                P（Plan: 目標） <span className="goalMgmtReq">*</span>
                 <input
                   type="text"
-                  value={draftTitle}
-                  onChange={(event) => setDraftTitle(event.target.value)}
+                  value={draftPlan}
+                  onChange={(event) => setDraftPlan(event.target.value)}
                   placeholder="例：新規顧客10社の獲得"
                   autoComplete="off"
                 />
               </label>
               <label className="goalMgmtFormLabel">
-                目標詳細 <span className="goalMgmtReq">*</span>
+                D（Do: 実行）
+                <span className="goalMgmtFieldHint">何を・どの頻度で実行するかを書きます。</span>
                 <textarea
-                  value={draftDetail}
-                  onChange={(event) => setDraftDetail(event.target.value)}
-                  placeholder="目標の詳細な説明を入力してください"
-                  rows={4}
+                  value={draftDo}
+                  onChange={(event) => setDraftDo(event.target.value)}
+                  placeholder="何を実行するか"
+                  rows={3}
+                />
+              </label>
+              <label className="goalMgmtFormLabel">
+                C（Check: 評価）
+                <span className="goalMgmtFieldHint">達成度や数値、うまくいった点・課題を整理します。</span>
+                <textarea
+                  value={draftCheck}
+                  onChange={(event) => setDraftCheck(event.target.value)}
+                  placeholder="どう評価・確認するか"
+                  rows={2}
+                />
+              </label>
+              <label className="goalMgmtFormLabel">
+                A（Action: 改善）
+                <span className="goalMgmtFieldHint">次にどう改善して再挑戦するかを書きます。</span>
+                <textarea
+                  value={draftAction}
+                  onChange={(event) => setDraftAction(event.target.value)}
+                  placeholder="次の改善アクション"
+                  rows={2}
                 />
               </label>
               <label className="goalMgmtFormLabel">
@@ -7462,14 +7686,9 @@ function AdminMockPage({
   const [adminMemberEmployment, setAdminMemberEmployment] = useState('active')
   /** name | id | grade | retiredFirst */
   const [adminMemberSort, setAdminMemberSort] = useState('name')
-  const memberDetailHeroRef = useRef(null)
   const adminMemberDetailDockRef = useRef(null)
-  const memberSwipeTouchRef = useRef({ x: 0, y: 0, dx: 0, dy: 0, lock: '' })
-  const memberSwipeMotionTimerRef = useRef(null)
   const adminMockTopRef = useRef(null)
   const [adminScrollTopVisible, setAdminScrollTopVisible] = useState(false)
-  const [memberSwipeMotion, setMemberSwipeMotion] = useState('')
-  const [memberSwipeDragX, setMemberSwipeDragX] = useState(0)
   const [execDraftDelta, setExecDraftDelta] = useState(0)
   const [execDraftComment, setExecDraftComment] = useState('')
 
@@ -7636,87 +7855,6 @@ function AdminMockPage({
     selfEvalHistoryByEmployee,
     supervisorEvalHistoryByEmployee,
   ])
-  const goAdjacentMember = useCallback(
-    (delta) => {
-      if (!adminFilteredMemberRows.length) return
-      let idx = adminFilteredMemberRows.findIndex((m) => m.id === selectedMemberId)
-      if (idx < 0) idx = 0
-      const nextIdx = Math.max(0, Math.min(adminFilteredMemberRows.length - 1, idx + delta))
-      const next = adminFilteredMemberRows[nextIdx]
-      if (!next || next.id === selectedMemberId) return
-      setSelectedMemberId(next.id)
-      onSelectMember?.(next.id)
-    },
-    [adminFilteredMemberRows, selectedMemberId, onSelectMember],
-  )
-
-  const goAdjacentMemberWithMotion = useCallback(
-    (delta) => {
-      if (!delta) return
-      if (memberSwipeMotionTimerRef.current) window.clearTimeout(memberSwipeMotionTimerRef.current)
-      setMemberSwipeMotion(delta > 0 ? 'next' : 'prev')
-      goAdjacentMember(delta)
-      memberSwipeMotionTimerRef.current = window.setTimeout(() => {
-        setMemberSwipeMotion('')
-        memberSwipeMotionTimerRef.current = null
-      }, 260)
-    },
-    [goAdjacentMember],
-  )
-
-  const onMemberSwipeTouchStart = useCallback((event) => {
-    const t = event.touches?.[0]
-    if (!t) return
-    memberSwipeTouchRef.current = { x: t.clientX, y: t.clientY, dx: 0, dy: 0, lock: '' }
-    setMemberSwipeDragX(0)
-  }, [])
-
-  const onMemberSwipeTouchMove = useCallback((event) => {
-    const t = event.touches?.[0]
-    if (!t) return
-    const dx = t.clientX - memberSwipeTouchRef.current.x
-    const dy = t.clientY - memberSwipeTouchRef.current.y
-    if (!memberSwipeTouchRef.current.lock) {
-      if (Math.abs(dx) > 14 && Math.abs(dx) > Math.abs(dy) * 1.08) {
-        memberSwipeTouchRef.current.lock = 'x'
-      } else if (Math.abs(dy) > 14) {
-        memberSwipeTouchRef.current.lock = 'y'
-      }
-    }
-    memberSwipeTouchRef.current.dx = dx
-    memberSwipeTouchRef.current.dy = dy
-    if (memberSwipeTouchRef.current.lock !== 'x') return
-    // Swiping the name area should feel responsive but not drift too far.
-    setMemberSwipeDragX(Math.max(-56, Math.min(56, dx * 0.42)))
-    event.preventDefault()
-  }, [])
-
-  const onMemberSwipeTouchEnd = useCallback(
-    (event) => {
-      const t = event.changedTouches?.[0]
-      if (!t) return
-      const dx = memberSwipeTouchRef.current.dx || t.clientX - memberSwipeTouchRef.current.x
-      const dy = memberSwipeTouchRef.current.dy || t.clientY - memberSwipeTouchRef.current.y
-      const lock = memberSwipeTouchRef.current.lock
-      memberSwipeTouchRef.current = { x: 0, y: 0, dx: 0, dy: 0, lock: '' }
-      setMemberSwipeDragX(0)
-      if (lock === 'y') return
-      if (Math.abs(dx) < 56 || Math.abs(dx) < Math.abs(dy) * 1.15) return
-      if (dx < 0) goAdjacentMemberWithMotion(1)
-      else goAdjacentMemberWithMotion(-1)
-    },
-    [goAdjacentMemberWithMotion],
-  )
-
-  const onMemberSwipeTouchCancel = useCallback(() => {
-    memberSwipeTouchRef.current = { x: 0, y: 0, dx: 0, dy: 0, lock: '' }
-    setMemberSwipeDragX(0)
-  }, [])
-
-  useEffect(() => () => {
-    if (memberSwipeMotionTimerRef.current) window.clearTimeout(memberSwipeMotionTimerRef.current)
-  }, [])
-
   const scrollMemberDockIntoView = useCallback(() => {
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
@@ -8073,36 +8211,56 @@ function AdminMockPage({
             ref={adminMemberDetailDockRef}
             className="adminMemberDetailDock"
           >
-            <>
-              <section
-                key={selectedMember.id}
-                className={`memberDetailWorkspace adminMemberDetailSwipeCard ${
-                  memberSwipeMotion === 'next'
-                    ? 'isSwipeNext'
-                    : memberSwipeMotion === 'prev'
-                      ? 'isSwipePrev'
-                      : ''
-                }`}
-                style={{
-                  transform: memberSwipeDragX ? `translateX(${memberSwipeDragX}px)` : undefined,
-                  transition: memberSwipeDragX ? 'none' : undefined,
-                }}
-              >
+              <section key={selectedMember.id} className="memberDetailWorkspace">
               <header
-                ref={memberDetailHeroRef}
-                className="memberDetailHero memberDetailSwipeHandle"
+                className="memberDetailHero"
                 id={selectedMember ? `admin-member-detail-${selectedMember.id}` : undefined}
-                onTouchStart={onMemberSwipeTouchStart}
-                onTouchMove={onMemberSwipeTouchMove}
-                onTouchEnd={onMemberSwipeTouchEnd}
-                onTouchCancel={onMemberSwipeTouchCancel}
               >
                 <div className="memberDetailHeroTop">
                   <div className="memberDetailAvatar" aria-hidden>
                     👤
                   </div>
                   <div className="memberDetailHeroIdentity">
-                    <h4>{selectedMember.name}</h4>
+                    <div className="memberDetailHeroNameRow">
+                      <h4>{selectedMember.name}</h4>
+                      {hideGradeSelfEvalAndGradeStats ? null : (
+                        <div
+                          className="memberDetailGradeInline"
+                          role="group"
+                          aria-label="現在の等級"
+                          title="現在の等級"
+                        >
+                          <span className="memberDetailGradeInlineLabel">等級</span>
+                          <strong className="memberDetailGradeInlineValue">{selectedMember.grade}</strong>
+                          <button
+                            type="button"
+                            className="memberPromoteBtn memberPromoteBtnInline"
+                            disabled={
+                              selectedMember.retired ||
+                              !selectedMemberPromotionTarget ||
+                              selectedMemberHasPendingPromotion
+                            }
+                            title={
+                              selectedMemberHasPendingPromotion
+                                ? 'すでに昇級申請が出ています'
+                                : !selectedMemberPromotionTarget
+                                  ? 'これ以上昇級できません'
+                                  : '昇級申請'
+                            }
+                            onClick={() => {
+                              if (!selectedMember || !selectedMemberPromotionTarget) return
+                              onSubmitPromotionRequest?.(
+                                selectedMember.id,
+                                selectedMember.name,
+                                selectedMember.grade,
+                              )
+                            }}
+                          >
+                            昇級
+                          </button>
+                        </div>
+                      )}
+                    </div>
                     <p>{selectedMember.dept}</p>
                     <small>入社日: {selectedMember.joinDate || '―'}</small>
                   </div>
@@ -8111,42 +8269,6 @@ function AdminMockPage({
                       <MemberEvalRadarChart rows={selectedMemberEvalRadarRows} compact />
                     </div>
                   ) : null}
-                </div>
-                <div className="memberDetailMetricGrid">
-                  {hideGradeSelfEvalAndGradeStats ? null : (
-                    <article className="memberDetailGradeArticle">
-                      <span>現在の等級</span>
-                      <div className="memberDetailGradeRow">
-                        <strong>{selectedMember.grade}</strong>
-                        <button
-                          type="button"
-                          className="memberPromoteBtn"
-                          disabled={
-                            selectedMember.retired ||
-                            !selectedMemberPromotionTarget ||
-                            selectedMemberHasPendingPromotion
-                          }
-                          title={
-                            selectedMemberHasPendingPromotion
-                              ? 'すでに昇級申請が出ています'
-                              : !selectedMemberPromotionTarget
-                                ? 'これ以上昇級できません'
-                                : ''
-                          }
-                          onClick={() => {
-                            if (!selectedMember || !selectedMemberPromotionTarget) return
-                            onSubmitPromotionRequest?.(
-                              selectedMember.id,
-                              selectedMember.name,
-                              selectedMember.grade,
-                            )
-                          }}
-                        >
-                          昇級
-                        </button>
-                      </div>
-                    </article>
-                  )}
                 </div>
                 <div
                   className={`memberDetailActions${hideGradeSelfEvalAndGradeStats ? ' memberDetailActions--three' : ''}`}
@@ -8358,7 +8480,12 @@ function AdminMockPage({
                 ) : null}
                 {canViewExecutiveCommentEval && detailTab === 'execcomments' ? (
                   <div className="memberDetailExecComments">
-                    <article className="execEvalScoreCard memberDetailExecScoreCard">
+                    <article
+                      className={`execEvalScoreCard memberDetailExecScoreCard ${executiveEvalScoreCardToneClass(
+                        selectedMemberExecutiveCommentView.baseScore,
+                        selectedMemberExecutiveCommentView.finalScore,
+                      )}`}
+                    >
                       <p className="execEvalScoreLabel">経営層評価スコア</p>
                       <p className="execEvalScoreValue">
                         {selectedMemberExecutiveCommentView.finalScore}
@@ -8454,10 +8581,6 @@ function AdminMockPage({
                 ) : null}
               </div>
             </section>
-              {adminFilteredMemberRows.length > 1 ? (
-                <p className="adminMemberSwipeHint">名前エリアを左右にスワイプで切替できます（ボタンでも操作できます）</p>
-              ) : null}
-            </>
           </div>
         ) : null}
         <AdminDashAccordion
