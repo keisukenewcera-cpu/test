@@ -2568,13 +2568,14 @@ function App() {
     setLoggedInEmployeeId(null)
   }
 
-  const saveCloudState = useCallback(async (payload) => {
+  const saveCloudState = useCallback(async (payload, options = {}) => {
+    const { silent = false } = options
     if (!supabase) {
-      setSyncMessage('Supabase未設定（ローカル保存のみ）')
+      if (!silent) setSyncMessage('Supabase未設定（ローカル保存のみ）')
       setSyncError('Supabaseが未設定です。.env.local の設定を確認してください。')
       return false
     }
-    setSyncMessage('Supabaseに保存中...')
+    if (!silent) setSyncMessage('Supabaseに保存中...')
     const { error } = await supabase
       .from('app_state')
       .upsert({ id: CLOUD_STATE_ID, payload }, { onConflict: 'id' })
@@ -2583,7 +2584,7 @@ function App() {
       setSyncError('クラウド保存に失敗しました。ネットワークまたはSupabase設定を確認して再試行してください。')
       return false
     }
-    setSyncMessage('Supabaseに保存済み')
+    if (!silent) setSyncMessage('Supabaseに保存済み')
     setSyncError('')
     return true
   }, [])
@@ -2966,13 +2967,18 @@ function App() {
     }
   }, [])
 
+  const lastLocalPersistRef = useRef('')
+  const lastCloudPersistRef = useRef('')
+
   useEffect(() => {
     if (typeof window === 'undefined') return
-
-    window.localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify(buildPersistPayload(false)),
-    )
+    const timer = window.setTimeout(() => {
+      const serialized = JSON.stringify(buildPersistPayload(false))
+      if (serialized === lastLocalPersistRef.current) return
+      lastLocalPersistRef.current = serialized
+      window.localStorage.setItem(STORAGE_KEY, serialized)
+    }, 900)
+    return () => window.clearTimeout(timer)
   }, [
     rows,
     employeeDirectoryRows,
@@ -3014,13 +3020,13 @@ function App() {
 
   useEffect(() => {
     if (!supabase || !isCloudReady) return
-
-    const payload = buildPersistPayload()
-
     const timer = window.setTimeout(async () => {
-      await saveCloudState(payload)
-    }, 600)
-
+      const payload = buildPersistPayload()
+      const serialized = JSON.stringify(payload)
+      if (serialized === lastCloudPersistRef.current) return
+      const ok = await saveCloudState(payload, { silent: true })
+      if (ok) lastCloudPersistRef.current = serialized
+    }, 2500)
     return () => window.clearTimeout(timer)
   }, [
     rows,
@@ -7221,8 +7227,10 @@ function AdminMockPage({
   const memberDetailHeroRef = useRef(null)
   const adminMemberDetailDockRef = useRef(null)
   const memberSwipeTouchRef = useRef({ x: 0, y: 0 })
+  const memberSwipeMotionTimerRef = useRef(null)
   const adminMockTopRef = useRef(null)
   const [adminScrollTopVisible, setAdminScrollTopVisible] = useState(false)
+  const [memberSwipeMotion, setMemberSwipeMotion] = useState('')
 
   const pendingPromotionRequests = useMemo(
     () => (promotionRequests ?? []).filter((r) => r.status === 'pending'),
@@ -7396,6 +7404,20 @@ function AdminMockPage({
     [adminFilteredMemberRows, selectedMemberId, onSelectMember],
   )
 
+  const goAdjacentMemberWithMotion = useCallback(
+    (delta) => {
+      if (!delta) return
+      if (memberSwipeMotionTimerRef.current) window.clearTimeout(memberSwipeMotionTimerRef.current)
+      setMemberSwipeMotion(delta > 0 ? 'next' : 'prev')
+      goAdjacentMember(delta)
+      memberSwipeMotionTimerRef.current = window.setTimeout(() => {
+        setMemberSwipeMotion('')
+        memberSwipeMotionTimerRef.current = null
+      }, 260)
+    },
+    [goAdjacentMember],
+  )
+
   const onMemberSwipeTouchStart = useCallback((event) => {
     const t = event.touches?.[0]
     if (!t) return
@@ -7409,11 +7431,15 @@ function AdminMockPage({
       const dx = t.clientX - memberSwipeTouchRef.current.x
       const dy = t.clientY - memberSwipeTouchRef.current.y
       if (Math.abs(dx) < 56 || Math.abs(dx) < Math.abs(dy) * 1.15) return
-      if (dx < 0) goAdjacentMember(1)
-      else goAdjacentMember(-1)
+      if (dx < 0) goAdjacentMemberWithMotion(1)
+      else goAdjacentMemberWithMotion(-1)
     },
-    [goAdjacentMember],
+    [goAdjacentMemberWithMotion],
   )
+
+  useEffect(() => () => {
+    if (memberSwipeMotionTimerRef.current) window.clearTimeout(memberSwipeMotionTimerRef.current)
+  }, [])
 
   const scrollMemberDockIntoView = useCallback(() => {
     window.requestAnimationFrame(() => {
@@ -7705,8 +7731,6 @@ function AdminMockPage({
         <div
           ref={adminMemberDetailDockRef}
           className="adminMemberDetailDock"
-          onTouchStart={onMemberSwipeTouchStart}
-          onTouchEnd={onMemberSwipeTouchEnd}
         >
           {adminFilteredMemberRows.length === 0 ? (
             <p className="adminMemberDetailDockEmpty">条件に一致する従業員がいません。</p>
@@ -7719,7 +7743,7 @@ function AdminMockPage({
                     className="adminMemberSwipeNavBtn"
                     disabled={selectedMemberListIndex <= 0}
                     aria-label="前の従業員"
-                    onClick={() => goAdjacentMember(-1)}
+                    onClick={() => goAdjacentMemberWithMotion(-1)}
                   >
                     ‹
                   </button>
@@ -7734,7 +7758,7 @@ function AdminMockPage({
                       selectedMemberListIndex >= adminFilteredMemberRows.length - 1
                     }
                     aria-label="次の従業員"
-                    onClick={() => goAdjacentMember(1)}
+                    onClick={() => goAdjacentMemberWithMotion(1)}
                   >
                     ›
                   </button>
@@ -7742,12 +7766,20 @@ function AdminMockPage({
               ) : null}
               <section
                 key={selectedMember.id}
-                className="memberDetailWorkspace adminMemberDetailSwipeCard"
+                className={`memberDetailWorkspace adminMemberDetailSwipeCard ${
+                  memberSwipeMotion === 'next'
+                    ? 'isSwipeNext'
+                    : memberSwipeMotion === 'prev'
+                      ? 'isSwipePrev'
+                      : ''
+                }`}
               >
               <header
                 ref={memberDetailHeroRef}
-                className="memberDetailHero"
+                className="memberDetailHero memberDetailSwipeHandle"
                 id={selectedMember ? `admin-member-detail-${selectedMember.id}` : undefined}
+                onTouchStart={onMemberSwipeTouchStart}
+                onTouchEnd={onMemberSwipeTouchEnd}
               >
                 <div className="memberDetailHeroTop">
                   <div className="memberDetailAvatar" aria-hidden>
@@ -8150,7 +8182,7 @@ function AdminMockPage({
               </div>
             </section>
               {adminFilteredMemberRows.length > 1 ? (
-                <p className="adminMemberSwipeHint">左右にスワイプでも切り替えられます（ボタンでも操作できます）</p>
+                <p className="adminMemberSwipeHint">名前エリアを左右にスワイプで切替できます（ボタンでも操作できます）</p>
               ) : null}
             </>
           ) : (

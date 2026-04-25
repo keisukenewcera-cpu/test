@@ -1307,6 +1307,40 @@ select:focus {
   animation: adminMemberDetailCardIn 0.28s ease-out;
 }
 
+@keyframes adminMemberDetailCardSwipeNext {
+  from {
+    opacity: 0.72;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes adminMemberDetailCardSwipePrev {
+  from {
+    opacity: 0.72;
+    transform: translateX(-16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.adminMemberDetailSwipeCard.isSwipeNext {
+  animation: adminMemberDetailCardSwipeNext 0.26s ease-out;
+}
+
+.adminMemberDetailSwipeCard.isSwipePrev {
+  animation: adminMemberDetailCardSwipePrev 0.26s ease-out;
+}
+
+.memberDetailSwipeHandle {
+  touch-action: pan-y;
+}
+
 /* --- 管理者ダッシュ：Amazon風アコーディオン --- */
 .adminDashAccordion {
   margin-top: 12px;
