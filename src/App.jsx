@@ -1207,6 +1207,19 @@ function normalizeEvalHistoryByEmployeeMap(raw, normalizer) {
   return out
 }
 
+function areShallowStringMapEqual(a, b) {
+  const ao = a && typeof a === 'object' && !Array.isArray(a) ? a : {}
+  const bo = b && typeof b === 'object' && !Array.isArray(b) ? b : {}
+  const aKeys = Object.keys(ao)
+  const bKeys = Object.keys(bo)
+  if (aKeys.length !== bKeys.length) return false
+  for (const k of aKeys) {
+    if (!Object.prototype.hasOwnProperty.call(bo, k)) return false
+    if (String(ao[k] ?? '') !== String(bo[k] ?? '')) return false
+  }
+  return true
+}
+
 function resizeLevelCriteriaArray(prev, newLen) {
   const next = [...(prev || [])]
   while (next.length < newLen) next.push('')
@@ -2063,6 +2076,15 @@ function App() {
     () => getSuggestedEvalPeriodKey(evalPeriodDefinitions),
     [evalPeriodDefinitions],
   )
+  const evalGradeByEmployeeId = useMemo(() => {
+    const map = {}
+    for (const row of employeeDirectoryRows ?? []) {
+      const id = String(row?.id ?? '').trim()
+      if (!id) continue
+      map[id] = String(row?.grade ?? '').trim()
+    }
+    return map
+  }, [employeeDirectoryRows])
   const effectiveEvalPeriodKey = activeEvalPeriodKey ?? evalPeriodFallbackKey
   const selfEvalSubmittedForActive = Boolean(
     evalSubjectEmployee?.id &&
@@ -2204,56 +2226,72 @@ function App() {
     const periodKey = String(activeEvalPeriodRef.current ?? '').trim()
     if (!periodKey) return
     setSelfEvalHistoryByEmployee((prev) => {
-      const next = { ...(prev ?? {}) }
+      const base = prev ?? {}
+      let next = base
+      let changed = false
       for (const [empId, state] of Object.entries(selfEvalByEmployee ?? {})) {
-        const empRow = employeeDirectoryRows.find((r) => r.id === empId)
-        const evalGradeNow = String(empRow?.grade ?? '').trim()
-        const prevSlot = prev[empId]?.[periodKey]
+        const evalGradeNow = String(evalGradeByEmployeeId[empId] ?? '').trim()
+        const prevEmp = base[empId] ?? {}
+        const prevSlot = prevEmp[periodKey]
         const existingGrade = String(prevSlot?.evalGrade ?? '').trim()
+        const nextEvalGrade = existingGrade || evalGradeNow || ''
+        const sameScores = areShallowStringMapEqual(prevSlot?.scores, state?.scores)
+        const sameComments = areShallowStringMapEqual(prevSlot?.comments, state?.comments)
+        const sameGrade = String(prevSlot?.evalGrade ?? '') === nextEvalGrade
+        if (sameScores && sameComments && sameGrade) continue
+        if (!changed) {
+          next = { ...base }
+          changed = true
+        }
         next[empId] = {
-          ...(next[empId] ?? {}),
+          ...prevEmp,
           [periodKey]: {
             ...state,
             savedAt: now,
-            ...(existingGrade
-              ? { evalGrade: existingGrade }
-              : evalGradeNow
-                ? { evalGrade: evalGradeNow }
-                : {}),
+            ...(nextEvalGrade ? { evalGrade: nextEvalGrade } : {}),
+            ...(prevSlot?.submittedAt ? { submittedAt: prevSlot.submittedAt } : {}),
           },
         }
       }
-      return next
+      return changed ? next : prev
     })
-  }, [selfEvalByEmployee, employeeDirectoryRows])
+  }, [selfEvalByEmployee, evalGradeByEmployeeId])
 
   useEffect(() => {
     const now = new Date().toISOString()
     const periodKey = String(activeEvalPeriodRef.current ?? '').trim()
     if (!periodKey) return
     setSupervisorEvalHistoryByEmployee((prev) => {
-      const next = { ...(prev ?? {}) }
+      const base = prev ?? {}
+      let next = base
+      let changed = false
       for (const [empId, state] of Object.entries(supervisorEvalByEmployee ?? {})) {
-        const empRow = employeeDirectoryRows.find((r) => r.id === empId)
-        const evalGradeNow = String(empRow?.grade ?? '').trim()
-        const prevSlot = prev[empId]?.[periodKey]
+        const evalGradeNow = String(evalGradeByEmployeeId[empId] ?? '').trim()
+        const prevEmp = base[empId] ?? {}
+        const prevSlot = prevEmp[periodKey]
         const existingGrade = String(prevSlot?.evalGrade ?? '').trim()
+        const nextEvalGrade = existingGrade || evalGradeNow || ''
+        const sameScores = areShallowStringMapEqual(prevSlot?.scores, state?.scores)
+        const sameComments = areShallowStringMapEqual(prevSlot?.comments, state?.comments)
+        const sameGrade = String(prevSlot?.evalGrade ?? '') === nextEvalGrade
+        if (sameScores && sameComments && sameGrade) continue
+        if (!changed) {
+          next = { ...base }
+          changed = true
+        }
         next[empId] = {
-          ...(next[empId] ?? {}),
+          ...prevEmp,
           [periodKey]: {
             ...state,
             savedAt: now,
-            ...(existingGrade
-              ? { evalGrade: existingGrade }
-              : evalGradeNow
-                ? { evalGrade: evalGradeNow }
-                : {}),
+            ...(nextEvalGrade ? { evalGrade: nextEvalGrade } : {}),
+            ...(prevSlot?.submittedAt ? { submittedAt: prevSlot.submittedAt } : {}),
           },
         }
       }
-      return next
+      return changed ? next : prev
     })
-  }, [supervisorEvalByEmployee, employeeDirectoryRows])
+  }, [supervisorEvalByEmployee, evalGradeByEmployeeId])
 
   useEffect(() => {
     const now = new Date().toISOString()
@@ -7226,11 +7264,12 @@ function AdminMockPage({
   const [adminMemberSort, setAdminMemberSort] = useState('name')
   const memberDetailHeroRef = useRef(null)
   const adminMemberDetailDockRef = useRef(null)
-  const memberSwipeTouchRef = useRef({ x: 0, y: 0 })
+  const memberSwipeTouchRef = useRef({ x: 0, y: 0, dx: 0, dy: 0, lock: '' })
   const memberSwipeMotionTimerRef = useRef(null)
   const adminMockTopRef = useRef(null)
   const [adminScrollTopVisible, setAdminScrollTopVisible] = useState(false)
   const [memberSwipeMotion, setMemberSwipeMotion] = useState('')
+  const [memberSwipeDragX, setMemberSwipeDragX] = useState(0)
 
   const pendingPromotionRequests = useMemo(
     () => (promotionRequests ?? []).filter((r) => r.status === 'pending'),
@@ -7352,14 +7391,24 @@ function AdminMockPage({
   useEffect(() => {
     const el = adminMockTopRef.current
     if (!el) return
+    let rafId = 0
+    let lastVisible = null
     const update = () => {
-      const top = el.getBoundingClientRect().top
-      setAdminScrollTopVisible(top < 72)
+      if (rafId) return
+      rafId = window.requestAnimationFrame(() => {
+        rafId = 0
+        const top = el.getBoundingClientRect().top
+        const visible = top < 72
+        if (lastVisible === visible) return
+        lastVisible = visible
+        setAdminScrollTopVisible(visible)
+      })
     }
     update()
     window.addEventListener('scroll', update, { passive: true })
     window.addEventListener('resize', update, { passive: true })
     return () => {
+      if (rafId) window.cancelAnimationFrame(rafId)
       window.removeEventListener('scroll', update)
       window.removeEventListener('resize', update)
     }
@@ -7421,21 +7470,51 @@ function AdminMockPage({
   const onMemberSwipeTouchStart = useCallback((event) => {
     const t = event.touches?.[0]
     if (!t) return
-    memberSwipeTouchRef.current = { x: t.clientX, y: t.clientY }
+    memberSwipeTouchRef.current = { x: t.clientX, y: t.clientY, dx: 0, dy: 0, lock: '' }
+    setMemberSwipeDragX(0)
+  }, [])
+
+  const onMemberSwipeTouchMove = useCallback((event) => {
+    const t = event.touches?.[0]
+    if (!t) return
+    const dx = t.clientX - memberSwipeTouchRef.current.x
+    const dy = t.clientY - memberSwipeTouchRef.current.y
+    if (!memberSwipeTouchRef.current.lock) {
+      if (Math.abs(dx) > 14 && Math.abs(dx) > Math.abs(dy) * 1.08) {
+        memberSwipeTouchRef.current.lock = 'x'
+      } else if (Math.abs(dy) > 14) {
+        memberSwipeTouchRef.current.lock = 'y'
+      }
+    }
+    memberSwipeTouchRef.current.dx = dx
+    memberSwipeTouchRef.current.dy = dy
+    if (memberSwipeTouchRef.current.lock !== 'x') return
+    // Swiping the name area should feel responsive but not drift too far.
+    setMemberSwipeDragX(Math.max(-56, Math.min(56, dx * 0.42)))
+    event.preventDefault()
   }, [])
 
   const onMemberSwipeTouchEnd = useCallback(
     (event) => {
       const t = event.changedTouches?.[0]
       if (!t) return
-      const dx = t.clientX - memberSwipeTouchRef.current.x
-      const dy = t.clientY - memberSwipeTouchRef.current.y
+      const dx = memberSwipeTouchRef.current.dx || t.clientX - memberSwipeTouchRef.current.x
+      const dy = memberSwipeTouchRef.current.dy || t.clientY - memberSwipeTouchRef.current.y
+      const lock = memberSwipeTouchRef.current.lock
+      memberSwipeTouchRef.current = { x: 0, y: 0, dx: 0, dy: 0, lock: '' }
+      setMemberSwipeDragX(0)
+      if (lock === 'y') return
       if (Math.abs(dx) < 56 || Math.abs(dx) < Math.abs(dy) * 1.15) return
       if (dx < 0) goAdjacentMemberWithMotion(1)
       else goAdjacentMemberWithMotion(-1)
     },
     [goAdjacentMemberWithMotion],
   )
+
+  const onMemberSwipeTouchCancel = useCallback(() => {
+    memberSwipeTouchRef.current = { x: 0, y: 0, dx: 0, dy: 0, lock: '' }
+    setMemberSwipeDragX(0)
+  }, [])
 
   useEffect(() => () => {
     if (memberSwipeMotionTimerRef.current) window.clearTimeout(memberSwipeMotionTimerRef.current)
@@ -7773,13 +7852,19 @@ function AdminMockPage({
                       ? 'isSwipePrev'
                       : ''
                 }`}
+                style={{
+                  transform: memberSwipeDragX ? `translateX(${memberSwipeDragX}px)` : undefined,
+                  transition: memberSwipeDragX ? 'none' : undefined,
+                }}
               >
               <header
                 ref={memberDetailHeroRef}
                 className="memberDetailHero memberDetailSwipeHandle"
                 id={selectedMember ? `admin-member-detail-${selectedMember.id}` : undefined}
                 onTouchStart={onMemberSwipeTouchStart}
+                onTouchMove={onMemberSwipeTouchMove}
                 onTouchEnd={onMemberSwipeTouchEnd}
+                onTouchCancel={onMemberSwipeTouchCancel}
               >
                 <div className="memberDetailHeroTop">
                   <div className="memberDetailAvatar" aria-hidden>
