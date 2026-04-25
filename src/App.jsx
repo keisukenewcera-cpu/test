@@ -1014,7 +1014,7 @@ const MENU_DISPLAY_META = {
   goals: { tabLabel: '目標設定・管理', description: '個人の目標設定と進捗管理を行います。' },
   bossEval: { tabLabel: '上司評価', description: '部下の評価を実施します。' },
   execEval: { tabLabel: '経営層評価', description: '従業員を100点満点で評価します。' },
-  admin: { tabLabel: '管理者ダッシュボード', description: '全従業員の状況を一覧管理します。' },
+  admin: { tabLabel: '評価者用', description: '全従業員の状況を一覧管理します。' },
   settings: { tabLabel: '設定', description: 'スキル設定・評価基準設定・表示設定を行います。' },
   skill: { tabLabel: 'スキル設定', description: 'スキル項目の作成と編集を行います。' },
   evalcriteria: { tabLabel: '評価基準設定', description: '評価項目と基準を設定します。' },
@@ -1032,8 +1032,6 @@ const MAIN_WORKSPACE_TAB_ORDER = [
   { key: 'skillup', label: MENU_DISPLAY_META.skillup.tabLabel },
   { key: 'selfeval', label: MENU_DISPLAY_META.selfeval.tabLabel },
   { key: 'goals', label: MENU_DISPLAY_META.goals.tabLabel },
-  { key: 'bossEval', label: MENU_DISPLAY_META.bossEval.tabLabel },
-  { key: 'execEval', label: MENU_DISPLAY_META.execEval.tabLabel },
 ]
 
 const MAIN_WORKSPACE_TAB_ICONS = {
@@ -1046,16 +1044,14 @@ const MAIN_WORKSPACE_TAB_ICONS = {
   skillup: '🚀',
   selfeval: '📝',
   goals: '🎯',
-  bossEval: '🧑‍💼',
-  execEval: '🏛️',
 }
 
 /** 管理者の表示設定対象タブ（業績手当含む） */
 const ADMIN_ROLE_MENU_KEYS = MAIN_WORKSPACE_TAB_ORDER.map((t) => t.key)
 
 const MENU_KEYS_BY_ROLE_CARD = {
-  [MENU_ROLE_IPPAN]: ['count', 'honsu', 'skillup', 'selfeval', 'goals', 'bossEval'],
-  [MENU_ROLE_JOUSHI]: ['count', 'honsu', 'admin', 'skillup', 'selfeval', 'goals', 'bossEval'],
+  [MENU_ROLE_IPPAN]: ['count', 'honsu', 'skillup', 'selfeval', 'goals'],
+  [MENU_ROLE_JOUSHI]: ['count', 'honsu', 'admin', 'skillup', 'selfeval', 'goals'],
   [MENU_ROLE_YAKUIN]: [
     'gyoseki',
     'count',
@@ -1064,15 +1060,13 @@ const MENU_KEYS_BY_ROLE_CARD = {
     'employee',
     'settings',
     'goals',
-    'bossEval',
-    'execEval',
   ],
   [MENU_ROLE_ADMIN]: [...ADMIN_ROLE_MENU_KEYS],
 }
 
 const DEFAULT_MENU_VISIBILITY_BY_ROLE = {
   [MENU_ROLE_IPPAN]: ['count', 'honsu', 'skillup', 'selfeval', 'goals'],
-  [MENU_ROLE_JOUSHI]: ['count', 'honsu', 'skillup', 'selfeval', 'goals', 'bossEval'],
+  [MENU_ROLE_JOUSHI]: ['count', 'honsu', 'skillup', 'selfeval', 'goals'],
   [MENU_ROLE_YAKUIN]: [
     'gyoseki',
     'count',
@@ -1081,8 +1075,6 @@ const DEFAULT_MENU_VISIBILITY_BY_ROLE = {
     'employee',
     'settings',
     'goals',
-    'bossEval',
-    'execEval',
   ],
   [MENU_ROLE_ADMIN]: [...ADMIN_ROLE_MENU_KEYS],
 }
@@ -2441,7 +2433,7 @@ function App() {
     })
     if (didAdd) {
       window.alert(
-        '昇級の申請を送信しました。\n\n管理者ダッシュボードに「昇級の申請があります。管理者は許可または却下をしてください。」と表示されます。承認までお待ちください。',
+        '昇級の申請を送信しました。\n\n評価者用に「昇級の申請があります。管理者は許可または却下をしてください。」と表示されます。承認までお待ちください。',
       )
     } else {
       window.alert('この社員にはすでに処理待ちの昇級申請があります。')
@@ -3953,7 +3945,9 @@ function App() {
                 skillProgressUpdatedAtByEmployee={skillProgressUpdatedAtByEmployee}
                 selfEvalByEmployee={selfEvalByEmployee}
                 supervisorEvalByEmployee={supervisorEvalByEmployee}
+                setSupervisorEvalByEmployee={setSupervisorEvalByEmployee}
                 executiveEvalByEmployee={executiveEvalByEmployee}
+                setExecutiveEvalByEmployee={setExecutiveEvalByEmployee}
                 selfEvalHistoryByEmployee={selfEvalHistoryByEmployee}
                 supervisorEvalHistoryByEmployee={supervisorEvalHistoryByEmployee}
                 executiveEvalHistoryByEmployee={executiveEvalHistoryByEmployee}
@@ -3965,21 +3959,6 @@ function App() {
                 forcedDetailTab={adminDetailTab}
                 onSelectMember={(employeeId) => setAdminSelectedMemberId(employeeId)}
                 onChangeDetailTab={(tabId) => setAdminDetailTab(tabId)}
-                onStartSupervisorEval={(employeeId) => {
-                  setAdminSelectedMemberId(employeeId)
-                  setAdminDetailTab('boss')
-                  setSelectedEvalEmployeeId(employeeId)
-                  setWorkspaceView('bossEval')
-                }}
-                onStartExecutiveEval={(employeeId) => {
-                  if (menuRoleKey !== MENU_ROLE_ADMIN && menuRoleKey !== MENU_ROLE_YAKUIN) {
-                    window.alert('権限がありません。')
-                    return
-                  }
-                  setAdminSelectedMemberId(employeeId)
-                  setSelectedEvalEmployeeId(employeeId)
-                  setWorkspaceView('execEval')
-                }}
                 promotionRequests={promotionRequests}
                 canApprovePromotions={menuRoleKey === MENU_ROLE_ADMIN}
                 onSubmitPromotionRequest={submitPromotionRequest}
@@ -4738,6 +4717,16 @@ function EvaluationCriteriaPage({ grades, criteria, setCriteria }) {
   )
 
   const gradeLabel = grades.find((g) => g.id === activeGradeId)?.label ?? activeGradeId
+  const totalWeightPct = useMemo(
+    () =>
+      majors.reduce(
+        (sum, major) =>
+          sum + major.minors.reduce((s, mi) => s + Math.max(0, Number(mi?.weightPct) || 0), 0),
+        0,
+      ),
+    [majors],
+  )
+  const isWeightTotalValid = Math.abs(totalWeightPct - 100) < 0.001
 
   const updateMinorsPatch = (majorId, nextList) => {
     setCriteria((prev) => ({
@@ -5130,6 +5119,10 @@ function EvaluationCriteriaPage({ grades, criteria, setCriteria }) {
       <p className="evalCritGradeEditHint">
         表示中: <strong>{gradeLabel}</strong> の小項目・ウエイト・評価基準を編集しています。
       </p>
+      <div className={`evalCritWeightSummary ${isWeightTotalValid ? 'isValid' : 'isInvalid'}`}>
+        合計ウエイト: <strong>{totalWeightPct.toFixed(1)}%</strong>
+        {isWeightTotalValid ? '（OK）' : '（100%になるよう調整してください）'}
+      </div>
 
       <div className="evalCritBoard">
         {majors.length === 0 ? (
@@ -5469,13 +5462,23 @@ function SkillUpPage({ employees, skills, sections, progress }) {
   )
 }
 
-function avgSelfEvalScore5(state) {
-  const scores = state?.scores ?? {}
-  const nums = Object.values(scores)
-    .map((v) => Number(v))
-    .filter((n) => Number.isFinite(n) && n >= 1 && n <= 5)
-  if (!nums.length) return null
-  return nums.reduce((a, b) => a + b, 0) / nums.length
+function weightedEvalScore100ByCategories(categories, scoresMap, superGroupFilter = null) {
+  let weightedNormSum = 0
+  let weightSum = 0
+  for (const cat of categories ?? []) {
+    if (superGroupFilter && cat?.superGroup !== superGroupFilter) continue
+    for (const it of cat?.items ?? []) {
+      const score = Number(scoresMap?.[it.id])
+      if (!Number.isFinite(score) || score < 1 || score > 5) continue
+      const weight = Math.max(0, Number(it?.weightPct) || 0)
+      if (!weight) continue
+      const normalized01 = (score - 1) / 4
+      weightedNormSum += normalized01 * weight
+      weightSum += weight
+    }
+  }
+  if (weightSum <= 0) return null
+  return (weightedNormSum / weightSum) * 100
 }
 
 function selfEvalHistoryDeltaLabel(now, prev) {
@@ -5492,28 +5495,114 @@ function evalHistoryDeltaToneClass(label) {
   return ''
 }
 
-function avgSelfEvalScore5FromItemIds(itemIds, scoresMap) {
-  const nums = itemIds
-    .map((id) => Number(scoresMap?.[id]))
-    .filter((n) => Number.isFinite(n) && n >= 1 && n <= 5)
-  if (!nums.length) return null
-  return nums.reduce((a, b) => a + b, 0) / nums.length
-}
-
-function selfEvalSuperGroupStats5(criteriaStore, gradeId, state) {
+function selfEvalSuperGroupStats100(criteriaStore, gradeId, state) {
   const cats = buildEvalCategoriesForGrade(criteriaStore, gradeId)
   const scores = state?.scores ?? {}
-  const businessIds = []
-  const interpersonalIds = []
-  for (const cat of cats) {
-    const bucket = cat.superGroup === 'interpersonal' ? interpersonalIds : businessIds
-    for (const it of cat.items) bucket.push(it.id)
-  }
   return {
-    business5: avgSelfEvalScore5FromItemIds(businessIds, scores),
-    interpersonal5: avgSelfEvalScore5FromItemIds(interpersonalIds, scores),
+    business100: weightedEvalScore100ByCategories(cats, scores, 'business'),
+    interpersonal100: weightedEvalScore100ByCategories(cats, scores, 'interpersonal'),
   }
 }
+
+function weightedEvalScore100ByItems(items, scoresMap) {
+  let weightedNormSum = 0
+  let weightSum = 0
+  for (const it of items ?? []) {
+    const score = Number(scoresMap?.[it.id])
+    if (!Number.isFinite(score) || score < 1 || score > 5) continue
+    const weight = Math.max(0, Number(it?.weightPct) || 0)
+    if (!weight) continue
+    const normalized01 = (score - 1) / 4
+    weightedNormSum += normalized01 * weight
+    weightSum += weight
+  }
+  if (weightSum <= 0) return null
+  return (weightedNormSum / weightSum) * 100
+}
+
+const MemberEvalRadarChart = memo(function MemberEvalRadarChart({ rows, compact = false }) {
+  if (!Array.isArray(rows) || rows.length < 3) return null
+  const size = compact ? 180 : 260
+  const center = size / 2
+  const radius = compact ? 64 : 92
+  const ringLevels = [20, 40, 60, 80, 100]
+  const toPoint = (index, value100, r = radius) => {
+    const angle = (-Math.PI / 2) + ((Math.PI * 2 * index) / rows.length)
+    const vv = Math.max(0, Math.min(100, Number(value100) || 0))
+    const rr = (vv / 100) * r
+    return {
+      x: center + Math.cos(angle) * rr,
+      y: center + Math.sin(angle) * rr,
+    }
+  }
+  const axisEnds = rows.map((_, idx) => toPoint(idx, 100))
+  const selfPolygon = rows.map((row, idx) => {
+    const p = toPoint(idx, row.self100)
+    return `${p.x},${p.y}`
+  })
+  const bossPolygon = rows.map((row, idx) => {
+    const p = toPoint(idx, row.boss100)
+    return `${p.x},${p.y}`
+  })
+  const avgGap = rows.reduce((sum, row) => sum + Math.abs((Number(row.self100) || 0) - (Number(row.boss100) || 0)), 0) / rows.length
+  const wrapperClass = `memberEvalRadar${compact ? ' isCompact' : ''}`
+  return (
+    <section className={wrapperClass}>
+      {compact ? (
+        <div className="memberEvalRadarHead">
+          <h4>評価差分</h4>
+          <p>{Number.isFinite(avgGap) ? `${avgGap.toFixed(1)}点` : '—'}</p>
+        </div>
+      ) : (
+        <div className="memberEvalRadarHead">
+          <h4>自己評価と上司評価の差分（カテゴリ別）</h4>
+          <p>平均差: {Number.isFinite(avgGap) ? `${avgGap.toFixed(1)}点` : '—'}</p>
+        </div>
+      )}
+      <div className="memberEvalRadarBody">
+        <svg viewBox={`0 0 ${size} ${size}`} role="img" aria-label="自己評価と上司評価のレーダーチャート">
+          {ringLevels.map((lv) => (
+            <circle
+              key={lv}
+              cx={center}
+              cy={center}
+              r={(lv / 100) * radius}
+              className="memberEvalRadarRing"
+            />
+          ))}
+          {axisEnds.map((pt, idx) => (
+            <line
+              key={`axis-${rows[idx].id}`}
+              x1={center}
+              y1={center}
+              x2={pt.x}
+              y2={pt.y}
+              className="memberEvalRadarAxis"
+            />
+          ))}
+          <polygon points={selfPolygon.join(' ')} className="memberEvalRadarPolySelf" />
+          <polygon points={bossPolygon.join(' ')} className="memberEvalRadarPolyBoss" />
+          {compact
+            ? null
+            : rows.map((row, idx) => {
+                const pt = axisEnds[idx]
+                const anchor = pt.x > center + 6 ? 'start' : pt.x < center - 6 ? 'end' : 'middle'
+                const yy = pt.y < center ? pt.y - 6 : pt.y + 14
+                return (
+                  <text key={`label-${row.id}`} x={pt.x} y={yy} textAnchor={anchor} className="memberEvalRadarLabel">
+                    {row.title}
+                  </text>
+                )
+              })}
+        </svg>
+        <div className="memberEvalRadarLegend">
+          <span className="isSelf">自己評価</span>
+          <span className="isBoss">上司評価</span>
+        </div>
+      </div>
+    </section>
+  )
+})
 
 function EvalQuestionnairePage({
   variant,
@@ -5648,18 +5737,18 @@ function EvalQuestionnairePage({
       const storedGrade = String(fromHist?.evalGrade ?? '').trim()
       const evalGradeLabel =
         storedGrade || (periodKey === activeKey ? String(employee?.grade ?? '').trim() || '—' : '—')
-      const selfAvg5 = avgSelfEvalScore5(merged)
-      const self100 = selfAvg5 == null ? null : selfAvg5 * 20
-      const sg = selfEvalSuperGroupStats5(evaluationCriteria, gradeCat, merged)
-      const business100 = sg.business5 == null ? null : sg.business5 * 20
-      const inter100 = sg.interpersonal5 == null ? null : sg.interpersonal5 * 20
+      const cats = buildEvalCategoriesForGrade(evaluationCriteria, gradeCat)
+      const self100 = weightedEvalScore100ByCategories(cats, merged?.scores ?? {})
+      const sg = selfEvalSuperGroupStats100(evaluationCriteria, gradeCat, merged)
+      const business100 = sg.business100
+      const inter100 = sg.interpersonal100
       return {
         periodKey,
         evalGradeLabel,
         self100,
         business100,
         inter100,
-        selfLabel: selfAvg5 == null ? '—' : `${self100.toFixed(1)}点`,
+        selfLabel: self100 == null ? '—' : `${self100.toFixed(1)}点`,
         businessLabel: business100 == null ? '—' : `${business100.toFixed(1)}点`,
         interLabel: inter100 == null ? '—' : `${inter100.toFixed(1)}点`,
       }
@@ -7340,7 +7429,9 @@ function AdminMockPage({
   skillProgressUpdatedAtByEmployee,
   selfEvalByEmployee,
   supervisorEvalByEmployee,
+  setSupervisorEvalByEmployee,
   executiveEvalByEmployee,
+  setExecutiveEvalByEmployee,
   selfEvalHistoryByEmployee,
   supervisorEvalHistoryByEmployee,
   executiveEvalHistoryByEmployee,
@@ -7352,8 +7443,6 @@ function AdminMockPage({
   forcedDetailTab,
   onSelectMember,
   onChangeDetailTab,
-  onStartSupervisorEval,
-  onStartExecutiveEval,
   promotionRequests,
   canApprovePromotions,
   onSubmitPromotionRequest,
@@ -7381,6 +7470,8 @@ function AdminMockPage({
   const [adminScrollTopVisible, setAdminScrollTopVisible] = useState(false)
   const [memberSwipeMotion, setMemberSwipeMotion] = useState('')
   const [memberSwipeDragX, setMemberSwipeDragX] = useState(0)
+  const [execDraftDelta, setExecDraftDelta] = useState(0)
+  const [execDraftComment, setExecDraftComment] = useState('')
 
   const pendingPromotionRequests = useMemo(
     () => (promotionRequests ?? []).filter((r) => r.status === 'pending'),
@@ -7453,8 +7544,8 @@ function AdminMockPage({
       setSelectedMemberId(null)
       return
     }
-    if (!selectedMemberId || !adminFilteredMemberRows.some((m) => m.id === selectedMemberId)) {
-      setSelectedMemberId(adminFilteredMemberRows[0].id)
+    if (selectedMemberId && !adminFilteredMemberRows.some((m) => m.id === selectedMemberId)) {
+      setSelectedMemberId(null)
     }
   }, [adminFilteredMemberRows, selectedMemberId])
 
@@ -7545,11 +7636,6 @@ function AdminMockPage({
     selfEvalHistoryByEmployee,
     supervisorEvalHistoryByEmployee,
   ])
-  const selectedMemberListIndex = useMemo(() => {
-    if (!selectedMemberId) return -1
-    return adminFilteredMemberRows.findIndex((m) => m.id === selectedMemberId)
-  }, [adminFilteredMemberRows, selectedMemberId])
-
   const goAdjacentMember = useCallback(
     (delta) => {
       if (!adminFilteredMemberRows.length) return
@@ -7664,6 +7750,26 @@ function AdminMockPage({
     const cats = buildEvalCategoriesForGrade(evaluationCriteria, selectedMember?.grade)
     return cats.flatMap((cat) => cat.items)
   }, [evaluationCriteria, selectedMember?.grade])
+  const selectedMemberEvalRadarRows = useMemo(() => {
+    if (!selectedMember) return []
+    const cats = buildEvalCategoriesForGrade(evaluationCriteria, selectedMember.grade)
+    const selfScores = selfEvalByEmployee?.[selectedMember.id]?.scores ?? {}
+    const bossScores = supervisorEvalByEmployee?.[selectedMember.id]?.scores ?? {}
+    return cats
+      .map((cat) => {
+        const self100 = weightedEvalScore100ByItems(cat.items, selfScores)
+        const boss100 = weightedEvalScore100ByItems(cat.items, bossScores)
+        if (self100 == null && boss100 == null) return null
+        return {
+          id: cat.id,
+          title: cat.title,
+          self100: self100 ?? 0,
+          boss100: boss100 ?? 0,
+        }
+      })
+      .filter(Boolean)
+      .slice(0, 8)
+  }, [selectedMember, evaluationCriteria, selfEvalByEmployee, supervisorEvalByEmployee])
   const selectedMemberSelfEvalRows = useMemo(() => {
     if (detailTab !== 'self') return []
     if (!selectedMember) return []
@@ -7677,25 +7783,28 @@ function AdminMockPage({
       })
       .filter(Boolean)
   }, [detailTab, selectedMember, selfEvalByEmployee, selectedMemberEvalItems])
-  const selectedMemberBossEvalRows = useMemo(() => {
-    if (detailTab !== 'boss') return []
-    if (!selectedMember) return []
-    const evalState = supervisorEvalByEmployee?.[selectedMember.id]
-    const scores = evalState?.scores ?? {}
-    const comments = evalState?.comments ?? {}
-    return selectedMemberEvalItems
-      .map((item) => {
-        const score = String(scores[item.id] ?? '').trim()
-        const comment = String(comments[item.id] ?? '').trim()
-        if (!score && !comment) return null
-        return { id: item.id, title: item.title, score, comment }
+  const selectedMemberSupervisorEvalState = selectedMember
+    ? supervisorEvalByEmployee?.[selectedMember.id] ?? { scores: {}, comments: {} }
+    : { scores: {}, comments: {} }
+  const setSelectedMemberSupervisorEvalState = useCallback(
+    (updater) => {
+      if (!selectedMember || !setSupervisorEvalByEmployee) return
+      setSupervisorEvalByEmployee((prev) => {
+        const current = prev?.[selectedMember.id] ?? { scores: {}, comments: {} }
+        const nextState = typeof updater === 'function' ? updater(current) : updater
+        return { ...(prev ?? {}), [selectedMember.id]: nextState }
       })
-      .filter(Boolean)
-  }, [detailTab, selectedMember, supervisorEvalByEmployee, selectedMemberEvalItems])
+    },
+    [selectedMember, setSupervisorEvalByEmployee],
+  )
+  const selectedMemberSupervisorSubmittedForActive = useMemo(() => {
+    if (!selectedMember) return false
+    const periodKey = activeEvalPeriodKey ?? evalPeriodFallbackKey ?? ''
+    if (!periodKey) return false
+    return Boolean(supervisorEvalHistoryByEmployee?.[selectedMember.id]?.[periodKey]?.submittedAt)
+  }, [selectedMember, activeEvalPeriodKey, evalPeriodFallbackKey, supervisorEvalHistoryByEmployee])
   const selectedMemberGoals = selectedMember ? goalsByEmployee?.[selectedMember.id] ?? [] : []
   const selectedMemberGoalCount = selectedMemberGoals.length
-  const selectedMemberAcquiredSkillCount = selectedMemberSkills.filter((x) => x.current > 0).length
-
   const selectedMemberExecutiveCommentView = useMemo(() => {
     if (!selectedMember) return { baseScore: 0, commentTotal: 0, finalScore: 0, history: [] }
     const raw = executiveEvalByEmployee?.[selectedMember.id]
@@ -7706,6 +7815,61 @@ function AdminMockPage({
     return { baseScore, commentTotal, finalScore, history }
   }, [selectedMember, executiveEvalByEmployee])
 
+  const updateSelectedMemberExecutiveEval = useCallback(
+    (updater) => {
+      if (!selectedMember || !setExecutiveEvalByEmployee) return
+      setExecutiveEvalByEmployee((prev) => {
+        const cur = prev?.[selectedMember.id] ?? { baseScore: 0, commentHistory: [] }
+        const next = typeof updater === 'function' ? updater(cur) : updater
+        return { ...(prev ?? {}), [selectedMember.id]: next }
+      })
+    },
+    [selectedMember, setExecutiveEvalByEmployee],
+  )
+
+  const handleExecBaseScoreChange = useCallback(
+    (score) => {
+      const n = Math.max(0, Math.min(100, Number(score) || 0))
+      updateSelectedMemberExecutiveEval((prev) => ({
+        baseScore: n,
+        commentHistory: [...(prev.commentHistory ?? [])],
+      }))
+    },
+    [updateSelectedMemberExecutiveEval],
+  )
+
+  const handleExecAddComment = useCallback(() => {
+    const text = execDraftComment.trim()
+    if (!text) {
+      window.alert('コメント内容を入力してください。')
+      return
+    }
+    const delta = Math.max(-20, Math.min(20, Number(execDraftDelta) || 0))
+    const item = {
+      id: `exec-log-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      delta,
+      comment: text,
+      createdAt: new Date().toISOString(),
+    }
+    updateSelectedMemberExecutiveEval((prev) => ({
+      baseScore: Number(prev.baseScore ?? 0),
+      commentHistory: [item, ...(prev.commentHistory ?? [])],
+    }))
+    setExecDraftComment('')
+    setExecDraftDelta(0)
+  }, [execDraftComment, execDraftDelta, updateSelectedMemberExecutiveEval])
+
+  const handleExecRemoveComment = useCallback(
+    (id) => {
+      if (!window.confirm('このコメント評価履歴を削除しますか？')) return
+      updateSelectedMemberExecutiveEval((prev) => ({
+        baseScore: Number(prev.baseScore ?? 0),
+        commentHistory: (prev.commentHistory ?? []).filter((row) => row.id !== id),
+      }))
+    },
+    [updateSelectedMemberExecutiveEval],
+  )
+
   const selectedMemberEvalHistoryRows = useMemo(() => {
     if (detailTab !== 'history') return []
     if (!selectedMember) return []
@@ -7714,15 +7878,6 @@ function AdminMockPage({
     const bossPeriods = Object.keys(supervisorEvalHistoryByEmployee?.[empId] ?? {})
     const periodKeys = [...new Set([...selfPeriods, ...bossPeriods])].sort(compareEvalPeriodDesc)
     const cumulativeExecState = executiveEvalByEmployee?.[empId] ?? executiveEvalHistoryByEmployee?.[empId]?.cumulative
-    const avgScore = (state) => {
-      const scores = state?.scores ?? {}
-      const nums = Object.values(scores)
-        .map((v) => Number(v))
-        .filter((n) => Number.isFinite(n) && n >= 1 && n <= 5)
-      if (!nums.length) return null
-      const avg = nums.reduce((a, b) => a + b, 0) / nums.length
-      return avg
-    }
     const execScore = (state) => {
       if (!state) return null
       const base = Number(state.baseScore ?? 0) || 0
@@ -7732,16 +7887,22 @@ function AdminMockPage({
       return Math.max(0, Math.min(100, base + diff))
     }
     const rawRows = periodKeys.map((periodKey) => {
-      const selfAvg5 = avgScore(selfEvalHistoryByEmployee?.[empId]?.[periodKey])
-      const bossAvg5 = avgScore(supervisorEvalHistoryByEmployee?.[empId]?.[periodKey])
+      const selfState = selfEvalHistoryByEmployee?.[empId]?.[periodKey]
+      const selfGrade = String(selfState?.evalGrade ?? selectedMember?.grade ?? '').trim()
+      const selfCategories = buildEvalCategoriesForGrade(evaluationCriteria, selfGrade)
+      const self100 = weightedEvalScore100ByCategories(selfCategories, selfState?.scores ?? {})
+      const bossState = supervisorEvalHistoryByEmployee?.[empId]?.[periodKey]
+      const bossGrade = String(bossState?.evalGrade ?? selectedMember?.grade ?? '').trim()
+      const bossCategories = buildEvalCategoriesForGrade(evaluationCriteria, bossGrade)
+      const boss100 = weightedEvalScore100ByCategories(bossCategories, bossState?.scores ?? {})
       const exec100 = execScore(cumulativeExecState)
       return {
         periodKey,
-        self100: selfAvg5 == null ? null : selfAvg5 * 20,
-        boss100: bossAvg5 == null ? null : bossAvg5 * 20,
+        self100,
+        boss100,
         exec100,
-        selfLabel: selfAvg5 == null ? '—' : `${(selfAvg5 * 20).toFixed(1)}点`,
-        bossLabel: bossAvg5 == null ? '—' : `${(bossAvg5 * 20).toFixed(1)}点`,
+        selfLabel: self100 == null ? '—' : `${self100.toFixed(1)}点`,
+        bossLabel: boss100 == null ? '—' : `${boss100.toFixed(1)}点`,
         execLabel: exec100 == null ? '—' : `${exec100.toFixed(1)}点`,
       }
     })
@@ -7767,6 +7928,7 @@ function AdminMockPage({
     supervisorEvalHistoryByEmployee,
     executiveEvalByEmployee,
     executiveEvalHistoryByEmployee,
+    evaluationCriteria,
   ])
 
   const selectedMemberEvalHistorySummary = useMemo(() => {
@@ -7906,59 +8068,12 @@ function AdminMockPage({
     <>
       <section ref={adminMockTopRef} className="adminMock">
         <div className="adminMain only">
-          <div className="summaryCards">
-            <article>
-              <p>総従業員数（在籍）</p>
-              <strong>{activeDirectoryCount}</strong>
-              {totalCount > activeDirectoryCount ? (
-                <p className="summaryCardsSub">退職 {totalCount - activeDirectoryCount}名</p>
-              ) : null}
-            </article>
-            <article>
-              <p>登録スキル数</p>
-              <strong className="green">15</strong>
-            </article>
-            <article>
-              <p>要注意者</p>
-              <strong className="red">{stagnationAlerts.length}</strong>
-            </article>
-          </div>
-        <div
-          ref={adminMemberDetailDockRef}
-          className="adminMemberDetailDock"
-        >
-          {adminFilteredMemberRows.length === 0 ? (
-            <p className="adminMemberDetailDockEmpty">条件に一致する従業員がいません。</p>
-          ) : selectedMember ? (
+        {selectedMember ? (
+          <div
+            ref={adminMemberDetailDockRef}
+            className="adminMemberDetailDock"
+          >
             <>
-              {adminFilteredMemberRows.length > 1 ? (
-                <div className="adminMemberDetailDockToolbar">
-                  <button
-                    type="button"
-                    className="adminMemberSwipeNavBtn"
-                    disabled={selectedMemberListIndex <= 0}
-                    aria-label="前の従業員"
-                    onClick={() => goAdjacentMemberWithMotion(-1)}
-                  >
-                    ‹
-                  </button>
-                  <span className="adminMemberSwipeIndex">
-                    {selectedMemberListIndex >= 0 ? selectedMemberListIndex + 1 : 0} / {adminFilteredMemberRows.length}
-                  </span>
-                  <button
-                    type="button"
-                    className="adminMemberSwipeNavBtn"
-                    disabled={
-                      selectedMemberListIndex < 0 ||
-                      selectedMemberListIndex >= adminFilteredMemberRows.length - 1
-                    }
-                    aria-label="次の従業員"
-                    onClick={() => goAdjacentMemberWithMotion(1)}
-                  >
-                    ›
-                  </button>
-                </div>
-              ) : null}
               <section
                 key={selectedMember.id}
                 className={`memberDetailWorkspace adminMemberDetailSwipeCard ${
@@ -7986,12 +8101,16 @@ function AdminMockPage({
                   <div className="memberDetailAvatar" aria-hidden>
                     👤
                   </div>
-                  <div>
+                  <div className="memberDetailHeroIdentity">
                     <h4>{selectedMember.name}</h4>
                     <p>{selectedMember.dept}</p>
                     <small>入社日: {selectedMember.joinDate || '―'}</small>
                   </div>
-                  <strong className="memberDetailStar">★ {selectedMember.stars}</strong>
+                  {selectedMemberEvalRadarRows.length >= 3 ? (
+                    <div className="memberDetailHeroRadar">
+                      <MemberEvalRadarChart rows={selectedMemberEvalRadarRows} compact />
+                    </div>
+                  ) : null}
                 </div>
                 <div className="memberDetailMetricGrid">
                   {hideGradeSelfEvalAndGradeStats ? null : (
@@ -8028,38 +8147,10 @@ function AdminMockPage({
                       </div>
                     </article>
                   )}
-                  <article>
-                    <span>獲得★数</span>
-                    <strong>{selectedMember.stars}★</strong>
-                  </article>
-                  <article>
-                    <span>習得スキル</span>
-                    <strong>{selectedMemberAcquiredSkillCount}</strong>
-                  </article>
                 </div>
                 <div
                   className={`memberDetailActions${hideGradeSelfEvalAndGradeStats ? ' memberDetailActions--three' : ''}`}
                 >
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!selectedMember) return
-                      onStartSupervisorEval?.(selectedMember.id)
-                    }}
-                  >
-                    ☑ 上司評価を実施
-                  </button>
-                  {canViewExecutiveCommentEval ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (!selectedMember) return
-                        onStartExecutiveEval?.(selectedMember.id)
-                      }}
-                    >
-                      ★ 経営層評価を実施
-                    </button>
-                  ) : null}
                   {hideGradeSelfEvalAndGradeStats ? (
                     <button
                       type="button"
@@ -8230,7 +8321,20 @@ function AdminMockPage({
                   <MemberSelfEvalTab rows={selectedMemberSelfEvalRows} />
                 ) : null}
                 {detailTab === 'boss' ? (
-                  <MemberBossEvalTab rows={selectedMemberBossEvalRows} />
+                  <SupervisorEvaluationPage
+                    employees={selectedMember ? [selectedMember] : []}
+                    evalState={selectedMemberSupervisorEvalState}
+                    setEvalState={setSelectedMemberSupervisorEvalState}
+                    peerSelfEval={selectedMember ? selfEvalByEmployee?.[selectedMember.id] : undefined}
+                    evaluationCriteria={evaluationCriteria}
+                    activeEvalPeriodKey={activeEvalPeriodKey}
+                    setActiveEvalPeriodKey={setActiveEvalPeriodKey}
+                    evalPeriodSelectOptions={adminMemberEvalPeriodSelectOptions}
+                    evalPeriodFallbackKey={evalPeriodFallbackKey}
+                    supervisorEvalHistoryByEmployee={supervisorEvalHistoryByEmployee}
+                    isSubmittedForPeriod={selectedMemberSupervisorSubmittedForActive}
+                    onSubmitEvaluation={null}
+                  />
                 ) : null}
                 {detailTab === 'goal' ? (
                   selectedMemberGoalCount > 0 ? (
@@ -8255,7 +8359,7 @@ function AdminMockPage({
                 {canViewExecutiveCommentEval && detailTab === 'execcomments' ? (
                   <div className="memberDetailExecComments">
                     <article className="execEvalScoreCard memberDetailExecScoreCard">
-                      <p className="execEvalScoreLabel">経営層評価スコア（閲覧）</p>
+                      <p className="execEvalScoreLabel">経営層評価スコア</p>
                       <p className="execEvalScoreValue">
                         {selectedMemberExecutiveCommentView.finalScore}
                         <span>/ 100点</span>
@@ -8268,6 +8372,54 @@ function AdminMockPage({
                             ? `+${selectedMemberExecutiveCommentView.commentTotal}`
                             : selectedMemberExecutiveCommentView.commentTotal}
                         </span>
+                      </div>
+                    </article>
+                    <article className="execEvalSection">
+                      <h4>基本評価（100点満点）</h4>
+                      <div className="execEvalBaseButtons">
+                        {[
+                          [100, '優秀'],
+                          [80, '良好'],
+                          [60, '標準'],
+                          [40, '要改善'],
+                          [20, '不十分'],
+                        ].map(([score, label]) => (
+                          <button
+                            key={score}
+                            type="button"
+                            className={`execEvalBaseBtn ${selectedMemberExecutiveCommentView.baseScore === score ? 'isActive' : ''}`}
+                            onClick={() => handleExecBaseScoreChange(score)}
+                          >
+                            <strong>{score}</strong>
+                            <small>{label}</small>
+                          </button>
+                        ))}
+                      </div>
+                    </article>
+                    <article className="execEvalSection">
+                      <h4>コメント評価（加減点）</h4>
+                      <div className="execEvalDeltaRow">
+                        {[-10, -5, -3, 0, 3, 5, 10].map((n) => (
+                          <button
+                            key={n}
+                            type="button"
+                            className={`execEvalDeltaBtn ${execDraftDelta === n ? 'isActive' : ''}`}
+                            onClick={() => setExecDraftDelta(n)}
+                          >
+                            {n > 0 ? `+${n}` : n}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="execEvalCommentForm">
+                        <input
+                          type="text"
+                          value={execDraftComment}
+                          onChange={(event) => setExecDraftComment(event.target.value)}
+                          placeholder="評価コメントを入力"
+                        />
+                        <button type="button" onClick={handleExecAddComment}>
+                          コメントを追加
+                        </button>
                       </div>
                     </article>
                     <h4 className="memberDetailExecCommentsHeading">コメント評価の履歴</h4>
@@ -8286,13 +8438,15 @@ function AdminMockPage({
                               <span className="execEvalHistoryDate">{formatExecutiveCommentDate(row.createdAt)}</span>
                             </div>
                             <p className="execEvalHistoryComment">{row.comment}</p>
+                            <div className="execEvalHistoryActions">
+                              <button type="button" onClick={() => handleExecRemoveComment(row.id)}>
+                                削除
+                              </button>
+                            </div>
                           </li>
                         ))}
                       </ul>
                     )}
-                    <p className="memberDetailExecCommentsNote">
-                      編集は「経営層評価を実施」から経営層評価画面を開いて行ってください。
-                    </p>
                   </div>
                 ) : null}
                 {detailTab === 'history' ? (
@@ -8304,10 +8458,97 @@ function AdminMockPage({
                 <p className="adminMemberSwipeHint">名前エリアを左右にスワイプで切替できます（ボタンでも操作できます）</p>
               ) : null}
             </>
-          ) : (
-            <p className="adminMemberDetailDockEmpty">一覧から表示する従業員を選んでください。</p>
-          )}
-        </div>
+          </div>
+        ) : null}
+        <AdminDashAccordion
+          id="admin-member-list"
+          title="従業員一覧"
+          titleMeta={`${adminFilteredMemberRows.length}人 / ${totalCount}人`}
+          defaultOpen={false}
+          className="adminDashAccordion--members"
+        >
+          <div className="adminPanel adminPanel--inAccordion">
+          <div className="filters filtersAdminMember">
+            <input
+              type="text"
+              placeholder="名前で検索..."
+              value={adminMemberSearch}
+              onChange={(event) => setAdminMemberSearch(event.target.value)}
+            />
+            <select value={adminMemberDept} onChange={(event) => setAdminMemberDept(event.target.value)}>
+              <option value="">全部署</option>
+              {adminDeptOptions.map((d) => (
+                <option key={d} value={d}>
+                  {d}
+                </option>
+              ))}
+            </select>
+            {hideGradeSelfEvalAndGradeStats ? null : (
+              <select value={adminMemberGrade} onChange={(event) => setAdminMemberGrade(event.target.value)}>
+                <option value="">全等級</option>
+                {adminGradeOptions.map((g) => (
+                  <option key={g} value={g}>
+                    {g}
+                  </option>
+                ))}
+              </select>
+            )}
+            <select value={adminMemberEmployment} onChange={(event) => setAdminMemberEmployment(event.target.value)}>
+              <option value="all">全員</option>
+              <option value="active">在籍のみ</option>
+              <option value="retired">退職のみ</option>
+            </select>
+            <select value={adminMemberSort} onChange={(event) => setAdminMemberSort(event.target.value)}>
+              <option value="name">並び: 名前</option>
+              <option value="id">並び: 社員C</option>
+              {hideGradeSelfEvalAndGradeStats ? null : <option value="grade">並び: 等級</option>}
+              <option value="retiredFirst">並び: 退職を上</option>
+            </select>
+          </div>
+          <p className="adminMemberRetireHint">
+            退職者は従業員管理で社員Cを「退職」または「退職_元のID」（例: 退職_e1）にすると、ここで「退職のみ」表示できます。
+          </p>
+          <div className={`memberTable${hideGradeSelfEvalAndGradeStats ? ' memberTable--yakuin' : ''}`}>
+            <div className="row head">
+              <span>社員C</span>
+              <span>名前</span>
+              <span>部署</span>
+              {hideGradeSelfEvalAndGradeStats ? null : <span>等級</span>}
+              <span>★数</span>
+            </div>
+            {adminFilteredMemberRows.map((member) => (
+              <div className={`row${member.retired ? ' isRetiredMember' : ''}`} key={member.id}>
+                <span className="memberIdCell" title={member.retired ? '退職扱い' : ''}>
+                  {member.id}
+                  {member.retired ? <em className="retiredBadge">退職</em> : null}
+                </span>
+                <span>
+                  <button
+                    type="button"
+                    className={`memberNameButton ${selectedMemberId === member.id ? 'isActive' : ''}`}
+                    title={`${member.name}の詳細へ移動`}
+                    onClick={() => {
+                      setSelectedMemberId(member.id)
+                      onSelectMember?.(member.id)
+                      window.requestAnimationFrame(() => {
+                        window.requestAnimationFrame(() => {
+                          scrollMemberDockIntoView()
+                        })
+                      })
+                    }}
+                  >
+                    {member.name}
+                  </button>
+                </span>
+                <span>{member.dept}</span>
+                {hideGradeSelfEvalAndGradeStats ? null : <span>{member.grade}</span>}
+                <span className="stars">★ {member.stars}</span>
+              </div>
+            ))}
+          </div>
+          </div>
+        </AdminDashAccordion>
+
         <section className="adminOverview">
           {pendingPromotionRequests.length ? (
             <section className="promotionRequestBanner" role="status" aria-live="polite">
@@ -8401,95 +8642,6 @@ function AdminMockPage({
           </AdminDashAccordion>
         </section>
 
-        <AdminDashAccordion
-          id="admin-member-list"
-          title="従業員一覧"
-          titleMeta={`${adminFilteredMemberRows.length}人 / ${totalCount}人`}
-          defaultOpen={false}
-          className="adminDashAccordion--members"
-        >
-          <div className="adminPanel adminPanel--inAccordion">
-          <div className="filters filtersAdminMember">
-            <input
-              type="text"
-              placeholder="名前で検索..."
-              value={adminMemberSearch}
-              onChange={(event) => setAdminMemberSearch(event.target.value)}
-            />
-            <select value={adminMemberDept} onChange={(event) => setAdminMemberDept(event.target.value)}>
-              <option value="">全部署</option>
-              {adminDeptOptions.map((d) => (
-                <option key={d} value={d}>
-                  {d}
-                </option>
-              ))}
-            </select>
-            {hideGradeSelfEvalAndGradeStats ? null : (
-              <select value={adminMemberGrade} onChange={(event) => setAdminMemberGrade(event.target.value)}>
-                <option value="">全等級</option>
-                {adminGradeOptions.map((g) => (
-                  <option key={g} value={g}>
-                    {g}
-                  </option>
-                ))}
-              </select>
-            )}
-            <select value={adminMemberEmployment} onChange={(event) => setAdminMemberEmployment(event.target.value)}>
-              <option value="all">全員</option>
-              <option value="active">在籍のみ</option>
-              <option value="retired">退職のみ</option>
-            </select>
-            <select value={adminMemberSort} onChange={(event) => setAdminMemberSort(event.target.value)}>
-              <option value="name">並び: 名前</option>
-              <option value="id">並び: 社員C</option>
-              {hideGradeSelfEvalAndGradeStats ? null : <option value="grade">並び: 等級</option>}
-              <option value="retiredFirst">並び: 退職を上</option>
-            </select>
-          </div>
-          <p className="adminMemberRetireHint">
-            退職者は従業員管理で社員Cを「退職」または「退職_元のID」（例: 退職_e1）にすると、ここで「退職のみ」表示できます。
-          </p>
-          <div className={`memberTable${hideGradeSelfEvalAndGradeStats ? ' memberTable--yakuin' : ''}`}>
-            <div className="row head">
-              <span>社員C</span>
-              <span>名前</span>
-              <span>部署</span>
-              {hideGradeSelfEvalAndGradeStats ? null : <span>等級</span>}
-              <span>★数</span>
-            </div>
-            {adminFilteredMemberRows.map((member) => (
-              <div className={`row${member.retired ? ' isRetiredMember' : ''}`} key={member.id}>
-                <span className="memberIdCell" title={member.retired ? '退職扱い' : ''}>
-                  {member.id}
-                  {member.retired ? <em className="retiredBadge">退職</em> : null}
-                </span>
-                <span>
-                  <button
-                    type="button"
-                    className={`memberNameButton ${selectedMemberId === member.id ? 'isActive' : ''}`}
-                    title={`${member.name}の詳細へ移動`}
-                    onClick={() => {
-                      setSelectedMemberId(member.id)
-                      onSelectMember?.(member.id)
-                      window.requestAnimationFrame(() => {
-                        window.requestAnimationFrame(() => {
-                          scrollMemberDockIntoView()
-                        })
-                      })
-                    }}
-                  >
-                    {member.name}
-                  </button>
-                </span>
-                <span>{member.dept}</span>
-                {hideGradeSelfEvalAndGradeStats ? null : <span>{member.grade}</span>}
-                <span className="stars">★ {member.stars}</span>
-              </div>
-            ))}
-          </div>
-          </div>
-        </AdminDashAccordion>
-
         {hideGradeSelfEvalAndGradeStats ? null : (
           <AdminDashAccordion
             id="admin-grade-dist"
@@ -8532,8 +8684,8 @@ function AdminMockPage({
           <button
             type="button"
             className={`adminMockScrollTop${adminScrollTopVisible ? ' isVisible' : ''}`}
-            aria-label="管理者ダッシュの先頭へ戻る"
-            title="管理者ダッシュの先頭へ"
+            aria-label="評価者用の先頭へ戻る"
+            title="評価者用の先頭へ"
             onClick={() => {
               adminMockTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
             }}
@@ -8710,17 +8862,10 @@ function EmployeeManagePage({
       return key !== undefined ? evalMap[key] : undefined
     }
     const evalScoreTo100 = (evalMap, employee) => {
-      const itemIds = buildEvalCategoriesForGrade(evaluationCriteria, employee?.grade).flatMap((c) =>
-        c.items.map((it) => it.id),
-      )
-      if (!itemIds.length) return 0
+      const categories = buildEvalCategoriesForGrade(evaluationCriteria, employee?.grade)
       const scores = evalEntryForEmployee(evalMap, employee?.id)?.scores ?? {}
-      const values = itemIds
-        .map((id) => Number(scores[id]))
-        .filter((n) => Number.isFinite(n) && n >= 1 && n <= 5)
-      if (!values.length) return 0
-      const avg5 = values.reduce((a, b) => a + b, 0) / values.length
-      return (avg5 / 5) * 100
+      const weighted = weightedEvalScore100ByCategories(categories, scores)
+      return Number.isFinite(weighted) ? weighted : 0
     }
     const skillScoreTo100 = (employee) => {
       const gradeSkills = (skills ?? []).filter((s) => s.gradeId === employee.grade)
@@ -8948,7 +9093,7 @@ function EmployeeManagePage({
         <code className="employeeCsvHeaderLine">{EMPLOYEE_DIRECTORY_CSV_HEADERS.map(escapeCsvField).join(',')}</code>
         <span className="employeeCsvHeaderHintNote">
           パスワード列は任意です。空欄のまま取り込むと、既存ユーザーのパスワードは変わりません。
-          退職者は社員Cを「退職」または「退職_元のID」（例: 退職_e1）にすると、管理者ダッシュボードの一覧で「退職のみ」表示できます。
+          退職者は社員Cを「退職」または「退職_元のID」（例: 退職_e1）にすると、評価者用の一覧で「退職のみ」表示できます。
           部署列は「設定 → 部署マスタ」に登録した名前と一致させてください（未登録の名前は先頭の部署に置き換わります）。
         </span>
       </p>
