@@ -1153,6 +1153,19 @@ function normalizeExecutiveEvalByEmployeeMap(raw) {
     if (typeof empId !== 'string' || !empId) continue
     const baseScoreRaw = Number(entry?.baseScore)
     const baseScore = Number.isFinite(baseScoreRaw) ? Math.max(0, Math.min(100, Math.round(baseScoreRaw))) : 0
+    const baseByMajor =
+      entry?.baseByMajor && typeof entry.baseByMajor === 'object' && !Array.isArray(entry.baseByMajor)
+        ? Object.fromEntries(
+            Object.entries(entry.baseByMajor)
+              .map(([k, v]) => {
+                const kk = String(k ?? '').trim()
+                const vv = Number(v)
+                if (!kk || !Number.isFinite(vv)) return null
+                return [kk, Math.max(0, Math.min(100, Math.round(vv)))]
+              })
+              .filter(Boolean),
+          )
+        : {}
     const commentHistory = Array.isArray(entry?.commentHistory)
       ? entry.commentHistory
           .map((h, idx) => {
@@ -1164,12 +1177,13 @@ function normalizeExecutiveEvalByEmployeeMap(raw) {
               id: typeof h?.id === 'string' && h.id ? h.id : `exec-comment-${empId}-${idx}`,
               delta,
               comment,
+              majorCategoryKey: String(h?.majorCategoryKey ?? '').trim(),
               createdAt: String(h?.createdAt ?? '').trim() || new Date().toISOString(),
             }
           })
           .filter(Boolean)
       : []
-    out[empId] = { baseScore, commentHistory }
+    out[empId] = { baseScore, baseByMajor, commentHistory }
   }
   return out
 }
@@ -2264,7 +2278,7 @@ function App() {
     (updater) => {
       if (!evalSubjectEmployee) return
       setExecutiveEvalByEmployee((prev) => {
-        const cur = prev[evalSubjectEmployee.id] ?? { baseScore: 0, commentHistory: [] }
+        const cur = prev[evalSubjectEmployee.id] ?? { baseScore: 0, baseByMajor: {}, commentHistory: [] }
         const next = typeof updater === 'function' ? updater(cur) : updater
         return { ...prev, [evalSubjectEmployee.id]: next }
       })
@@ -2372,11 +2386,15 @@ function App() {
     setExecutiveEvalHistoryByEmployee((prev) => {
       const next = { ...(prev ?? {}) }
       for (const [empId, state] of Object.entries(executiveEvalByEmployee ?? {})) {
-        next[empId] = { ...(next[empId] ?? {}), cumulative: { ...state, savedAt: now } }
+        next[empId] = {
+          ...(next[empId] ?? {}),
+          cumulative: { ...state, savedAt: now },
+          ...(activeEvalPeriodKey ? { [activeEvalPeriodKey]: { ...state, savedAt: now } } : {}),
+        }
       }
       return next
     })
-  }, [executiveEvalByEmployee])
+  }, [executiveEvalByEmployee, activeEvalPeriodKey])
 
   const renameEmployeeIdInAppState = useCallback((oldId, newId) => {
     const o = String(oldId ?? '').trim()
@@ -4223,6 +4241,7 @@ function App() {
                 employee={evalSubjectEmployee}
                 evalState={evalSubjectEmployee ? executiveEvalByEmployee[evalSubjectEmployee.id] : undefined}
                 setEvalState={updateExecutiveEvalForSubject}
+                evaluationCriteria={evaluationCriteria}
               />
             ) : null}
           </>
@@ -5619,6 +5638,113 @@ function weightedEvalScore100ByItems(items, scoresMap) {
   return (weightedNormSum / weightSum) * 100
 }
 
+function executiveEvalCategoryScores100(axisMajors, execState) {
+  const majors = Array.isArray(axisMajors) ? axisMajors : []
+  if (!majors.length) return null
+  const baseByMajorRaw =
+    execState?.baseByMajor && typeof execState.baseByMajor === 'object' && !Array.isArray(execState.baseByMajor)
+      ? execState.baseByMajor
+      : {}
+  const out = Object.fromEntries(majors.map((m) => [m.id, 0]))
+  let hasMajorBase = false
+  for (const m of majors) {
+    const n = Number(baseByMajorRaw?.[m.id])
+    if (Number.isFinite(n)) {
+      out[m.id] = Math.max(0, Math.min(100, n))
+      hasMajorBase = true
+    }
+  }
+  if (!hasMajorBase) {
+    const baseScore = Math.max(0, Math.min(100, Number(execState?.baseScore ?? 0) || 0))
+    const baseShare = baseScore / majors.length
+    for (const m of majors) out[m.id] = baseShare
+  }
+  const majorIdSet = new Set(majors.map((m) => m.id))
+  const history = Array.isArray(execState?.commentHistory) ? execState.commentHistory : []
+  for (const row of history) {
+    const key = String(row?.majorCategoryKey ?? '').trim()
+    const delta = Number(row?.delta) || 0
+    if (key && majorIdSet.has(key)) {
+      out[key] = (Number(out[key]) || 0) + delta
+      continue
+    }
+    // 旧データ（大項目未紐付け）救済: 全大項目へ均等配分して総合評価に反映する
+    const spread = delta / majors.length
+    for (const m of majors) {
+      out[m.id] = (Number(out[m.id]) || 0) + spread
+    }
+  }
+  for (const m of majors) {
+    out[m.id] = Math.max(0, Math.min(100, Number(out[m.id]) || 0))
+  }
+  return out
+}
+
+function executiveEvalOverallBaseScore(execState, axisMajors = []) {
+  const byMajor =
+    execState?.baseByMajor && typeof execState.baseByMajor === 'object' && !Array.isArray(execState.baseByMajor)
+      ? execState.baseByMajor
+      : {}
+  const ids = (Array.isArray(axisMajors) ? axisMajors : []).map((m) => String(m?.id ?? '').trim()).filter(Boolean)
+  const vals = (ids.length ? ids.map((id) => Number(byMajor[id])) : Object.values(byMajor).map((v) => Number(v))).filter((v) =>
+    Number.isFinite(v),
+  )
+  if (vals.length) return vals.reduce((sum, v) => sum + v, 0) / vals.length
+  return Math.max(0, Math.min(100, Number(execState?.baseScore ?? 0) || 0))
+}
+
+function quantizeExecutiveScore100(value) {
+  const clamped = Math.max(0, Math.min(100, Number(value) || 0))
+  return Math.max(0, Math.min(100, Math.round(clamped / 20) * 20))
+}
+
+function evalEntryForEmployeeId(evalMap, employeeId) {
+  if (!evalMap || typeof evalMap !== 'object') return undefined
+  const t = String(employeeId ?? '').trim()
+  if (!t) return undefined
+  const key = Object.keys(evalMap).find((k) => String(k ?? '').trim() === t)
+  return key !== undefined ? evalMap[key] : undefined
+}
+
+function weightedEvalScore100ForEmployee(evalMap, employee, evaluationCriteria) {
+  const categories = buildEvalCategoriesForGrade(evaluationCriteria, employee?.grade)
+  const scores = evalEntryForEmployeeId(evalMap, employee?.id)?.scores ?? {}
+  const weighted = weightedEvalScore100ByCategories(categories, scores)
+  return Number.isFinite(weighted) ? weighted : 0
+}
+
+function skillProgressScore100ForEmployee(employee, skills, skillProgress) {
+  const gradeSkills = (skills ?? []).filter((s) => s.gradeId === employee?.grade)
+  if (!gradeSkills.length) return 0
+  const prog = skillProgress?.[employee?.id] ?? {}
+  const ratioAvg =
+    gradeSkills.reduce((sum, s) => {
+      const cur = Math.max(0, Number(prog[s.id] ?? 0))
+      const max = Math.max(1, Number(s.stages) || 1)
+      return sum + Math.min(1, cur / max)
+    }, 0) / gradeSkills.length
+  return ratioAvg * 100
+}
+
+function executiveScore100ForEmployee(employeeId, executiveEvalByEmployee) {
+  const ex = evalEntryForEmployeeId(executiveEvalByEmployee, employeeId)
+  if (!ex) return 0
+  const base = executiveEvalOverallBaseScore(ex)
+  const commentTotal = Array.isArray(ex.commentHistory)
+    ? ex.commentHistory.reduce((sum, row) => sum + (Number(row.delta) || 0), 0)
+    : 0
+  return quantizeExecutiveScore100(base + commentTotal)
+}
+
+function overallWeightedScore100ForEmployee(employee, ctx) {
+  if (!employee) return Number.NaN
+  const skill100 = skillProgressScore100ForEmployee(employee, ctx.skills, ctx.skillProgress)
+  const self100 = weightedEvalScore100ForEmployee(ctx.selfEvalByEmployee, employee, ctx.evaluationCriteria)
+  const supervisor100 = weightedEvalScore100ForEmployee(ctx.supervisorEvalByEmployee, employee, ctx.evaluationCriteria)
+  const executive100 = executiveScore100ForEmployee(employee.id, ctx.executiveEvalByEmployee)
+  return skill100 * 0.3 + self100 * 0.15 + supervisor100 * 0.25 + executive100 * 0.3
+}
+
 /** 基本評価（100/80/60/40/20）の段階色と経営層スコアカードを揃える（未設定時は最終スコアから帯を推定） */
 function executiveEvalScoreCardToneClass(baseScore, finalScore) {
   const b = Math.max(0, Math.min(100, Number(baseScore) || 0))
@@ -5666,7 +5792,7 @@ function splitRadarCategoryLabel(title, maxFirstLine) {
   return line2 ? [line1, line2] : [line1]
 }
 
-const MemberEvalRadarChart = memo(function MemberEvalRadarChart({ series, compact = false, gradeLabel = '' }) {
+const MemberEvalRadarChart = memo(function MemberEvalRadarChart({ series, compact = false, gradeLabel = '', headlineScore = Number.NaN }) {
   const usableSeries = useMemo(
     () =>
       (Array.isArray(series) ? series : [])
@@ -5675,12 +5801,6 @@ const MemberEvalRadarChart = memo(function MemberEvalRadarChart({ series, compac
     [series],
   )
   const axisRows = usableSeries[0]?.rows ?? []
-  const [radarMode, setRadarMode] = useState('self')
-  const modeOptions = [
-    { id: 'self', label: '自己3期' },
-    { id: 'boss', label: '上司3期' },
-    { id: 'both', label: '自己+上司3期' },
-  ]
   if (!axisRows.length) return null
   const n = axisRows.length
   const size = compact ? 292 : 328
@@ -5704,33 +5824,19 @@ const MemberEvalRadarChart = memo(function MemberEvalRadarChart({ series, compac
     for (let i = 0; i < usableSeries.length; i += 1) {
       const s = usableSeries[i]
       const baseKey = String(s?.periodKey ?? i)
-      if (radarMode === 'self' || radarMode === 'both') {
-        out.push({
-          key: `${baseKey}-self`,
-          label: radarMode === 'both' ? `${s.label} 自己` : s.label,
-          color: s.color ?? '#2563eb',
-          dashed: false,
-          values: axisRows.map((a) => {
-            const row = s.rows.find((r) => r.id === a.id)
-            return Number.isFinite(row?.self100) ? row.self100 : 0
-          }),
-        })
-      }
-      if (radarMode === 'boss' || radarMode === 'both') {
-        out.push({
-          key: `${baseKey}-boss`,
-          label: radarMode === 'both' ? `${s.label} 上司` : s.label,
-          color: s.color ?? '#059669',
-          dashed: true,
-          values: axisRows.map((a) => {
-            const row = s.rows.find((r) => r.id === a.id)
-            return Number.isFinite(row?.boss100) ? row.boss100 : 0
-          }),
-        })
-      }
+      out.push({
+        key: `${baseKey}-total`,
+        label: s.label,
+        color: s.color ?? '#2563eb',
+        dashed: false,
+        values: axisRows.map((a) => {
+          const row = s.rows.find((r) => r.id === a.id)
+          return Number.isFinite(row?.total100) ? row.total100 : Number.NaN
+        }),
+      })
     }
     return out
-  }, [usableSeries, axisRows, radarMode])
+  }, [usableSeries, axisRows])
   const axisEnds = axisRows.map((_, idx) => toPoint(idx, 100))
   const defaultOpacityForIndex = (idx) => (idx === 0 ? 0.88 : idx === 1 ? 0.56 : 0.34)
   const [opacityBySeries, setOpacityBySeries] = useState({})
@@ -5741,7 +5847,7 @@ const MemberEvalRadarChart = memo(function MemberEvalRadarChart({ series, compac
       for (let i = 0; i < plottedSeries.length; i += 1) {
         const key = plottedSeries[i].key
         if (!Object.prototype.hasOwnProperty.call(next, key)) {
-          next[key] = defaultOpacityForIndex(Math.floor(i / (radarMode === 'both' ? 2 : 1)))
+          next[key] = defaultOpacityForIndex(i)
           changed = true
         }
       }
@@ -5753,43 +5859,33 @@ const MemberEvalRadarChart = memo(function MemberEvalRadarChart({ series, compac
       }
       return changed ? next : prev
     })
-  }, [plottedSeries, radarMode])
+  }, [plottedSeries])
   const latestAvg = useMemo(() => {
     const latest = usableSeries[0]
     if (!latest) return NaN
-    const key = radarMode === 'boss' ? 'boss100' : 'self100'
-    const vals = latest.rows.map((r) => Number(r?.[key])).filter((v) => Number.isFinite(v))
+    const vals = latest.rows.map((r) => Number(r?.total100)).filter((v) => Number.isFinite(v))
     if (!vals.length) return NaN
     return vals.reduce((sum, v) => sum + v, 0) / vals.length
-  }, [usableSeries, radarMode])
-  const modeTitle = radarMode === 'boss' ? '上司評価3期比較' : radarMode === 'both' ? '自己+上司 3期比較' : '自己評価3期比較'
+  }, [usableSeries])
+  const shownScore = Number.isFinite(headlineScore) ? headlineScore : latestAvg
+  const modeTitle = '総合得点（一覧式）3期レーダー'
   const wrapperClass = `memberEvalRadar${compact ? ' isCompact' : ''}`
   return (
     <section className={wrapperClass}>
-      <div className="memberEvalRadarModeSwitch" role="tablist" aria-label="レーダー表示モード">
-        {modeOptions.map((m) => (
-          <button
-            key={m.id}
-            type="button"
-            className={`memberEvalRadarModeBtn ${radarMode === m.id ? 'isActive' : ''}`}
-            onClick={() => setRadarMode(m.id)}
-          >
-            {m.label}
-          </button>
-        ))}
-      </div>
       {compact ? (
         <div className="memberEvalRadarHead">
           <h4>{modeTitle}</h4>
           <p>
-            {Number.isFinite(latestAvg) ? `${latestAvg.toFixed(1)}点` : '—'}
+            {Number.isFinite(shownScore) ? `${shownScore.toFixed(1)}点` : '—'}
             {String(gradeLabel ?? '').trim() ? ` / 等級 ${String(gradeLabel).trim()}` : ''}
           </p>
+          <small className="memberEvalRadarFormula">式: スキル30% + 自己15% + 上司25% + 経営30%</small>
         </div>
       ) : (
         <div className="memberEvalRadarHead">
           <h4>{modeTitle}</h4>
-          <p>最新平均: {Number.isFinite(latestAvg) ? `${latestAvg.toFixed(1)}点` : '—'}</p>
+          <p>一覧式の総合得点: {Number.isFinite(shownScore) ? `${shownScore.toFixed(1)}点` : '—'}</p>
+          <small className="memberEvalRadarFormula">式: スキル30% + 自己15% + 上司25% + 経営30%</small>
         </div>
       )}
       <div className="memberEvalRadarBody">
@@ -6637,19 +6733,46 @@ function ExecutiveEvaluationPage({
   employee,
   evalState,
   setEvalState,
+  evaluationCriteria,
 }) {
-  const baseScore = Number(evalState?.baseScore ?? 0)
+  const [draftDelta, setDraftDelta] = useState(0)
+  const [draftComment, setDraftComment] = useState('')
+  const [draftMajorCategory, setDraftMajorCategory] = useState('')
+  const majorCategoryOptions = useMemo(() => {
+    const sharedMajors = Array.isArray(evaluationCriteria?.sharedMajors) ? evaluationCriteria.sharedMajors : []
+    if (sharedMajors.length) {
+      return sharedMajors
+        .map((m, idx) => ({
+          id: String(m?.id ?? '').trim() || `major-${idx}`,
+          title: String(m?.title ?? '').trim() || `大項目${idx + 1}`,
+        }))
+        .filter((m) => m.id)
+    }
+    const grade = String(employee?.grade ?? '').trim()
+    return buildEvalCategoriesForGrade(evaluationCriteria, grade).map((c, idx) => ({
+      id: String(c?.id ?? '').trim() || `major-${idx}`,
+      title: String(c?.title ?? '').trim() || `大項目${idx + 1}`,
+    }))
+  }, [evaluationCriteria, employee])
+  const majorCategoryLabelById = useMemo(
+    () => Object.fromEntries(majorCategoryOptions.map((m) => [m.id, m.title])),
+    [majorCategoryOptions],
+  )
+  const baseScore = executiveEvalOverallBaseScore(evalState, majorCategoryOptions)
   const commentHistory = Array.isArray(evalState?.commentHistory) ? evalState.commentHistory : []
   const commentTotal = commentHistory.reduce((sum, row) => sum + (Number(row.delta) || 0), 0)
   const finalScoreRaw = baseScore + commentTotal
-  const finalScore = Math.max(0, Math.min(100, finalScoreRaw))
+  const finalScore = quantizeExecutiveScore100(finalScoreRaw)
 
-  const [draftDelta, setDraftDelta] = useState(0)
-  const [draftComment, setDraftComment] = useState('')
-
-  const setBaseScore = (value) => {
+  const setBaseScoreForMajor = (majorId, value) => {
+    const key = String(majorId ?? '').trim()
+    if (!key) return
     const next = Math.max(0, Math.min(100, Number(value) || 0))
-    setEvalState((prev) => ({ baseScore: next, commentHistory: [...(prev.commentHistory ?? [])] }))
+    setEvalState((prev) => ({
+      baseScore: Number(prev.baseScore ?? 0),
+      baseByMajor: { ...(prev.baseByMajor ?? {}), [key]: next },
+      commentHistory: [...(prev.commentHistory ?? [])],
+    }))
   }
 
   const addCommentEvaluation = () => {
@@ -6658,25 +6781,34 @@ function ExecutiveEvaluationPage({
       window.alert('コメント内容を入力してください。')
       return
     }
+    const majorCategoryKey = String(draftMajorCategory ?? '').trim()
+    if (!majorCategoryKey) {
+      window.alert('対象の大項目を選択してください。')
+      return
+    }
     const delta = Math.max(-20, Math.min(20, Number(draftDelta) || 0))
     const item = {
       id: `exec-log-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       delta,
       comment: text,
+      majorCategoryKey,
       createdAt: new Date().toISOString(),
     }
     setEvalState((prev) => ({
       baseScore: Number(prev.baseScore ?? 0),
+      baseByMajor: { ...(prev.baseByMajor ?? {}) },
       commentHistory: [item, ...(prev.commentHistory ?? [])],
     }))
     setDraftComment('')
     setDraftDelta(0)
+    setDraftMajorCategory('')
   }
 
   const removeHistory = (id) => {
     if (!window.confirm('このコメント評価履歴を削除しますか？')) return
     setEvalState((prev) => ({
       baseScore: Number(prev.baseScore ?? 0),
+      baseByMajor: { ...(prev.baseByMajor ?? {}) },
       commentHistory: (prev.commentHistory ?? []).filter((row) => row.id !== id),
     }))
   }
@@ -6718,27 +6850,35 @@ function ExecutiveEvaluationPage({
       </article>
 
       <article className="execEvalSection">
-        <h3>基本評価（100点満点）</h3>
-        <p>該当する評価を選択してください</p>
-        <div className="execEvalBaseButtons">
-          {[
-            [100, '優秀'],
-            [80, '良好'],
-            [60, '標準'],
-            [40, '要改善'],
-            [20, '不十分'],
-          ].map(([score, label]) => (
-            <button
-              key={score}
-              type="button"
-              className={`execEvalBaseBtn ${baseScore === score ? 'isActive' : ''}`}
-              onClick={() => setBaseScore(score)}
-            >
-              <strong>{score}</strong>
-              <small>{label}</small>
-            </button>
-          ))}
-        </div>
+        <h3>基本評価（大項目ごと / 100点満点）</h3>
+        <p>各大項目ごとに該当する評価を選択してください</p>
+        {majorCategoryOptions.map((major) => {
+          const activeScore = Number(evalState?.baseByMajor?.[major.id])
+          return (
+            <div key={major.id} className="execEvalMajorBaseGroup">
+              <h4>{major.title}</h4>
+              <div className="execEvalBaseButtons">
+                {[
+                  [100, '優秀'],
+                  [80, '良好'],
+                  [60, '標準'],
+                  [40, '要改善'],
+                  [20, '不十分'],
+                ].map(([score, label]) => (
+                  <button
+                    key={`${major.id}-${score}`}
+                    type="button"
+                    className={`execEvalBaseBtn ${activeScore === score ? 'isActive' : ''}`}
+                    onClick={() => setBaseScoreForMajor(major.id, score)}
+                  >
+                    <strong>{score}</strong>
+                    <small>{label}</small>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )
+        })}
       </article>
 
       <article className="execEvalSection">
@@ -6756,6 +6896,17 @@ function ExecutiveEvaluationPage({
             </button>
           ))}
         </div>
+        <label className="execEvalMajorField">
+          対象大項目
+          <select value={draftMajorCategory} onChange={(event) => setDraftMajorCategory(event.target.value)}>
+            <option value="">選択してください（必須）</option>
+            {majorCategoryOptions.map((row) => (
+              <option key={row.id} value={row.id}>
+                {row.title}
+              </option>
+            ))}
+          </select>
+        </label>
         <label className="execEvalCommentField">
           コメント内容
           <textarea
@@ -6788,6 +6939,9 @@ function ExecutiveEvaluationPage({
                   </button>
                 </div>
                 <p className="execEvalHistoryComment">{row.comment}</p>
+                <p className="execEvalHistoryMeta">
+                  対象大項目: {majorCategoryLabelById[row.majorCategoryKey] ?? row.majorCategoryKey ?? '未分類'}
+                </p>
               </li>
             ))}
           </ul>
@@ -7898,6 +8052,7 @@ function AdminMockPage({
   const [adminScrollTopVisible, setAdminScrollTopVisible] = useState(false)
   const [execDraftDelta, setExecDraftDelta] = useState(0)
   const [execDraftComment, setExecDraftComment] = useState('')
+  const [execDraftMajorCategory, setExecDraftMajorCategory] = useState('')
 
   const pendingPromotionRequests = useMemo(
     () => (promotionRequests ?? []).filter((r) => r.status === 'pending'),
@@ -8046,6 +8201,16 @@ function AdminMockPage({
     () => adminFilteredMemberRows.find((m) => m.id === selectedMemberId) ?? null,
     [adminFilteredMemberRows, selectedMemberId],
   )
+  const selectedMemberWeightedTotal100 = useMemo(() => {
+    return overallWeightedScore100ForEmployee(selectedMember, {
+      skills,
+      skillProgress,
+      selfEvalByEmployee,
+      supervisorEvalByEmployee,
+      executiveEvalByEmployee,
+      evaluationCriteria,
+    })
+  }, [selectedMember, evaluationCriteria, skills, skillProgress, selfEvalByEmployee, supervisorEvalByEmployee, executiveEvalByEmployee])
   const adminMemberEvalPeriodSelectOptions = useMemo(() => {
     const full = directoryRows.find((r) => String(r?.id) === String(selectedMember?.id))
     return buildEvalPeriodSelectOptionList({
@@ -8128,7 +8293,9 @@ function AdminMockPage({
     const activeKey = String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '').trim()
     const selfHist = selfEvalHistoryByEmployee?.[empId] ?? {}
     const bossHist = supervisorEvalHistoryByEmployee?.[empId] ?? {}
-    const periodKeys = [...new Set([...Object.keys(selfHist), ...Object.keys(bossHist), activeKey].filter(Boolean))]
+    const execHist = executiveEvalHistoryByEmployee?.[empId] ?? {}
+    const execPeriodKeys = Object.keys(execHist).filter((k) => k !== 'cumulative')
+    const periodKeys = [...new Set([...Object.keys(selfHist), ...Object.keys(bossHist), ...execPeriodKeys, activeKey].filter(Boolean))]
       .sort(compareEvalPeriodDesc)
       .slice(0, 3)
     if (!periodKeys.length) return []
@@ -8168,18 +8335,30 @@ function AdminMockPage({
                 ...(supervisorEvalByEmployee?.[empId]?.scores ?? {}),
               }
             : { ...(bossHist?.[periodKey]?.scores ?? {}) }
+        const periodExecState =
+          periodKey === activeKey
+            ? (executiveEvalByEmployee?.[empId] ?? execHist?.[periodKey] ?? execHist?.cumulative)
+            : (execHist?.[periodKey] ?? null)
+        const execByMajor = executiveEvalCategoryScores100(axisMajors, periodExecState)
         const rows = axisMajors.map((major) => {
           const cat = catById.get(major.id) || catByTitle.get(major.title)
           const self100 = weightedEvalScore100ByItems(cat?.items ?? [], selfScores)
           const boss100 = weightedEvalScore100ByItems(cat?.items ?? [], bossScores)
+          const exec100 = Number.isFinite(execByMajor?.[major.id]) ? execByMajor[major.id] : Number.NaN
+          const totalParts = [self100, boss100, exec100].filter((v) => Number.isFinite(v))
+          const total100 = totalParts.length ? totalParts.reduce((sum, v) => sum + v, 0) / totalParts.length : Number.NaN
           return {
             id: major.id,
             title: major.title,
             self100: Number.isFinite(self100) ? self100 : Number.NaN,
             boss100: Number.isFinite(boss100) ? boss100 : Number.NaN,
+            exec100,
+            total100,
           }
         })
-        const hasAny = rows.some((r) => Number.isFinite(r.self100) || Number.isFinite(r.boss100))
+        const hasAny = rows.some(
+          (r) => Number.isFinite(r.self100) || Number.isFinite(r.boss100) || Number.isFinite(r.exec100),
+        )
         if (!hasAny) return null
         return {
           periodKey,
@@ -8195,6 +8374,8 @@ function AdminMockPage({
     evalPeriodFallbackKey,
     selfEvalHistoryByEmployee,
     supervisorEvalHistoryByEmployee,
+    executiveEvalByEmployee,
+    executiveEvalHistoryByEmployee,
     selfEvalByEmployee,
     supervisorEvalByEmployee,
     selectedMemberActiveEvalGrade,
@@ -8236,20 +8417,29 @@ function AdminMockPage({
   const selectedMemberGoals = selectedMember ? goalsByEmployee?.[selectedMember.id] ?? [] : []
   const selectedMemberGoalCount = selectedMemberGoals.length
   const selectedMemberExecutiveCommentView = useMemo(() => {
-    if (!selectedMember) return { baseScore: 0, commentTotal: 0, finalScore: 0, history: [] }
+    if (!selectedMember) return { baseScore: 0, baseByMajor: {}, commentTotal: 0, finalScore: 0, history: [] }
     const raw = executiveEvalByEmployee?.[selectedMember.id]
-    const baseScore = Math.max(0, Math.min(100, Number(raw?.baseScore ?? 0) || 0))
-    const history = Array.isArray(raw?.commentHistory) ? raw.commentHistory : []
+    const baseByMajor =
+      raw?.baseByMajor && typeof raw.baseByMajor === 'object' && !Array.isArray(raw.baseByMajor)
+        ? { ...raw.baseByMajor }
+        : {}
+    const baseScore = executiveEvalOverallBaseScore(raw)
+    const history = Array.isArray(raw?.commentHistory)
+      ? raw.commentHistory.map((row) => ({
+          ...row,
+          majorCategoryKey: String(row?.majorCategoryKey ?? '').trim(),
+        }))
+      : []
     const commentTotal = history.reduce((sum, row) => sum + (Number(row.delta) || 0), 0)
-    const finalScore = Math.max(0, Math.min(100, baseScore + commentTotal))
-    return { baseScore, commentTotal, finalScore, history }
+    const finalScore = quantizeExecutiveScore100(baseScore + commentTotal)
+    return { baseScore, baseByMajor, commentTotal, finalScore, history }
   }, [selectedMember, executiveEvalByEmployee])
 
   const updateSelectedMemberExecutiveEval = useCallback(
     (updater) => {
       if (!selectedMember || !setExecutiveEvalByEmployee) return
       setExecutiveEvalByEmployee((prev) => {
-        const cur = prev?.[selectedMember.id] ?? { baseScore: 0, commentHistory: [] }
+        const cur = prev?.[selectedMember.id] ?? { baseScore: 0, baseByMajor: {}, commentHistory: [] }
         const next = typeof updater === 'function' ? updater(cur) : updater
         return { ...(prev ?? {}), [selectedMember.id]: next }
       })
@@ -8258,10 +8448,13 @@ function AdminMockPage({
   )
 
   const handleExecBaseScoreChange = useCallback(
-    (score) => {
+    (majorId, score) => {
+      const majorKey = String(majorId ?? '').trim()
+      if (!majorKey) return
       const n = Math.max(0, Math.min(100, Number(score) || 0))
       updateSelectedMemberExecutiveEval((prev) => ({
-        baseScore: n,
+        baseScore: Number(prev.baseScore ?? 0),
+        baseByMajor: { ...(prev.baseByMajor ?? {}), [majorKey]: n },
         commentHistory: [...(prev.commentHistory ?? [])],
       }))
     },
@@ -8274,30 +8467,58 @@ function AdminMockPage({
       window.alert('コメント内容を入力してください。')
       return
     }
+    const majorCategoryKey = String(execDraftMajorCategory ?? '').trim()
+    if (!majorCategoryKey) {
+      window.alert('対象の大項目を選択してください。')
+      return
+    }
     const delta = Math.max(-20, Math.min(20, Number(execDraftDelta) || 0))
     const item = {
       id: `exec-log-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       delta,
       comment: text,
+      majorCategoryKey,
       createdAt: new Date().toISOString(),
     }
     updateSelectedMemberExecutiveEval((prev) => ({
       baseScore: Number(prev.baseScore ?? 0),
+      baseByMajor: { ...(prev.baseByMajor ?? {}) },
       commentHistory: [item, ...(prev.commentHistory ?? [])],
     }))
     setExecDraftComment('')
     setExecDraftDelta(0)
-  }, [execDraftComment, execDraftDelta, updateSelectedMemberExecutiveEval])
+    setExecDraftMajorCategory('')
+  }, [execDraftComment, execDraftDelta, execDraftMajorCategory, updateSelectedMemberExecutiveEval])
 
   const handleExecRemoveComment = useCallback(
     (id) => {
       if (!window.confirm('このコメント評価履歴を削除しますか？')) return
       updateSelectedMemberExecutiveEval((prev) => ({
         baseScore: Number(prev.baseScore ?? 0),
+        baseByMajor: { ...(prev.baseByMajor ?? {}) },
         commentHistory: (prev.commentHistory ?? []).filter((row) => row.id !== id),
       }))
     },
     [updateSelectedMemberExecutiveEval],
+  )
+  const execMajorCategoryOptions = useMemo(() => {
+    const sharedMajors = Array.isArray(evaluationCriteria?.sharedMajors) ? evaluationCriteria.sharedMajors : []
+    if (sharedMajors.length) {
+      return sharedMajors
+        .map((m, idx) => ({
+          id: String(m?.id ?? '').trim() || `major-${idx}`,
+          title: String(m?.title ?? '').trim() || `大項目${idx + 1}`,
+        }))
+        .filter((m) => m.id)
+    }
+    return buildEvalCategoriesForGrade(evaluationCriteria, selectedMemberActiveEvalGrade).map((c, idx) => ({
+      id: String(c?.id ?? '').trim() || `major-${idx}`,
+      title: String(c?.title ?? '').trim() || `大項目${idx + 1}`,
+    }))
+  }, [evaluationCriteria, selectedMemberActiveEvalGrade])
+  const execMajorCategoryLabelById = useMemo(
+    () => Object.fromEntries(execMajorCategoryOptions.map((m) => [m.id, m.title])),
+    [execMajorCategoryOptions],
   )
 
   const selectedMemberEvalHistoryRows = useMemo(() => {
@@ -8310,11 +8531,11 @@ function AdminMockPage({
     const cumulativeExecState = executiveEvalByEmployee?.[empId] ?? executiveEvalHistoryByEmployee?.[empId]?.cumulative
     const execScore = (state) => {
       if (!state) return null
-      const base = Number(state.baseScore ?? 0) || 0
+      const base = executiveEvalOverallBaseScore(state)
       const diff = Array.isArray(state.commentHistory)
         ? state.commentHistory.reduce((sum, row) => sum + (Number(row.delta) || 0), 0)
         : 0
-      return Math.max(0, Math.min(100, base + diff))
+      return quantizeExecutiveScore100(base + diff)
     }
     const rawRows = periodKeys.map((periodKey) => {
       const selfState = selfEvalHistoryByEmployee?.[empId]?.[periodKey]
@@ -8466,9 +8687,10 @@ function AdminMockPage({
         const selfDone = hasEvalScore(selfEvalByEmployee?.[row.id])
         const supervisorDone = hasEvalScore(supervisorEvalByEmployee?.[row.id])
         const execData = executiveEvalByEmployee?.[row.id]
+        const execBase = executiveEvalOverallBaseScore(execData)
         const executiveDone = !!(
           execData &&
-          (Number(execData.baseScore ?? 0) > 0 || (Array.isArray(execData.commentHistory) && execData.commentHistory.length > 0))
+          (execBase > 0 || (Array.isArray(execData.commentHistory) && execData.commentHistory.length > 0))
         )
 
         const tags = []
@@ -8562,6 +8784,7 @@ function AdminMockPage({
                         series={selectedMemberEvalRadarSeries}
                         compact
                         gradeLabel={selectedMemberActiveEvalGrade}
+                        headlineScore={selectedMemberWeightedTotal100}
                       />
                     </div>
                   ) : null}
@@ -8798,26 +9021,34 @@ function AdminMockPage({
                       </div>
                     </article>
                     <article className="execEvalSection">
-                      <h4>基本評価（100点満点）</h4>
-                      <div className="execEvalBaseButtons">
-                        {[
-                          [100, '優秀'],
-                          [80, '良好'],
-                          [60, '標準'],
-                          [40, '要改善'],
-                          [20, '不十分'],
-                        ].map(([score, label]) => (
-                          <button
-                            key={score}
-                            type="button"
-                            className={`execEvalBaseBtn ${selectedMemberExecutiveCommentView.baseScore === score ? 'isActive' : ''}`}
-                            onClick={() => handleExecBaseScoreChange(score)}
-                          >
-                            <strong>{score}</strong>
-                            <small>{label}</small>
-                          </button>
-                        ))}
-                      </div>
+                      <h4>基本評価（大項目ごと / 100点満点）</h4>
+                      {execMajorCategoryOptions.map((major) => {
+                        const activeScore = Number(selectedMemberExecutiveCommentView.baseByMajor?.[major.id])
+                        return (
+                          <div key={major.id} className="execEvalMajorBaseGroup">
+                            <p className="execEvalMajorBaseTitle">{major.title}</p>
+                            <div className="execEvalBaseButtons">
+                              {[
+                                [100, '優秀'],
+                                [80, '良好'],
+                                [60, '標準'],
+                                [40, '要改善'],
+                                [20, '不十分'],
+                              ].map(([score, label]) => (
+                                <button
+                                  key={`${major.id}-${score}`}
+                                  type="button"
+                                  className={`execEvalBaseBtn ${activeScore === score ? 'isActive' : ''}`}
+                                  onClick={() => handleExecBaseScoreChange(major.id, score)}
+                                >
+                                  <strong>{score}</strong>
+                                  <small>{label}</small>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )
+                      })}
                     </article>
                     <article className="execEvalSection">
                       <h4>コメント評価（加減点）</h4>
@@ -8832,6 +9063,22 @@ function AdminMockPage({
                             {n > 0 ? `+${n}` : n}
                           </button>
                         ))}
+                      </div>
+                      <div className="execEvalMajorSelectRow">
+                        <label className="execEvalMajorField">
+                          対象大項目（必須）
+                          <select
+                            value={execDraftMajorCategory}
+                            onChange={(event) => setExecDraftMajorCategory(event.target.value)}
+                          >
+                            <option value="">選択してください</option>
+                            {execMajorCategoryOptions.map((row) => (
+                              <option key={row.id} value={row.id}>
+                                {row.title}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
                       </div>
                       <div className="execEvalCommentForm">
                         <input
@@ -8861,6 +9108,12 @@ function AdminMockPage({
                               <span className="execEvalHistoryDate">{formatExecutiveCommentDate(row.createdAt)}</span>
                             </div>
                             <p className="execEvalHistoryComment">{row.comment}</p>
+                            <p className="execEvalHistoryMeta">
+                              対象大項目:{' '}
+                              {execMajorCategoryLabelById[row.majorCategoryKey] ??
+                                row.majorCategoryKey ??
+                                '未分類（再選択してください）'}
+                            </p>
                             <div className="execEvalHistoryActions">
                               <button type="button" onClick={() => handleExecRemoveComment(row.id)}>
                                 削除
@@ -9273,47 +9526,16 @@ function EmployeeManagePage({
   const [directoryCsvMessage, setDirectoryCsvMessage] = useState('')
 
   const scoreByEmployeeId = useMemo(() => {
-    const evalEntryForEmployee = (evalMap, employeeId) => {
-      if (!evalMap || typeof evalMap !== 'object') return undefined
-      const t = String(employeeId ?? '').trim()
-      if (!t) return undefined
-      const key = Object.keys(evalMap).find((k) => String(k ?? '').trim() === t)
-      return key !== undefined ? evalMap[key] : undefined
-    }
-    const evalScoreTo100 = (evalMap, employee) => {
-      const categories = buildEvalCategoriesForGrade(evaluationCriteria, employee?.grade)
-      const scores = evalEntryForEmployee(evalMap, employee?.id)?.scores ?? {}
-      const weighted = weightedEvalScore100ByCategories(categories, scores)
-      return Number.isFinite(weighted) ? weighted : 0
-    }
-    const skillScoreTo100 = (employee) => {
-      const gradeSkills = (skills ?? []).filter((s) => s.gradeId === employee.grade)
-      if (!gradeSkills.length) return 0
-      const prog = skillProgress?.[employee.id] ?? {}
-      const ratioAvg =
-        gradeSkills.reduce((sum, s) => {
-          const cur = Math.max(0, Number(prog[s.id] ?? 0))
-          const max = Math.max(1, Number(s.stages) || 1)
-          return sum + Math.min(1, cur / max)
-        }, 0) / gradeSkills.length
-      return ratioAvg * 100
-    }
-    const executiveScoreTo100 = (employeeId) => {
-      const ex = evalEntryForEmployee(executiveEvalByEmployee, employeeId)
-      if (!ex) return 0
-      const base = Number(ex.baseScore ?? 0) || 0
-      const commentTotal = Array.isArray(ex.commentHistory)
-        ? ex.commentHistory.reduce((sum, row) => sum + (Number(row.delta) || 0), 0)
-        : 0
-      return Math.max(0, Math.min(100, base + commentTotal))
-    }
     const out = {}
     for (const row of rows) {
-      const skill100 = skillScoreTo100(row)
-      const self100 = evalScoreTo100(selfEvalByEmployee, row)
-      const supervisor100 = evalScoreTo100(supervisorEvalByEmployee, row)
-      const executive100 = executiveScoreTo100(row.id)
-      const total = skill100 * 0.3 + self100 * 0.15 + supervisor100 * 0.25 + executive100 * 0.3
+      const total = overallWeightedScore100ForEmployee(row, {
+        skills,
+        skillProgress,
+        selfEvalByEmployee,
+        supervisorEvalByEmployee,
+        executiveEvalByEmployee,
+        evaluationCriteria,
+      })
       out[row.id] = `${total.toFixed(1)}点`
     }
     return out
