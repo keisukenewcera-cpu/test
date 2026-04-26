@@ -5269,6 +5269,9 @@ select:focus {
 .goalMgmtFormModal {
   width: min(100%, 520px);
   padding: 22px 22px 20px;
+  max-height: min(86vh, 760px);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .goalMgmtFormModal h3 {
@@ -7567,6 +7570,7 @@ select:focus {
   .goalMgmtFormModal {
     width: 100%;
     padding: 16px 14px 14px;
+    max-height: calc(100dvh - 20px);
   }
 
   .goalMgmtModalActions {
