@@ -205,7 +205,7 @@ function parseEvalPeriodDefinitionList(raw) {
 function normalizeEvalPeriodDefinitions(raw) {
   const parsed = parseEvalPeriodDefinitionList(raw)
   if (parsed.length) return [...parsed].sort((a, b) => compareEvalPeriodDesc(a.key, b.key))
-  return buildDefaultMarSepEvalPeriods()
+  return []
 }
 
 function mergeEvalPeriodDefinitionArrays(prevRaw, remoteRaw) {
@@ -229,15 +229,12 @@ function mergeEvalPeriodDefinitionArrays(prevRaw, remoteRaw) {
 }
 
 function getSuggestedEvalPeriodKey(definitions) {
-  const all = definitions?.length ? definitions : buildDefaultMarSepEvalPeriods()
+  const all = definitions?.length ? definitions : []
   const globalLike = all.filter((d) => !d.onlyForEmployeeIds?.length)
   const defs = globalLike.length ? globalLike : all
   const keys = defs.map((d) => String(d.key ?? '').trim()).filter(Boolean)
   if (!keys.length) {
-    const d = new Date()
-    const y = d.getFullYear()
-    const half = d.getMonth() < 6 ? 1 : 2
-    return `${y}-H${half}`
+    return ''
   }
   const today = new Date()
   today.setHours(0, 0, 0, 0)
@@ -324,10 +321,6 @@ function buildEvalPeriodSelectOptionList({
   }
   const all = [...fromDefs, ...tail]
   all.sort((a, b) => compareEvalPeriodDesc(a.value, b.value))
-  if (!all.length) {
-    const fb = getSuggestedEvalPeriodKey(normalizeEvalPeriodDefinitions(null))
-    return [{ value: fb, label: fb }]
-  }
   return all
 }
 
@@ -988,10 +981,10 @@ function buildDefaultEvaluationCriteriaFromSelfEval(gradeList) {
         `maj-seed-${cat.id}`,
         cat.items.map((it) =>
           normalizeEvaluationMinor({
-            id: `min-seed-${it.id}`,
-            title: it.title,
+      id: `min-seed-${it.id}`,
+      title: it.title,
             weightPct: it.weightPct,
-            scoreCriteria: criteriaBlobToFiveScores(it.criteria),
+      scoreCriteria: criteriaBlobToFiveScores(it.criteria),
           }),
         ),
       ]),
@@ -1012,7 +1005,7 @@ const MENU_DISPLAY_META = {
   skillup: { tabLabel: 'スキルアップ', description: 'スキル習得状況の確認と管理を行います。' },
   selfeval: { tabLabel: '自己評価', description: '自己評価の実施と確認を行います。' },
   goals: { tabLabel: '目標設定・管理', description: '個人の目標設定と進捗管理を行います。' },
-  bossEval: { tabLabel: '上司評価', description: '部下の評価を実施します。' },
+  bossEval: { tabLabel: '1次評価(上司)', description: '部下の評価を実施します。' },
   execEval: { tabLabel: '経営層評価', description: '従業員を100点満点で評価します。' },
   admin: { tabLabel: '評価者用', description: '全従業員の状況を一覧管理します。' },
   settings: { tabLabel: '設定', description: 'スキル設定・評価基準設定・表示設定を行います。' },
@@ -1141,7 +1134,21 @@ function normalizeEvalByEmployeeMap(raw) {
     if (typeof empId !== 'string' || !empId) continue
     const scores = entry?.scores && typeof entry.scores === 'object' && !Array.isArray(entry.scores) ? { ...entry.scores } : {}
     const comments = entry?.comments && typeof entry.comments === 'object' && !Array.isArray(entry.comments) ? { ...entry.comments } : {}
-    out[empId] = { scores, comments }
+    const commentHistory = Array.isArray(entry?.commentHistory)
+      ? entry.commentHistory
+          .map((h, idx) => {
+            const comment = String(h?.comment ?? '').trim()
+            if (!comment) return null
+            return {
+              id: typeof h?.id === 'string' && h.id ? h.id : `boss-comment-${empId}-${idx}`,
+              comment,
+              majorCategoryKey: String(h?.majorCategoryKey ?? '').trim(),
+              createdAt: String(h?.createdAt ?? '').trim() || new Date().toISOString(),
+            }
+          })
+          .filter(Boolean)
+      : []
+    out[empId] = { scores, comments, commentHistory }
   }
   return out
 }
@@ -1159,9 +1166,9 @@ function normalizeExecutiveEvalByEmployeeMap(raw) {
             Object.entries(entry.baseByMajor)
               .map(([k, v]) => {
                 const kk = String(k ?? '').trim()
-                const vv = Number(v)
-                if (!kk || !Number.isFinite(vv)) return null
-                return [kk, Math.max(0, Math.min(100, Math.round(vv)))]
+                const vv = normalizeExecutiveBaseLevel(v)
+                if (!kk || !Number.isFinite(vv) || vv < 1) return null
+                return [kk, vv]
               })
               .filter(Boolean),
           )
@@ -1183,7 +1190,10 @@ function normalizeExecutiveEvalByEmployeeMap(raw) {
           })
           .filter(Boolean)
       : []
-    out[empId] = { baseScore, baseByMajor, commentHistory }
+    const scores = entry?.scores && typeof entry.scores === 'object' && !Array.isArray(entry.scores) ? { ...entry.scores } : {}
+    const comments =
+      entry?.comments && typeof entry.comments === 'object' && !Array.isArray(entry.comments) ? { ...entry.comments } : {}
+    out[empId] = { baseScore, baseByMajor, commentHistory, scores, comments }
   }
   return out
 }
@@ -1199,6 +1209,10 @@ function normalizeEvalHistoryByEmployeeMap(raw, normalizer) {
       const normalized = normalizer({ [empId]: state })[empId]
       if (!normalized) continue
       const evalGradeRaw = typeof state?.evalGrade === 'string' ? state.evalGrade.trim() : ''
+      const submittedAtRaw = typeof state?.submittedAt === 'string' ? state.submittedAt.trim() : ''
+      const resubmitRequestedAtRaw =
+        typeof state?.resubmitRequestedAt === 'string' ? state.resubmitRequestedAt.trim() : ''
+      const resubmitReasonRaw = typeof state?.resubmitReason === 'string' ? state.resubmitReason.trim() : ''
       periodMap[periodKey] = {
         ...normalized,
         savedAt:
@@ -1206,9 +1220,59 @@ function normalizeEvalHistoryByEmployeeMap(raw, normalizer) {
             ? state.savedAt.trim()
             : new Date().toISOString(),
         ...(evalGradeRaw ? { evalGrade: evalGradeRaw } : {}),
+        ...(submittedAtRaw ? { submittedAt: submittedAtRaw } : {}),
+        ...(resubmitRequestedAtRaw ? { resubmitRequestedAt: resubmitRequestedAtRaw } : {}),
+        ...(resubmitReasonRaw ? { resubmitReason: resubmitReasonRaw } : {}),
       }
     }
     if (Object.keys(periodMap).length) out[empId] = periodMap
+  }
+  return out
+}
+
+function normalizeGoalList(rawList, empId = '') {
+  if (!Array.isArray(rawList)) return []
+  return rawList
+    .map((g, idx) => ({
+      id: typeof g?.id === 'string' && g.id ? g.id : `goal-${empId}-${idx}`,
+      title: String(g?.title ?? '').trim(),
+      detail: String(g?.detail ?? g?.description ?? '').trim(),
+      deadline: String(g?.deadline ?? '').trim(),
+      achieved: Boolean(g?.achieved),
+    }))
+    .filter((g) => g.title && g.deadline)
+}
+
+function normalizeGoalsByEmployeePeriodMap(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const out = {}
+  for (const [empId, periods] of Object.entries(raw)) {
+    if (!empId || !periods || typeof periods !== 'object' || Array.isArray(periods)) continue
+    const periodMap = {}
+    for (const [periodKey, list] of Object.entries(periods)) {
+      const pk = String(periodKey ?? '').trim()
+      if (!pk) continue
+      const normalized = normalizeGoalList(list, empId)
+      if (normalized.length > 0) periodMap[pk] = normalized
+    }
+    if (Object.keys(periodMap).length > 0) out[empId] = periodMap
+  }
+  return out
+}
+
+function normalizeGoalDirectionByEmployeePeriodMap(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const out = {}
+  for (const [empId, periods] of Object.entries(raw)) {
+    if (!empId || !periods || typeof periods !== 'object' || Array.isArray(periods)) continue
+    const periodMap = {}
+    for (const [periodKey, value] of Object.entries(periods)) {
+      const pk = String(periodKey ?? '').trim()
+      const v = String(value ?? '').trim()
+      if (!pk || !v) continue
+      periodMap[pk] = v
+    }
+    if (Object.keys(periodMap).length > 0) out[empId] = periodMap
   }
   return out
 }
@@ -1547,21 +1611,49 @@ function App() {
     }
     return init
   })
-  const [goalsByEmployee, setGoalsByEmployee] = useState(() => {
-    const raw = savedData?.goalsByEmployee
+  const [goalsByEmployeePeriod, setGoalsByEmployeePeriod] = useState(() => {
+    const periodRaw = normalizeGoalsByEmployeePeriodMap(savedData?.goalsByEmployeePeriod)
+    if (Object.keys(periodRaw).length > 0) return periodRaw
+    const legacy = savedData?.goalsByEmployee
+    if (!legacy || typeof legacy !== 'object' || Array.isArray(legacy)) return {}
+    const active = String(__initEvalPeriodState.active ?? '').trim()
+    if (!active) return {}
+    const out = {}
+    for (const [empId, list] of Object.entries(legacy)) {
+      const normalized = normalizeGoalList(list, empId)
+      if (!normalized.length) continue
+      out[empId] = { [active]: normalized }
+    }
+    return out
+  })
+  const [goalDirectionByEmployeePeriod, setGoalDirectionByEmployeePeriod] = useState(() => {
+    const periodRaw = normalizeGoalDirectionByEmployeePeriodMap(savedData?.goalDirectionByEmployeePeriod)
+    if (Object.keys(periodRaw).length > 0) return periodRaw
+    const legacy = savedData?.goalDirectionByEmployee
+    if (!legacy || typeof legacy !== 'object' || Array.isArray(legacy)) return {}
+    const active = String(__initEvalPeriodState.active ?? '').trim()
+    if (!active) return {}
+    const out = {}
+    for (const [empId, value] of Object.entries(legacy)) {
+      const v = String(value ?? '').trim()
+      if (!empId || !v) continue
+      out[empId] = { [active]: v }
+    }
+    return out
+  })
+  const [goalSubmissionByEmployee, setGoalSubmissionByEmployee] = useState(() => {
+    const raw = savedData?.goalSubmissionByEmployee
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
     const out = {}
-    for (const [empId, list] of Object.entries(raw)) {
-      if (!Array.isArray(list)) continue
-      out[empId] = list
-        .map((g, idx) => ({
-          id: typeof g?.id === 'string' && g.id ? g.id : `goal-${empId}-${idx}`,
-          title: String(g?.title ?? '').trim(),
-          detail: String(g?.detail ?? g?.description ?? '').trim(),
-          deadline: String(g?.deadline ?? '').trim(),
-          achieved: Boolean(g?.achieved),
-        }))
-        .filter((g) => g.title && g.deadline)
+    for (const [empId, periods] of Object.entries(raw)) {
+      if (!empId || !periods || typeof periods !== 'object' || Array.isArray(periods)) continue
+      const periodMap = {}
+      for (const [periodKey, state] of Object.entries(periods)) {
+        const submittedAt = typeof state?.submittedAt === 'string' ? state.submittedAt.trim() : ''
+        if (!periodKey || !submittedAt) continue
+        periodMap[periodKey] = { submittedAt }
+      }
+      if (Object.keys(periodMap).length) out[empId] = periodMap
     }
     return out
   })
@@ -2098,23 +2190,225 @@ function App() {
   const loggedInAccountLabel = loginMode === 'admin' ? '管理者' : loggedInEmployee?.name ?? '従業員'
 
   const goalMgmtEmployee = loggedInEmployee
+  const goalMgmtPeriodKey = String(activeEvalPeriodKey ?? getSuggestedEvalPeriodKey(evalPeriodDefinitions) ?? '').trim()
   const goalMgmtGoals = useMemo(
-    () => (goalMgmtEmployee ? goalsByEmployee[goalMgmtEmployee.id] ?? [] : []),
-    [goalMgmtEmployee, goalsByEmployee],
+    () => (goalMgmtEmployee && goalMgmtPeriodKey ? goalsByEmployeePeriod?.[goalMgmtEmployee.id]?.[goalMgmtPeriodKey] ?? [] : []),
+    [goalMgmtEmployee, goalMgmtPeriodKey, goalsByEmployeePeriod],
   )
+  const goalMgmtDirection = useMemo(
+    () =>
+      goalMgmtEmployee && goalMgmtPeriodKey
+        ? String(goalDirectionByEmployeePeriod?.[goalMgmtEmployee.id]?.[goalMgmtPeriodKey] ?? '')
+        : '',
+    [goalMgmtEmployee, goalMgmtPeriodKey, goalDirectionByEmployeePeriod],
+  )
+  const goalMgmtWeightedTotal100 = useMemo(() => {
+    return overallWeightedScore100ForEmployee(goalMgmtEmployee, {
+      skills: skillSettings,
+      skillProgress: skillEmployeeProgress,
+      selfEvalByEmployee,
+      supervisorEvalByEmployee,
+      executiveEvalByEmployee,
+      evaluationCriteria,
+    })
+  }, [
+    goalMgmtEmployee,
+    skillSettings,
+    skillEmployeeProgress,
+    selfEvalByEmployee,
+    supervisorEvalByEmployee,
+    executiveEvalByEmployee,
+    evaluationCriteria,
+  ])
+  const goalMgmtActiveEvalGrade = useMemo(() => {
+    if (!goalMgmtEmployee) return ''
+    const periodKey = String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '').trim()
+    const empId = String(goalMgmtEmployee.id ?? '').trim()
+    const selfStored = String(selfEvalHistoryByEmployee?.[empId]?.[periodKey]?.evalGrade ?? '').trim()
+    const bossStored = String(supervisorEvalHistoryByEmployee?.[empId]?.[periodKey]?.evalGrade ?? '').trim()
+    const preferred = selfStored || bossStored || String(goalMgmtEmployee.grade ?? '').trim()
+    const byGrade =
+      evaluationCriteria?.byGrade &&
+      typeof evaluationCriteria.byGrade === 'object' &&
+      !Array.isArray(evaluationCriteria.byGrade)
+        ? evaluationCriteria.byGrade
+        : {}
+    const gradeIds = Object.keys(byGrade).filter((k) => Array.isArray(byGrade[k]))
+    if (preferred && gradeIds.includes(preferred)) return preferred
+    const current = String(goalMgmtEmployee.grade ?? '').trim()
+    if (current && gradeIds.includes(current)) return current
+    return gradeIds[0] ?? preferred ?? current
+  }, [
+    goalMgmtEmployee,
+    activeEvalPeriodKey,
+    evalPeriodFallbackKey,
+    selfEvalHistoryByEmployee,
+    supervisorEvalHistoryByEmployee,
+    evaluationCriteria,
+  ])
+  const goalMgmtEvalRadarSeries = useMemo(() => {
+    if (!goalMgmtEmployee) return []
+    const empId = String(goalMgmtEmployee.id ?? '').trim()
+    if (!empId) return []
+    const activeKey = String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '').trim()
+    const selfHist = selfEvalHistoryByEmployee?.[empId] ?? {}
+    const bossHist = supervisorEvalHistoryByEmployee?.[empId] ?? {}
+    const execHist = executiveEvalHistoryByEmployee?.[empId] ?? {}
+    const execPeriodKeys = Object.keys(execHist).filter((k) => k !== 'cumulative')
+    const periodKeys = [...new Set([...Object.keys(selfHist), ...Object.keys(bossHist), ...execPeriodKeys, activeKey].filter(Boolean))]
+      .sort(compareEvalPeriodDesc)
+      .slice(0, 3)
+    if (!periodKeys.length) return []
+    const sharedMajors = Array.isArray(evaluationCriteria?.sharedMajors) ? evaluationCriteria.sharedMajors : []
+    const axisMajors = (sharedMajors.length
+      ? sharedMajors.map((m, idx) => ({
+          id: String(m?.id ?? '').trim() || `major-${idx}`,
+          title: String(m?.title ?? '').trim() || `大項目${idx + 1}`,
+        }))
+      : buildEvalCategoriesForGrade(evaluationCriteria, goalMgmtActiveEvalGrade).map((c, idx) => ({
+          id: String(c?.id ?? '').trim() || `major-${idx}`,
+          title: String(c?.title ?? '').trim() || `大項目${idx + 1}`,
+        }))
+    ).slice(0, 8)
+    if (!axisMajors.length) return []
+    const palette = ['#2563eb', '#059669', '#7c3aed']
+    return periodKeys
+      .map((periodKey, idx) => {
+        const periodGrade =
+          String(selfHist?.[periodKey]?.evalGrade ?? '').trim() ||
+          String(bossHist?.[periodKey]?.evalGrade ?? '').trim() ||
+          goalMgmtActiveEvalGrade
+        const periodCats = buildEvalCategoriesForGrade(evaluationCriteria, periodGrade)
+        const catById = new Map(periodCats.map((c) => [String(c?.id ?? '').trim(), c]))
+        const catByTitle = new Map(periodCats.map((c) => [String(c?.title ?? '').trim(), c]))
+        const selfScores =
+          periodKey === activeKey
+            ? {
+                ...(selfHist?.[periodKey]?.scores ?? {}),
+                ...(selfEvalByEmployee?.[empId]?.scores ?? {}),
+              }
+            : { ...(selfHist?.[periodKey]?.scores ?? {}) }
+        const bossScores =
+          periodKey === activeKey
+            ? {
+                ...(bossHist?.[periodKey]?.scores ?? {}),
+                ...(supervisorEvalByEmployee?.[empId]?.scores ?? {}),
+              }
+            : { ...(bossHist?.[periodKey]?.scores ?? {}) }
+        const periodExecState =
+          periodKey === activeKey
+            ? (executiveEvalByEmployee?.[empId] ?? execHist?.[periodKey] ?? execHist?.cumulative)
+            : (execHist?.[periodKey] ?? null)
+        const execByMajor = executiveEvalCategoryScores100(axisMajors, periodExecState)
+        const rows = axisMajors.map((major) => {
+          const cat = catById.get(major.id) || catByTitle.get(major.title)
+          const self100 = weightedEvalScore100ByItems(cat?.items ?? [], selfScores)
+          const boss100 = weightedEvalScore100ByItems(cat?.items ?? [], bossScores)
+          const exec100 = Number.isFinite(execByMajor?.[major.id]) ? execByMajor[major.id] : Number.NaN
+          const totalParts = [self100, boss100, exec100].filter((v) => Number.isFinite(v))
+          const total100 = totalParts.length ? totalParts.reduce((sum, v) => sum + v, 0) / totalParts.length : Number.NaN
+          return {
+            id: major.id,
+            title: major.title,
+            self100: Number.isFinite(self100) ? self100 : Number.NaN,
+            boss100: Number.isFinite(boss100) ? boss100 : Number.NaN,
+            exec100,
+            total100,
+          }
+        })
+        const hasAny = rows.some(
+          (r) => Number.isFinite(r.self100) || Number.isFinite(r.boss100) || Number.isFinite(r.exec100),
+        )
+        if (!hasAny) return null
+        return {
+          periodKey,
+          label: idx === 0 ? `${periodKey}（最新）` : periodKey,
+          color: palette[idx] ?? palette[palette.length - 1],
+          rows,
+        }
+      })
+      .filter(Boolean)
+  }, [
+    goalMgmtEmployee,
+    activeEvalPeriodKey,
+    evalPeriodFallbackKey,
+    selfEvalHistoryByEmployee,
+    supervisorEvalHistoryByEmployee,
+    executiveEvalByEmployee,
+    executiveEvalHistoryByEmployee,
+    selfEvalByEmployee,
+    supervisorEvalByEmployee,
+    goalMgmtActiveEvalGrade,
+    evaluationCriteria,
+  ])
+  const goalMgmtSubmittedForActive = useMemo(() => {
+    const empId = String(goalMgmtEmployee?.id ?? '').trim()
+    const periodKey = String(activeEvalPeriodKey ?? getSuggestedEvalPeriodKey(evalPeriodDefinitions) ?? '').trim()
+    if (!empId || !periodKey) return false
+    return Boolean(goalSubmissionByEmployee?.[empId]?.[periodKey]?.submittedAt)
+  }, [goalMgmtEmployee?.id, activeEvalPeriodKey, evalPeriodDefinitions, goalSubmissionByEmployee])
 
   const setGoalMgmtGoals = useCallback(
     (updater) => {
-      setGoalsByEmployee((prev) => {
+      setGoalsByEmployeePeriod((prev) => {
         const emp = goalMgmtEmployee
-        if (!emp) return prev
-        const cur = prev[emp.id] ?? []
+        const periodKey = String(activeEvalPeriodKey ?? getSuggestedEvalPeriodKey(evalPeriodDefinitions) ?? '').trim()
+        if (!emp || !periodKey) return prev
+        const cur = prev?.[emp.id]?.[periodKey] ?? []
         const next = typeof updater === 'function' ? updater(cur) : updater
-        return { ...prev, [emp.id]: Array.isArray(next) ? next : cur }
+        return {
+          ...(prev ?? {}),
+          [emp.id]: {
+            ...((prev ?? {})[emp.id] ?? {}),
+            [periodKey]: Array.isArray(next) ? next : cur,
+          },
+        }
       })
     },
-    [goalMgmtEmployee],
+    [goalMgmtEmployee, activeEvalPeriodKey, evalPeriodDefinitions],
   )
+  const setGoalMgmtDirection = useCallback(
+    (nextValue) => {
+      setGoalDirectionByEmployeePeriod((prev) => {
+        const emp = goalMgmtEmployee
+        const periodKey = String(activeEvalPeriodKey ?? getSuggestedEvalPeriodKey(evalPeriodDefinitions) ?? '').trim()
+        if (!emp || !periodKey) return prev
+        const v = String(nextValue ?? '').trim()
+        if (!v) {
+          const currentByEmp = { ...((prev ?? {})[emp.id] ?? {}) }
+          delete currentByEmp[periodKey]
+          if (Object.keys(currentByEmp).length < 1) {
+            const { [emp.id]: _removed, ...rest } = prev ?? {}
+            return rest
+          }
+          return { ...(prev ?? {}), [emp.id]: currentByEmp }
+        }
+        return {
+          ...(prev ?? {}),
+          [emp.id]: {
+            ...((prev ?? {})[emp.id] ?? {}),
+            [periodKey]: v,
+          },
+        }
+      })
+    },
+    [goalMgmtEmployee, activeEvalPeriodKey, evalPeriodDefinitions],
+  )
+  const submitGoalMgmtForActivePeriod = useCallback(() => {
+    const empId = String(goalMgmtEmployee?.id ?? '').trim()
+    const periodKey = String(activeEvalPeriodKey ?? getSuggestedEvalPeriodKey(evalPeriodDefinitions) ?? '').trim()
+    if (!empId || !periodKey) return
+    const confirmed = window.confirm(`目標管理（${periodKey}）を提出しますか？提出後はこの期の編集をロックします。`)
+    if (!confirmed) return
+    const now = new Date().toISOString()
+    setGoalSubmissionByEmployee((prev) => ({
+      ...(prev ?? {}),
+      [empId]: {
+        ...((prev ?? {})[empId] ?? {}),
+        [periodKey]: { submittedAt: now },
+      },
+    }))
+  }, [goalMgmtEmployee?.id, activeEvalPeriodKey, evalPeriodDefinitions])
 
   const evalSubjectEmployee = useMemo(() => {
     if (!employeeDirectoryRows.length) return null
@@ -2170,6 +2464,31 @@ function App() {
     return map
   }, [employeeDirectoryRows])
   const effectiveEvalPeriodKey = activeEvalPeriodKey ?? evalPeriodFallbackKey
+  const selfBossGapForPeriod = useCallback(
+    (employeeId, periodKey) => {
+      const empId = String(employeeId ?? '').trim()
+      const pk = String(periodKey ?? '').trim()
+      if (!empId || !pk) return Number.NaN
+      const selfState = selfEvalHistoryByEmployee?.[empId]?.[pk] ?? { scores: selfEvalByEmployee?.[empId]?.scores ?? {} }
+      const bossState = supervisorEvalByEmployee?.[empId] ?? supervisorEvalHistoryByEmployee?.[empId]?.[pk] ?? { scores: {} }
+      const evalGrade =
+        String(selfState?.evalGrade ?? supervisorEvalHistoryByEmployee?.[empId]?.[pk]?.evalGrade ?? evalGradeByEmployeeId?.[empId] ?? '')
+          .trim()
+      const categories = buildEvalCategoriesForGrade(evaluationCriteria, evalGrade)
+      const self100 = weightedEvalScore100ByCategories(categories, selfState?.scores ?? {})
+      const boss100 = weightedEvalScore100ByCategories(categories, bossState?.scores ?? {})
+      if (!Number.isFinite(self100) || !Number.isFinite(boss100)) return Number.NaN
+      return Math.abs(self100 - boss100)
+    },
+    [
+      selfEvalHistoryByEmployee,
+      selfEvalByEmployee,
+      supervisorEvalByEmployee,
+      supervisorEvalHistoryByEmployee,
+      evalGradeByEmployeeId,
+      evaluationCriteria,
+    ],
+  )
   const selfEvalSubmittedForActive = Boolean(
     evalSubjectEmployee?.id &&
       selfEvalHistoryByEmployee?.[evalSubjectEmployee.id]?.[effectiveEvalPeriodKey]?.submittedAt,
@@ -2177,6 +2496,10 @@ function App() {
   const supervisorEvalSubmittedForActive = Boolean(
     evalSubjectEmployee?.id &&
       supervisorEvalHistoryByEmployee?.[evalSubjectEmployee.id]?.[effectiveEvalPeriodKey]?.submittedAt,
+  )
+  const executiveEvalSubmittedForActive = Boolean(
+    evalSubjectEmployee?.id &&
+      executiveEvalHistoryByEmployee?.[evalSubjectEmployee.id]?.[effectiveEvalPeriodKey]?.submittedAt,
   )
 
   const submitSelfEvalForActivePeriod = useCallback(() => {
@@ -2194,15 +2517,17 @@ function App() {
           [effectiveEvalPeriodKey]: {
             ...current,
             submittedAt: now,
+            resubmitRequestedAt: '',
+            resubmitReason: '',
           },
         },
       }
     })
-  }, [evalSubjectEmployee?.id, effectiveEvalPeriodKey])
+  }, [evalSubjectEmployee?.id, effectiveEvalPeriodKey, selfBossGapForPeriod])
 
   const submitSupervisorEvalForActivePeriod = useCallback(() => {
     if (!evalSubjectEmployee?.id || !effectiveEvalPeriodKey) return
-    const confirmed = window.confirm(`上司評価（${effectiveEvalPeriodKey}）を提出しますか？提出後はこの期を編集できません。`)
+    const confirmed = window.confirm(`1次評価(上司)（${effectiveEvalPeriodKey}）を提出しますか？提出後はこの期を編集できません。`)
     if (!confirmed) return
     const now = new Date().toISOString()
     setSupervisorEvalHistoryByEmployee((prev) => {
@@ -2219,7 +2544,114 @@ function App() {
         },
       }
     })
+    const gap = selfBossGapForPeriod(evalSubjectEmployee.id, effectiveEvalPeriodKey)
+    if (Number.isFinite(gap) && gap >= SELF_BOSS_GAP_ALERT_THRESHOLD) {
+      setSelfEvalHistoryByEmployee((prev) => {
+        const empId = evalSubjectEmployee.id
+        const current = prev?.[empId]?.[effectiveEvalPeriodKey]
+        if (!current) return prev
+        return {
+          ...(prev ?? {}),
+          [empId]: {
+            ...((prev ?? {})[empId] ?? {}),
+            [effectiveEvalPeriodKey]: {
+              ...current,
+              submittedAt: '',
+              resubmitRequestedAt: now,
+              resubmitReason: `1次評価との乖離が${gap.toFixed(1)}点のため再提出が必要です`,
+            },
+          },
+        }
+      })
+      window.alert(`自己/1次評価の乖離が${gap.toFixed(1)}点です。自己評価の再提出を依頼しました。`)
+    }
   }, [evalSubjectEmployee?.id, effectiveEvalPeriodKey])
+  const submitSupervisorEvalForMember = useCallback(
+    (employeeId) => {
+      const empId = String(employeeId ?? '').trim()
+      if (!empId || !effectiveEvalPeriodKey) return
+      const confirmed = window.confirm(`1次評価(上司)（${effectiveEvalPeriodKey}）を提出しますか？提出後はこの期を編集できません。`)
+      if (!confirmed) return
+      const now = new Date().toISOString()
+      setSupervisorEvalHistoryByEmployee((prev) => {
+        const current = prev?.[empId]?.[effectiveEvalPeriodKey] ?? {}
+        return {
+          ...(prev ?? {}),
+          [empId]: {
+            ...((prev ?? {})[empId] ?? {}),
+            [effectiveEvalPeriodKey]: {
+              ...current,
+              submittedAt: now,
+            },
+          },
+        }
+      })
+      const gap = selfBossGapForPeriod(empId, effectiveEvalPeriodKey)
+      if (Number.isFinite(gap) && gap >= SELF_BOSS_GAP_ALERT_THRESHOLD) {
+        setSelfEvalHistoryByEmployee((prev) => {
+          const current = prev?.[empId]?.[effectiveEvalPeriodKey]
+          if (!current) return prev
+          return {
+            ...(prev ?? {}),
+            [empId]: {
+              ...((prev ?? {})[empId] ?? {}),
+              [effectiveEvalPeriodKey]: {
+                ...current,
+                submittedAt: '',
+                resubmitRequestedAt: now,
+                resubmitReason: `1次評価との乖離が${gap.toFixed(1)}点のため再提出が必要です`,
+              },
+            },
+          }
+        })
+        window.alert(`自己/1次評価の乖離が${gap.toFixed(1)}点です。自己評価の再提出を依頼しました。`)
+      }
+    },
+    [effectiveEvalPeriodKey, selfBossGapForPeriod],
+  )
+  const submitExecutiveEvalForActivePeriod = useCallback(() => {
+    if (!evalSubjectEmployee?.id || !effectiveEvalPeriodKey) return
+    const confirmed = window.confirm(`2次評価(経営層)（${effectiveEvalPeriodKey}）を提出しますか？提出後はこの期を編集できません。`)
+    if (!confirmed) return
+    const now = new Date().toISOString()
+    setExecutiveEvalHistoryByEmployee((prev) => {
+      const empId = evalSubjectEmployee.id
+      const current = prev?.[empId]?.[effectiveEvalPeriodKey] ?? {}
+      return {
+        ...(prev ?? {}),
+        [empId]: {
+          ...((prev ?? {})[empId] ?? {}),
+          [effectiveEvalPeriodKey]: {
+            ...current,
+            submittedAt: now,
+          },
+        },
+      }
+    })
+  }, [evalSubjectEmployee?.id, effectiveEvalPeriodKey])
+  const submitExecutiveEvalForMember = useCallback(
+    (employeeId) => {
+      const empId = String(employeeId ?? '').trim()
+      if (!empId || !effectiveEvalPeriodKey) return
+      const confirmed = window.confirm(`2次評価(経営層)（${effectiveEvalPeriodKey}）を提出しますか？提出後はこの期を編集できません。`)
+      if (!confirmed) return
+      const now = new Date().toISOString()
+      setExecutiveEvalHistoryByEmployee((prev) => {
+        const current = prev?.[empId]?.[effectiveEvalPeriodKey] ?? {}
+        return {
+          ...(prev ?? {}),
+          [empId]: {
+            ...((prev ?? {})[empId] ?? {}),
+            [effectiveEvalPeriodKey]: {
+              ...current,
+              submittedAt: now,
+            },
+          },
+        }
+      })
+    },
+    [effectiveEvalPeriodKey],
+  )
 
   const cleanupEvalPeriodHistory = useCallback(() => {
     const allowed = new Set(
@@ -2241,6 +2673,35 @@ function App() {
     selfEvalHistoryByEmployee,
     supervisorEvalHistoryByEmployee,
   ])
+  const removeEvalPeriodKeyEverywhere = useCallback((periodKey) => {
+    const target = String(periodKey ?? '').trim()
+    if (!target) return 0
+    const pruneOneKey = (historyMap) => {
+      if (!historyMap || typeof historyMap !== 'object' || Array.isArray(historyMap)) return historyMap
+      const next = {}
+      for (const [employeeId, periods] of Object.entries(historyMap)) {
+        if (!periods || typeof periods !== 'object' || Array.isArray(periods)) continue
+        const kept = Object.fromEntries(
+          Object.entries(periods).filter(([k]) => String(k ?? '').trim() !== target),
+        )
+        if (Object.keys(kept).length > 0) next[employeeId] = kept
+      }
+      return next
+    }
+    setSelfEvalHistoryByEmployee((prev) => pruneOneKey(prev))
+    setSupervisorEvalHistoryByEmployee((prev) => pruneOneKey(prev))
+    setExecutiveEvalHistoryByEmployee((prev) => pruneOneKey(prev))
+    setEmployeeDirectoryRows((prev) =>
+      (prev ?? []).map((row) => {
+        const current = normalizeExtraEvalPeriodsForEmployee(row)
+        const next = current.filter((p) => String(p?.key ?? '').trim() !== target)
+        if (next.length === current.length) return row
+        return { ...row, extraEvalPeriods: next }
+      }),
+    )
+    setActiveEvalPeriodKey((prev) => (String(prev ?? '').trim() === target ? '' : prev))
+    return 1
+  }, [])
 
   useEffect(() => {
     const valid = new Set(evalPeriodSelectOptions.map((o) => o.value))
@@ -2266,9 +2727,17 @@ function App() {
     (updater) => {
       if (!evalSubjectEmployee) return
       setSupervisorEvalByEmployee((prev) => {
-        const cur = prev[evalSubjectEmployee.id] ?? { scores: {}, comments: {} }
+        const currentRaw = prev?.[evalSubjectEmployee.id] ?? { scores: {}, comments: {}, commentHistory: [] }
+        const cur = { scores: currentRaw.scores ?? {}, comments: currentRaw.comments ?? {} }
         const next = typeof updater === 'function' ? updater(cur) : updater
-        return { ...prev, [evalSubjectEmployee.id]: next }
+        return {
+          ...(prev ?? {}),
+          [evalSubjectEmployee.id]: {
+            ...currentRaw,
+            scores: { ...(next?.scores ?? {}) },
+            comments: { ...(next?.comments ?? {}) },
+          },
+        }
       })
     },
     [evalSubjectEmployee],
@@ -2299,9 +2768,17 @@ function App() {
     const nextSelf = fromHistory(selfEvalHistoryByEmployee, normalizeEvalByEmployeeMap)
     const nextSupervisor = fromHistory(supervisorEvalHistoryByEmployee, normalizeEvalByEmployeeMap)
     setSelfEvalByEmployee((prev) => (areEvalStateMapsEqual(prev, nextSelf) ? prev : nextSelf))
-    setSupervisorEvalByEmployee((prev) =>
-      areEvalStateMapsEqual(prev, nextSupervisor) ? prev : nextSupervisor,
-    )
+    setSupervisorEvalByEmployee((prev) => {
+      if (areEvalStateMapsEqual(prev, nextSupervisor)) return prev
+      const merged = {}
+      for (const [empId, state] of Object.entries(nextSupervisor ?? {})) {
+        merged[empId] = {
+          ...state,
+          commentHistory: Array.isArray(prev?.[empId]?.commentHistory) ? prev[empId].commentHistory : [],
+        }
+      }
+      return merged
+    })
   }, [activeEvalPeriodKey, selfEvalHistoryByEmployee, supervisorEvalHistoryByEmployee])
 
   const activeEvalPeriodRef = useRef(activeEvalPeriodKey)
@@ -2726,42 +3203,44 @@ function App() {
 
   const buildPersistPayload = (includeSensitive = true) => {
     const payload = {
-      rows,
+    rows,
       employeeDirectoryRows: includeSensitive ? employeeDirectoryRows : stripSensitiveEmployeeFields(employeeDirectoryRows),
-      skillSettings,
-      skillSections,
-      skillGrades,
-      skillActiveGradeId,
-      skillEmployeeProgress,
-      skillProgressUpdatedAtByEmployee,
-      goalsByEmployee,
-      evaluationCriteria,
-      menuVisibilityByRole,
+    skillSettings,
+    skillSections,
+    skillGrades,
+    skillActiveGradeId,
+    skillEmployeeProgress,
+    skillProgressUpdatedAtByEmployee,
+      goalsByEmployeePeriod,
+      goalDirectionByEmployeePeriod,
+      goalSubmissionByEmployee,
+    evaluationCriteria,
+    menuVisibilityByRole,
       activeEvalPeriodKey,
       evalPeriodDefinitions,
-      selfEvalByEmployee,
-      supervisorEvalByEmployee,
-      executiveEvalByEmployee,
+    selfEvalByEmployee,
+    supervisorEvalByEmployee,
+    executiveEvalByEmployee,
       selfEvalHistoryByEmployee,
       supervisorEvalHistoryByEmployee,
       executiveEvalHistoryByEmployee,
       countCurrent,
       countHourlyTarget,
       countIsRunning,
-      departmentSalesDenture,
-      departmentSalesCk,
-      performanceRatePercentDenture,
-      performanceRatePercentCk,
-      targetSpecialDentureTotal,
-      targetSpecialCkTotal,
-      sortKey,
-      sortOrder,
+    departmentSalesDenture,
+    departmentSalesCk,
+    performanceRatePercentDenture,
+    performanceRatePercentCk,
+    targetSpecialDentureTotal,
+    targetSpecialCkTotal,
+    sortKey,
+    sortOrder,
       gyosekiTeamFilter,
       gyosekiRowView,
-      workspaceView,
-      settingsTab,
-      activePage,
-      snapshotPeriod,
+    workspaceView,
+    settingsTab,
+    activePage,
+    snapshotPeriod,
       employeeDeptOptions,
       promotionRequests,
     }
@@ -2819,23 +3298,49 @@ function App() {
     ) {
       setSkillProgressUpdatedAtByEmployee({ ...payload.skillProgressUpdatedAtByEmployee })
     }
-    if (payload.goalsByEmployee && typeof payload.goalsByEmployee === 'object' && !Array.isArray(payload.goalsByEmployee)) {
-      setGoalsByEmployee((prev) => {
-        const merged = { ...prev }
+    const periodGoals = normalizeGoalsByEmployeePeriodMap(payload.goalsByEmployeePeriod)
+    if (Object.keys(periodGoals).length > 0) {
+      setGoalsByEmployeePeriod(periodGoals)
+    } else if (payload.goalsByEmployee && typeof payload.goalsByEmployee === 'object' && !Array.isArray(payload.goalsByEmployee)) {
+      const active = String(payload.activeEvalPeriodKey ?? activeEvalPeriodKey ?? '').trim()
+      if (active) {
+        const legacyConverted = {}
         for (const [empId, list] of Object.entries(payload.goalsByEmployee)) {
-          if (!Array.isArray(list)) continue
-          merged[empId] = list
-            .map((g, idx) => ({
-              id: typeof g?.id === 'string' && g.id ? g.id : `goal-${empId}-${idx}`,
-              title: String(g?.title ?? '').trim(),
-              detail: String(g?.detail ?? g?.description ?? '').trim(),
-              deadline: String(g?.deadline ?? '').trim(),
-              achieved: Boolean(g?.achieved),
-            }))
-            .filter((g) => g.title && g.deadline)
+          const normalized = normalizeGoalList(list, empId)
+          if (!normalized.length) continue
+          legacyConverted[empId] = { [active]: normalized }
         }
-        return merged
-      })
+        setGoalsByEmployeePeriod(legacyConverted)
+      }
+    }
+    const periodDirections = normalizeGoalDirectionByEmployeePeriodMap(payload.goalDirectionByEmployeePeriod)
+    if (Object.keys(periodDirections).length > 0) {
+      setGoalDirectionByEmployeePeriod(periodDirections)
+    } else if (payload.goalDirectionByEmployee && typeof payload.goalDirectionByEmployee === 'object' && !Array.isArray(payload.goalDirectionByEmployee)) {
+      const active = String(payload.activeEvalPeriodKey ?? activeEvalPeriodKey ?? '').trim()
+      if (active) {
+        const legacyConverted = {}
+        for (const [empId, value] of Object.entries(payload.goalDirectionByEmployee)) {
+          const v = String(value ?? '').trim()
+          if (!empId || !v) continue
+          legacyConverted[empId] = { [active]: v }
+        }
+        setGoalDirectionByEmployeePeriod(legacyConverted)
+      }
+    }
+    if (payload.goalSubmissionByEmployee && typeof payload.goalSubmissionByEmployee === 'object' && !Array.isArray(payload.goalSubmissionByEmployee)) {
+      const out = {}
+      for (const [empId, periods] of Object.entries(payload.goalSubmissionByEmployee)) {
+        if (!empId || !periods || typeof periods !== 'object' || Array.isArray(periods)) continue
+        const periodMap = {}
+        for (const [periodKey, state] of Object.entries(periods)) {
+          const submittedAt = typeof state?.submittedAt === 'string' ? state.submittedAt.trim() : ''
+          if (!periodKey || !submittedAt) continue
+          periodMap[periodKey] = { submittedAt }
+        }
+        if (Object.keys(periodMap).length) out[empId] = periodMap
+      }
+      setGoalSubmissionByEmployee(out)
     }
     if (payload.evaluationCriteria && typeof payload.evaluationCriteria === 'object' && !Array.isArray(payload.evaluationCriteria)) {
       const gradeList =
@@ -3118,7 +3623,9 @@ function App() {
     skillActiveGradeId,
     skillEmployeeProgress,
     skillProgressUpdatedAtByEmployee,
-    goalsByEmployee,
+    goalsByEmployeePeriod,
+    goalDirectionByEmployeePeriod,
+    goalSubmissionByEmployee,
     evaluationCriteria,
     menuVisibilityByRole,
     evalPeriodDefinitions,
@@ -3168,7 +3675,9 @@ function App() {
     skillActiveGradeId,
     skillEmployeeProgress,
     skillProgressUpdatedAtByEmployee,
-    goalsByEmployee,
+    goalsByEmployeePeriod,
+    goalDirectionByEmployeePeriod,
+    goalSubmissionByEmployee,
     evaluationCriteria,
     menuVisibilityByRole,
     evalPeriodDefinitions,
@@ -3650,24 +4159,24 @@ function App() {
                       {sortedRows.map((row) => (
                         <tr key={row.id} className={getGradeRowClass(row.grade)}>
                           {gyosekiRowView === 'detail' ? (
-                            <td>
-                              <div className="photoCell">
-                                <label className="photoUploadArea">
-                                  {row.photoDataUrl ? (
-                                    <img src={row.photoDataUrl} alt="社員顔写真" className="photoThumb" />
-                                  ) : (
-                                    <div className="photoPlaceholder">未登録</div>
-                                  )}
-                                  <input
-                                    type="file"
-                                    accept="image/*"
-                                    onChange={(event) => {
-                                      const file = event.target.files?.[0]
-                                      handlePhotoUpload(row.id, file)
-                                      event.target.value = ''
-                                    }}
-                                  />
-                                </label>
+                          <td>
+                            <div className="photoCell">
+                              <label className="photoUploadArea">
+                                {row.photoDataUrl ? (
+                                  <img src={row.photoDataUrl} alt="社員顔写真" className="photoThumb" />
+                                ) : (
+                                  <div className="photoPlaceholder">未登録</div>
+                                )}
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  onChange={(event) => {
+                                    const file = event.target.files?.[0]
+                                    handlePhotoUpload(row.id, file)
+                                    event.target.value = ''
+                                  }}
+                                />
+                              </label>
                               </div>
                             </td>
                           ) : null}
@@ -3722,38 +4231,38 @@ function App() {
                                   }
                                   aria-label="特別手当"
                                 />
-                              </div>
-                            </td>
+                            </div>
+                          </td>
                           ) : (
                             <>
-                              <td>
-                                <div className="employeeInfoCell">
+                          <td>
+                            <div className="employeeInfoCell">
                                   <label className="employeeFieldNo">
                                     <span className="srOnlyFieldLabel">社員番号</span>
-                                    <input
-                                      type="text"
-                                      value={row.employeeNo}
-                                      onChange={(event) => updateRow(row.id, 'employeeNo', event.target.value)}
-                                      placeholder="1001"
+                                <input
+                                  type="text"
+                                  value={row.employeeNo}
+                                  onChange={(event) => updateRow(row.id, 'employeeNo', event.target.value)}
+                                  placeholder="1001"
                                       aria-label="社員番号"
-                                    />
-                                  </label>
+                                />
+                              </label>
                                   <label className="employeeFieldTeam">
                                     <span className="srOnlyFieldLabel">区分</span>
-                                    <select
-                                      value={row.team ?? 'denture'}
-                                      onChange={(event) => updateRow(row.id, 'team', event.target.value)}
+                                <select
+                                  value={row.team ?? 'denture'}
+                                  onChange={(event) => updateRow(row.id, 'team', event.target.value)}
                                       aria-label="区分"
-                                    >
-                                      <option value="denture">デンチャー</option>
-                                      <option value="ck">CK</option>
-                                    </select>
-                                  </label>
+                                >
+                                  <option value="denture">デンチャー</option>
+                                  <option value="ck">CK</option>
+                                </select>
+                              </label>
                                   <label className="employeeFieldGrade">
                                     <span className="srOnlyFieldLabel">等級</span>
-                                    <select
-                                      value={row.grade}
-                                      onChange={(event) => updateRow(row.id, 'grade', event.target.value)}
+                                <select
+                                  value={row.grade}
+                                  onChange={(event) => updateRow(row.id, 'grade', event.target.value)}
                                       aria-label="等級"
                                       disabled={Boolean(employeeGradeByNo.get(String(row.employeeNo ?? '').trim()))}
                                       title={
@@ -3767,8 +4276,8 @@ function App() {
                                           {g.label ?? g.id}
                                         </option>
                                       ))}
-                                    </select>
-                                  </label>
+                                </select>
+                              </label>
                                   <label className="employeeFieldScore">
                                     <span className="srOnlyFieldLabel">スコア</span>
                                     <input
@@ -3805,14 +4314,14 @@ function App() {
                                       aria-label="備考"
                                     />
                                   </label>
-                                </div>
-                              </td>
-                              <td>
-                                <div className="allowanceInfoCell">
-                                  <div className="allowanceRow">
-                                    <span>業績手当</span>
-                                    <strong className="moneyCell">{formatJPY(row.performanceAllowance)}</strong>
-                                  </div>
+                            </div>
+                          </td>
+                          <td>
+                            <div className="allowanceInfoCell">
+                              <div className="allowanceRow">
+                                <span>業績手当</span>
+                                <strong className="moneyCell">{formatJPY(row.performanceAllowance)}</strong>
+                              </div>
                                   <div className="allowanceRow">
                                     <span>調整</span>
                                     <input
@@ -3828,27 +4337,27 @@ function App() {
                                       }
                                     />
                                   </div>
-                                  <div className="allowanceRow">
-                                    <span>特別手当</span>
-                                    <input
-                                      type="text"
-                                      inputMode="numeric"
-                                      value={row.specialAllowance}
-                                      onChange={(event) =>
-                                        updateRow(
-                                          row.id,
-                                          'specialAllowance',
-                                          sanitizeIntegerInput(event.target.value),
-                                        )
-                                      }
-                                    />
-                                  </div>
-                                  <div className="allowanceRow">
-                                    <span>第3回目賞与</span>
-                                    <strong className="moneyCell">{formatJPY(row.thirdBonus)}</strong>
-                                  </div>
-                                </div>
-                              </td>
+                              <div className="allowanceRow">
+                                <span>特別手当</span>
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  value={row.specialAllowance}
+                                  onChange={(event) =>
+                                    updateRow(
+                                      row.id,
+                                      'specialAllowance',
+                                      sanitizeIntegerInput(event.target.value),
+                                    )
+                                  }
+                                />
+                              </div>
+                              <div className="allowanceRow">
+                                <span>第3回目賞与</span>
+                                <strong className="moneyCell">{formatJPY(row.thirdBonus)}</strong>
+                              </div>
+                            </div>
+                          </td>
                             </>
                           )}
                           <td>
@@ -4068,7 +4577,8 @@ function App() {
                 selfEvalHistoryByEmployee={selfEvalHistoryByEmployee}
                 supervisorEvalHistoryByEmployee={supervisorEvalHistoryByEmployee}
                 executiveEvalHistoryByEmployee={executiveEvalHistoryByEmployee}
-                goalsByEmployee={goalsByEmployee}
+                goalsByEmployeePeriod={goalsByEmployeePeriod}
+                goalDirectionByEmployeePeriod={goalDirectionByEmployeePeriod}
                 evaluationCriteria={evaluationCriteria}
                 hideGradeSelfEvalAndGradeStats={menuRoleKey === MENU_ROLE_YAKUIN}
                 canViewExecutiveCommentEval={menuRoleKey === MENU_ROLE_YAKUIN || menuRoleKey === MENU_ROLE_ADMIN}
@@ -4085,6 +4595,8 @@ function App() {
                 setActiveEvalPeriodKey={setActiveEvalPeriodKey}
                 evalPeriodDefinitions={evalPeriodDefinitions}
                 evalPeriodFallbackKey={evalPeriodFallbackKey}
+                onSubmitSupervisorEvaluation={submitSupervisorEvalForMember}
+                onSubmitExecutiveEvaluation={submitExecutiveEvalForMember}
               />
             ) : null}
             {workspaceView === 'count' ? (
@@ -4178,6 +4690,7 @@ function App() {
                     setDefinitions={setEvalPeriodDefinitions}
                     onSelectActivePeriod={setActiveEvalPeriodKey}
                     onCleanupHistory={cleanupEvalPeriodHistory}
+                    onRemovePeriodKey={removeEvalPeriodKeyEverywhere}
                   />
                 ) : null}
                 {settingsTab === 'menusettings' ? (
@@ -4217,7 +4730,22 @@ function App() {
               />
             ) : null}
             {workspaceView === 'goals' ? (
-              <GoalManagementPage employee={goalMgmtEmployee} goals={goalMgmtGoals} setGoals={setGoalMgmtGoals} />
+              <GoalManagementPage
+                employee={goalMgmtEmployee}
+                goals={goalMgmtGoals}
+                setGoals={setGoalMgmtGoals}
+                periodDirectionGoal={goalMgmtDirection}
+                setPeriodDirectionGoal={setGoalMgmtDirection}
+                radarSeries={goalMgmtEvalRadarSeries}
+                radarGradeLabel={goalMgmtActiveEvalGrade}
+                radarHeadlineScore={goalMgmtWeightedTotal100}
+                activeEvalPeriodKey={activeEvalPeriodKey}
+                setActiveEvalPeriodKey={setActiveEvalPeriodKey}
+                evalPeriodSelectOptions={evalPeriodSelectOptions}
+                evalPeriodFallbackKey={evalPeriodFallbackKey}
+                isSubmittedForPeriod={goalMgmtSubmittedForActive}
+                onSubmitPeriod={submitGoalMgmtForActivePeriod}
+              />
             ) : null}
             
             {workspaceView === 'bossEval' ? (
@@ -4234,6 +4762,8 @@ function App() {
                 supervisorEvalHistoryByEmployee={supervisorEvalHistoryByEmployee}
                 isSubmittedForPeriod={supervisorEvalSubmittedForActive}
                 onSubmitEvaluation={submitSupervisorEvalForActivePeriod}
+                canEvaluate={selfEvalSubmittedForActive}
+                blockedReason="自己評価の提出後に1次評価(上司)を入力できます。"
               />
             ) : null}
             {workspaceView === 'execEval' ? (
@@ -4242,6 +4772,17 @@ function App() {
                 evalState={evalSubjectEmployee ? executiveEvalByEmployee[evalSubjectEmployee.id] : undefined}
                 setEvalState={updateExecutiveEvalForSubject}
                 evaluationCriteria={evaluationCriteria}
+                activeEvalPeriodKey={activeEvalPeriodKey}
+                setActiveEvalPeriodKey={setActiveEvalPeriodKey}
+                evalPeriodSelectOptions={evalPeriodSelectOptions}
+                evalPeriodFallbackKey={evalPeriodFallbackKey}
+                executiveEvalHistoryByEmployee={executiveEvalHistoryByEmployee}
+                isSubmittedForPeriod={executiveEvalSubmittedForActive}
+                onSubmitEvaluation={submitExecutiveEvalForActivePeriod}
+                peerSelfEval={evalSubjectEmployee ? selfEvalByEmployee[evalSubjectEmployee.id] : undefined}
+                peerSupervisorEval={evalSubjectEmployee ? supervisorEvalByEmployee[evalSubjectEmployee.id] : undefined}
+                canEvaluate={selfEvalSubmittedForActive && supervisorEvalSubmittedForActive}
+                blockedReason="自己評価と1次評価(上司)の提出後に2次評価(経営層)を入力できます。"
               />
             ) : null}
           </>
@@ -4673,7 +5214,7 @@ function MenuDisplaySettingsPage({ menuVisibilityByRole, setMenuVisibilityByRole
   )
 }
 
-function EvalPeriodSettingsPage({ definitions, setDefinitions, onSelectActivePeriod, onCleanupHistory }) {
+function EvalPeriodSettingsPage({ definitions, setDefinitions, onSelectActivePeriod, onCleanupHistory, onRemovePeriodKey }) {
   const [draftKey, setDraftKey] = useState('')
   const [draftLabel, setDraftLabel] = useState('')
   const [draftOnlyForIds, setDraftOnlyForIds] = useState('')
@@ -4714,12 +5255,13 @@ function EvalPeriodSettingsPage({ definitions, setDefinitions, onSelectActivePer
   const removeRow = (key) => {
     if (
       !window.confirm(
-        `「${key}」を一覧から削除しますか？既存の評価データは消えません。プルダウンには履歴として残る場合があります。`,
+        `「${key}」を一覧から削除しますか？この期の履歴データと旧「この人のみ」設定も同時に整理します。`,
       )
     ) {
       return
     }
     setDefinitions((defs) => defs.filter((d) => d.key !== key))
+    onRemovePeriodKey?.(key)
   }
 
   const handleCleanupHistory = () => {
@@ -4733,7 +5275,7 @@ function EvalPeriodSettingsPage({ definitions, setDefinitions, onSelectActivePer
     <section className="evalPeriodSettingsPage">
       <h2 className="evalPeriodSettingsTitle">評価期マスタ</h2>
       <p className="evalPeriodSettingsLead">
-        評価の単位となる「期」を定義します。初期値は<strong>毎年3月・9月</strong>の2区切りです。全社で使う臨時期はそのまま追加し、
+        評価の単位となる「期」を定義します。必要な期を手動で追加してください。全社で使う臨時期はそのまま追加し、
         <strong>特定の社員だけ</strong>の期は「適用社員C」に社員Cをカンマ区切りで入力してください（空欄のときは全員に表示されます）。
       </p>
       <ul className="evalPeriodSettingsList">
@@ -4750,7 +5292,7 @@ function EvalPeriodSettingsPage({ definitions, setDefinitions, onSelectActivePer
             </div>
             <button type="button" className="evalPeriodSettingsRemove" onClick={() => removeRow(row.key)}>
               削除
-            </button>
+        </button>
           </li>
         ))}
       </ul>
@@ -4777,7 +5319,7 @@ function EvalPeriodSettingsPage({ definitions, setDefinitions, onSelectActivePer
               placeholder="例: e1, 0001（カンマ・スペース区切り）"
             />
           </label>
-        </div>
+      </div>
         <button type="button" className="evalPeriodSettingsAddBtn" onClick={addRow}>
           追加
         </button>
@@ -4959,8 +5501,8 @@ function EvaluationCriteriaPage({ grades, criteria, setCriteria }) {
       updateMinorsPatch(
         minorModal.majorId,
         curMinors.map((mi) =>
-          mi.id === minorModal.minorId ? { ...mi, title: t, weightPct, scoreCriteria: scores } : mi,
-        ),
+              mi.id === minorModal.minorId ? { ...mi, title: t, weightPct, scoreCriteria: scores } : mi,
+            ),
       )
     }
     closeMinorModal()
@@ -5202,21 +5744,21 @@ function EvaluationCriteriaPage({ grades, criteria, setCriteria }) {
           <button type="button" className="evalCritAddMajorBtn" onClick={openAddMajor}>
             + 大項目を追加（全等級共通）
           </button>
-          <label className="evalCritGradeSelect">
+        <label className="evalCritGradeSelect">
             小項目・ウエイトを編集する等級
-            <select value={activeGradeId} onChange={(event) => setActiveGradeId(event.target.value)}>
-              {grades.map((g) => (
-                <option key={g.id} value={g.id}>
-                  {g.label ?? g.id}
-                </option>
-              ))}
-            </select>
-          </label>
+          <select value={activeGradeId} onChange={(event) => setActiveGradeId(event.target.value)}>
+            {grades.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.label ?? g.id}
+              </option>
+            ))}
+          </select>
+        </label>
         </div>
         <div className="evalCritToolbarRight">
           <button type="button" className="btn export" onClick={handleExportCriteriaCsv}>
             CSVエクスポート
-          </button>
+        </button>
           <button type="button" className="btn import" onClick={() => evalCritCsvFileRef.current?.click()}>
             CSVインポート
           </button>
@@ -5478,15 +6020,15 @@ function SkillUpPage({ employees, skills, sections, progress }) {
             <div className="skillUpInlineStat">
               <span className="skillUpInlineStatLabel">等級</span>
               <strong className="skillUpInlineStatValue">{grade}</strong>
-            </div>
+          </div>
             <div className="skillUpInlineStat">
               <span className="skillUpInlineStatLabel">獲得★</span>
               <strong className="skillUpInlineStatValue">{stars}</strong>
-            </div>
+          </div>
             <div className="skillUpInlineStat">
               <span className="skillUpInlineStatLabel">習得</span>
               <strong className="skillUpInlineStatValue">{acquiredCount}</strong>
-            </div>
+          </div>
           </div>
         </article>
       </div>
@@ -5638,6 +6180,30 @@ function weightedEvalScore100ByItems(items, scoresMap) {
   return (weightedNormSum / weightSum) * 100
 }
 
+function buildMajorOptionsAndWeightsForGrade(evaluationCriteria, gradeId) {
+  const cats = buildEvalCategoriesForGrade(evaluationCriteria, gradeId)
+  if (!Array.isArray(cats) || !cats.length) return []
+  return cats.map((cat, idx) => {
+    const id = String(cat?.id ?? '').trim() || `major-${idx}`
+    const title = String(cat?.title ?? '').trim() || `大項目${idx + 1}`
+    const weightPct = (cat?.items ?? []).reduce((sum, it) => sum + Math.max(0, Number(it?.weightPct) || 0), 0)
+    return { id, title, weightPct }
+  })
+}
+
+function normalizeExecutiveBaseLevel(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return Number.NaN
+  if (n > 5) return Math.max(1, Math.min(5, Math.round(n / 20)))
+  return Math.max(1, Math.min(5, Math.round(n)))
+}
+
+function executiveBaseLevelToScore100(level) {
+  const lv = normalizeExecutiveBaseLevel(level)
+  if (!Number.isFinite(lv)) return Number.NaN
+  return lv * 20
+}
+
 function executiveEvalCategoryScores100(axisMajors, execState) {
   const majors = Array.isArray(axisMajors) ? axisMajors : []
   if (!majors.length) return null
@@ -5648,9 +6214,9 @@ function executiveEvalCategoryScores100(axisMajors, execState) {
   const out = Object.fromEntries(majors.map((m) => [m.id, 0]))
   let hasMajorBase = false
   for (const m of majors) {
-    const n = Number(baseByMajorRaw?.[m.id])
+    const n = executiveBaseLevelToScore100(baseByMajorRaw?.[m.id])
     if (Number.isFinite(n)) {
-      out[m.id] = Math.max(0, Math.min(100, n))
+      out[m.id] = n
       hasMajorBase = true
     }
   }
@@ -5693,6 +6259,25 @@ function executiveEvalOverallBaseScore(execState, axisMajors = []) {
   return Math.max(0, Math.min(100, Number(execState?.baseScore ?? 0) || 0))
 }
 
+function executiveEvalOverallScore100(execState, axisMajors, majorWeightById = {}) {
+  const majors = Array.isArray(axisMajors) ? axisMajors : []
+  if (!majors.length) return Math.max(0, Math.min(100, Number(execState?.baseScore ?? 0) || 0))
+  const byMajor = executiveEvalCategoryScores100(majors, execState)
+  if (!byMajor) return Math.max(0, Math.min(100, Number(execState?.baseScore ?? 0) || 0))
+  let weightedSum = 0
+  let weightTotal = 0
+  for (const major of majors) {
+    const v = Number(byMajor?.[major.id])
+    if (!Number.isFinite(v)) continue
+    const w = Math.max(0, Number(majorWeightById?.[major.id]) || 0)
+    const effW = w > 0 ? w : 1
+    weightedSum += v * effW
+    weightTotal += effW
+  }
+  if (weightTotal <= 0) return 0
+  return Math.max(0, Math.min(100, weightedSum / weightTotal))
+}
+
 function quantizeExecutiveScore100(value) {
   const clamped = Math.max(0, Math.min(100, Number(value) || 0))
   return Math.max(0, Math.min(100, Math.round(clamped / 20) * 20))
@@ -5726,14 +6311,35 @@ function skillProgressScore100ForEmployee(employee, skills, skillProgress) {
   return ratioAvg * 100
 }
 
-function executiveScore100ForEmployee(employeeId, executiveEvalByEmployee) {
+function executiveScore100ForEmployee(employee, executiveEvalByEmployee, evaluationCriteria) {
+  const employeeId = String(employee?.id ?? '').trim()
+  const gradeId = String(employee?.grade ?? '').trim()
+  if (!employeeId) return 0
   const ex = evalEntryForEmployeeId(executiveEvalByEmployee, employeeId)
   if (!ex) return 0
-  const base = executiveEvalOverallBaseScore(ex)
-  const commentTotal = Array.isArray(ex.commentHistory)
-    ? ex.commentHistory.reduce((sum, row) => sum + (Number(row.delta) || 0), 0)
-    : 0
-  return quantizeExecutiveScore100(base + commentTotal)
+  const scoreMap = ex?.scores && typeof ex.scores === 'object' && !Array.isArray(ex.scores) ? ex.scores : {}
+  if (Object.keys(scoreMap).length) {
+    const cats = buildEvalCategoriesForGrade(evaluationCriteria, gradeId)
+    const weighted = weightedEvalScore100ByCategories(cats, scoreMap)
+    if (Number.isFinite(weighted)) return weighted
+  }
+  const majors = buildMajorOptionsAndWeightsForGrade(evaluationCriteria, gradeId)
+  const weightById = Object.fromEntries(majors.map((m) => [m.id, Math.max(0, Number(m.weightPct) || 0)]))
+  return quantizeExecutiveScore100(executiveEvalOverallScore100(ex, majors, weightById))
+}
+
+function executiveScore100ForState(execState, evaluationCriteria, gradeId) {
+  if (!execState) return 0
+  const scoreMap =
+    execState?.scores && typeof execState.scores === 'object' && !Array.isArray(execState.scores) ? execState.scores : {}
+  if (Object.keys(scoreMap).length) {
+    const cats = buildEvalCategoriesForGrade(evaluationCriteria, gradeId)
+    const weighted = weightedEvalScore100ByCategories(cats, scoreMap)
+    if (Number.isFinite(weighted)) return weighted
+  }
+  const majors = buildMajorOptionsAndWeightsForGrade(evaluationCriteria, gradeId)
+  const weightById = Object.fromEntries(majors.map((m) => [m.id, Math.max(0, Number(m.weightPct) || 0)]))
+  return quantizeExecutiveScore100(executiveEvalOverallScore100(execState, majors, weightById))
 }
 
 function overallWeightedScore100ForEmployee(employee, ctx) {
@@ -5741,8 +6347,32 @@ function overallWeightedScore100ForEmployee(employee, ctx) {
   const skill100 = skillProgressScore100ForEmployee(employee, ctx.skills, ctx.skillProgress)
   const self100 = weightedEvalScore100ForEmployee(ctx.selfEvalByEmployee, employee, ctx.evaluationCriteria)
   const supervisor100 = weightedEvalScore100ForEmployee(ctx.supervisorEvalByEmployee, employee, ctx.evaluationCriteria)
-  const executive100 = executiveScore100ForEmployee(employee.id, ctx.executiveEvalByEmployee)
+  const executive100 = executiveScore100ForEmployee(employee, ctx.executiveEvalByEmployee, ctx.evaluationCriteria)
   return skill100 * 0.3 + self100 * 0.15 + supervisor100 * 0.25 + executive100 * 0.3
+}
+
+function topSelfBossMajorGaps(employee, evaluationCriteria, selfEvalByEmployee, supervisorEvalByEmployee, limit = 2) {
+  if (!employee) return []
+  const cats = buildEvalCategoriesForGrade(evaluationCriteria, employee.grade)
+  if (!Array.isArray(cats) || !cats.length) return []
+  const selfScores = evalEntryForEmployeeId(selfEvalByEmployee, employee.id)?.scores ?? {}
+  const bossScores = evalEntryForEmployeeId(supervisorEvalByEmployee, employee.id)?.scores ?? {}
+  const rows = cats
+    .map((cat) => {
+      const self100 = weightedEvalScore100ByItems(cat?.items ?? [], selfScores)
+      const boss100 = weightedEvalScore100ByItems(cat?.items ?? [], bossScores)
+      if (!Number.isFinite(self100) || !Number.isFinite(boss100)) return null
+      const gap = Math.abs(self100 - boss100)
+      if (!Number.isFinite(gap)) return null
+      return {
+        title: String(cat?.title ?? '').trim() || '大項目',
+        gap,
+      }
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.gap - a.gap)
+    .slice(0, Math.max(1, limit))
+  return rows
 }
 
 /** 基本評価（100/80/60/40/20）の段階色と経営層スコアカードを揃える（未設定時は最終スコアから帯を推定） */
@@ -5792,7 +6422,13 @@ function splitRadarCategoryLabel(title, maxFirstLine) {
   return line2 ? [line1, line2] : [line1]
 }
 
-const MemberEvalRadarChart = memo(function MemberEvalRadarChart({ series, compact = false, gradeLabel = '', headlineScore = Number.NaN }) {
+const MemberEvalRadarChart = memo(function MemberEvalRadarChart({
+  series,
+  compact = false,
+  gradeLabel = '',
+  headlineScore = Number.NaN,
+  activePeriodKey = '',
+}) {
   const usableSeries = useMemo(
     () =>
       (Array.isArray(series) ? series : [])
@@ -5868,6 +6504,19 @@ const MemberEvalRadarChart = memo(function MemberEvalRadarChart({ series, compac
     return vals.reduce((sum, v) => sum + v, 0) / vals.length
   }, [usableSeries])
   const shownScore = Number.isFinite(headlineScore) ? headlineScore : latestAvg
+  const latestMajorScores = useMemo(() => {
+    const latest = usableSeries[0]
+    if (!latest || !Array.isArray(latest.rows)) return []
+    return latest.rows
+      .map((row) => ({
+        id: String(row?.id ?? ''),
+        title: String(row?.title ?? '').trim() || '大項目',
+        score: Number(row?.total100),
+      }))
+      .filter((row) => Number.isFinite(row.score))
+  }, [usableSeries])
+  const latestPeriodKey = String(usableSeries[0]?.periodKey ?? '').trim()
+  const shownActivePeriodKey = String(activePeriodKey ?? '').trim()
   const modeTitle = '総合得点（一覧式）3期レーダー'
   const wrapperClass = `memberEvalRadar${compact ? ' isCompact' : ''}`
   return (
@@ -5879,12 +6528,26 @@ const MemberEvalRadarChart = memo(function MemberEvalRadarChart({ series, compac
             {Number.isFinite(shownScore) ? `${shownScore.toFixed(1)}点` : '—'}
             {String(gradeLabel ?? '').trim() ? ` / 等級 ${String(gradeLabel).trim()}` : ''}
           </p>
+          {(shownActivePeriodKey || latestPeriodKey) ? (
+            <small className="memberEvalRadarPeriodMeta">
+              {shownActivePeriodKey ? `表示期: ${shownActivePeriodKey}` : ''}
+              {shownActivePeriodKey && latestPeriodKey ? ' / ' : ''}
+              {latestPeriodKey ? `3期比較の最新: ${latestPeriodKey}` : ''}
+            </small>
+          ) : null}
           <small className="memberEvalRadarFormula">式: スキル30% + 自己15% + 上司25% + 経営30%</small>
         </div>
       ) : (
         <div className="memberEvalRadarHead">
           <h4>{modeTitle}</h4>
           <p>一覧式の総合得点: {Number.isFinite(shownScore) ? `${shownScore.toFixed(1)}点` : '—'}</p>
+          {(shownActivePeriodKey || latestPeriodKey) ? (
+            <small className="memberEvalRadarPeriodMeta">
+              {shownActivePeriodKey ? `表示期: ${shownActivePeriodKey}` : ''}
+              {shownActivePeriodKey && latestPeriodKey ? ' / ' : ''}
+              {latestPeriodKey ? `3期比較の最新: ${latestPeriodKey}` : ''}
+            </small>
+          ) : null}
           <small className="memberEvalRadarFormula">式: スキル30% + 自己15% + 上司25% + 経営30%</small>
         </div>
       )}
@@ -5962,6 +6625,16 @@ const MemberEvalRadarChart = memo(function MemberEvalRadarChart({ series, compac
             )
           })}
         </div>
+        {latestMajorScores.length ? (
+          <ul className="memberEvalRadarMajorList" aria-label="大項目スコア">
+            {latestMajorScores.map((row) => (
+              <li key={row.id || row.title} className="memberEvalRadarMajorItem">
+                <span className="memberEvalRadarMajorTitle">{row.title}</span>
+                <strong className="memberEvalRadarMajorScore">{row.score.toFixed(1)}点</strong>
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </div>
     </section>
   )
@@ -5973,6 +6646,7 @@ function EvalQuestionnairePage({
   evalState,
   setEvalState,
   peerSelfEval,
+  peerSupervisorEval,
   evaluationCriteria,
   activeEvalPeriodKey,
   setActiveEvalPeriodKey,
@@ -5982,15 +6656,21 @@ function EvalQuestionnairePage({
   evalPeriodFallbackKey,
   isSubmittedForPeriod = false,
   onSubmitEvaluation,
+  canEvaluate = true,
+  blockedReason = '',
 }) {
   const isBoss = variant === 'boss'
+  const isExec = variant === 'exec'
+  const evalTitle = isExec ? '2次評価(経営層)' : isBoss ? '1次評価(上司)' : '自己評価'
   const employee = useMemo(() => (employees.length ? employees[0] : null), [employees])
 
   const scores = evalState?.scores ?? {}
   const comments = evalState?.comments ?? {}
   const peerScores = peerSelfEval?.scores ?? {}
+  const peerBossScores = peerSupervisorEval?.scores ?? {}
 
   const patchScore = (itemId, value) => {
+    if (!canEvaluate) return
     setEvalState((prev) => ({
       scores: { ...(prev.scores ?? {}), [itemId]: value },
       comments: { ...(prev.comments ?? {}) },
@@ -5998,6 +6678,7 @@ function EvalQuestionnairePage({
   }
 
   const patchComment = (itemId, value) => {
+    if (!canEvaluate) return
     setEvalState((prev) => ({
       scores: { ...(prev.scores ?? {}) },
       comments: { ...(prev.comments ?? {}), [itemId]: value },
@@ -6211,10 +6892,23 @@ function EvalQuestionnairePage({
       trend: trend(latest.selfDelta),
     }
   }, [selfEvalPersonalHistoryRows])
+  const selfResubmitRequestNote = useMemo(() => {
+    if (isBoss || isExec || !employee?.id) return ''
+    const activeKey = String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '').trim()
+    if (!activeKey) return ''
+    const slot = evalHistoryByEmployee?.[employee.id]?.[activeKey]
+    const reason = String(slot?.resubmitReason ?? '').trim()
+    const requestedAt = String(slot?.resubmitRequestedAt ?? '').trim()
+    if (!reason && !requestedAt) return ''
+    const atText = requestedAt ? `（依頼: ${new Date(requestedAt).toLocaleString('ja-JP')}）` : ''
+    return `${reason || '1次評価との乖離が大きいため、自己評価の再提出が必要です。'}${atText}`
+  }, [isBoss, isExec, employee?.id, evalHistoryByEmployee, activeEvalPeriodKey, evalPeriodFallbackKey])
+
+  const pageToneClass = isExec ? ' secondEvalPage' : isBoss ? ' bossEvalPage' : ''
 
   if (!employee) {
     return (
-      <section className={`selfEvalPage${isBoss ? ' bossEvalPage' : ''}`}>
+      <section className={`selfEvalPage${pageToneClass}`}>
         <p className="skillUpEmpty">従業員が登録されていません。従業員管理から登録してください。</p>
       </section>
     )
@@ -6233,19 +6927,19 @@ function EvalQuestionnairePage({
     '入力内容は自動で保存されます',
   ]
 
-  const guideLines = isBoss ? guideLinesBoss : guideLinesSelf
+  const guideLines = isExec ? guideLinesBoss : isBoss ? guideLinesBoss : guideLinesSelf
 
   return (
-    <section className={`selfEvalPage${isBoss ? ' bossEvalPage' : ''}`}>
+    <section className={`selfEvalPage${pageToneClass}${!canEvaluate ? ' isBlockedByFlow' : ''}`}>
       <header className="selfEvalHeader">
-        <h2>{isBoss ? '上司評価' : '自己評価'}</h2>
+        <h2>{evalTitle}</h2>
         <p className="selfEvalTarget">
-          {isBoss ? '評価対象' : '対象者'}: {employee.name}（{employee.dept}）
+          {isBoss || isExec ? '評価対象' : '対象者'}: {employee.name}（{employee.dept}）
         </p>
         <label className="selfEvalPeriodField">
           評価期
           <select
-            value={activeEvalPeriodKey ?? evalPeriodFallbackKey}
+            value={activeEvalPeriodKey ?? evalPeriodFallbackKey ?? ''}
             onChange={(event) => setActiveEvalPeriodKey?.(event.target.value)}
           >
             {(evalPeriodSelectOptions ?? []).map((opt) => (
@@ -6270,6 +6964,11 @@ function EvalQuestionnairePage({
           ))}
         </ul>
       </div>
+      {!canEvaluate ? (
+        <p className="selfEvalFlowLockNotice" role="status" aria-live="polite">
+          {blockedReason || '前段の提出が完了するまで評価できません。'}
+        </p>
+      ) : null}
 
       <div className="selfEvalSummaryCard">
         <div>
@@ -6282,26 +6981,35 @@ function EvalQuestionnairePage({
           </p>
         </div>
       </div>
+      {selfResubmitRequestNote ? (
+        <p className="selfEvalFlowLockNotice" role="status" aria-live="polite">
+          再提出依頼: {selfResubmitRequestNote}
+        </p>
+      ) : null}
 
-      <div className="selfEvalSubmitBar">
+      {typeof onSubmitEvaluation === 'function' ? (
+        <div className="selfEvalSubmitBar">
         <button
           type="button"
-          className={`selfEvalSubmitBtn${isSubmittedForPeriod ? ' isLocked' : ''}`}
-          onClick={() => onSubmitEvaluation?.()}
-          disabled={isSubmittedForPeriod || !allComplete}
-        >
-          {isBoss ? '上司評価を提出' : '自己評価を提出'}
-        </button>
-        <p className="selfEvalSubmitHint">
-          {isSubmittedForPeriod
-            ? `提出済みです。この評価期は閲覧のみです。`
-            : allComplete
-              ? '提出すると、この評価期は閲覧のみになり編集できません。'
-              : '全項目の評価を完了すると提出できます。'}
-        </p>
-      </div>
+            className={`selfEvalSubmitBtn${isSubmittedForPeriod ? ' isLocked' : ''}`}
+            onClick={() => onSubmitEvaluation?.()}
+            disabled={isSubmittedForPeriod || !allComplete || !canEvaluate}
+          >
+            {isExec ? '2次評価(経営層)を提出' : isBoss ? '1次評価(上司)を提出' : '自己評価を提出'}
+          </button>
+          <p className="selfEvalSubmitHint">
+            {!canEvaluate
+              ? blockedReason || '前段の提出が完了するまで評価できません。'
+              : isSubmittedForPeriod
+              ? `提出済みです。この評価期は閲覧のみです。`
+              : allComplete
+                ? '提出すると、この評価期は閲覧のみになり編集できません。'
+                : '全項目の評価を完了すると提出できます。'}
+          </p>
+        </div>
+      ) : null}
 
-      {!isBoss && selfEvalHistoryByEmployee ? (
+      {!isBoss && !isExec && selfEvalHistoryByEmployee ? (
         <div
           className={`selfEvalPersonalHistory selfEvalPersonalHistory--accordion memberEvalHistoryBlock${
             selfEvalRecordAccordionOpen ? ' isOpen' : ''
@@ -6404,7 +7112,7 @@ function EvalQuestionnairePage({
                       ))}
                     </tbody>
                   </table>
-                </div>
+      </div>
               </>
             ) : (
               <p className="selfEvalPersonalHistoryEmpty">
@@ -6426,47 +7134,60 @@ function EvalQuestionnairePage({
               </div>
               <div className="selfEvalSuperGroupInner">
                 {block.cats.map((cat) => {
-                  const done = categoryDoneCount(cat)
-                  const open = !!openCats[cat.id]
-                  return (
+          const done = categoryDoneCount(cat)
+          const open = !!openCats[cat.id]
+          return (
                     <section key={cat.id} className={`selfEvalCategory selfEvalCategory--${block.key}`}>
-                      <button
-                        type="button"
-                        className="selfEvalCategoryHead"
-                        onClick={() => setOpenCats((prev) => ({ ...prev, [cat.id]: !prev[cat.id] }))}
-                        aria-expanded={open}
-                      >
-                        <span className="selfEvalChevron" aria-hidden>
-                          {open ? '▼' : '▶'}
-                        </span>
-                        <span className="selfEvalCategoryTitle">{cat.title}</span>
-                        <span className="selfEvalCategoryBadge">
-                          {done} / {cat.items.length} 完了
-                        </span>
-                      </button>
-                      {open ? (
-                        <div className="selfEvalCategoryBody">
-                          {cat.items.map((it) => {
-                            const selfPts = String(peerScores[it.id] ?? '').trim()
-                            return (
-                              <article key={it.id} className="selfEvalItemCard">
-                                <div className="selfEvalItemCardTop">
-                                  <h4 className="selfEvalItemTitle">{it.title}</h4>
-                                </div>
+              <button
+                type="button"
+                className="selfEvalCategoryHead"
+                onClick={() => setOpenCats((prev) => ({ ...prev, [cat.id]: !prev[cat.id] }))}
+                aria-expanded={open}
+              >
+                <span className="selfEvalChevron" aria-hidden>
+                  {open ? '▼' : '▶'}
+                </span>
+                <span className="selfEvalCategoryTitle">{cat.title}</span>
+                <span className="selfEvalCategoryBadge">
+                  {done} / {cat.items.length} 完了
+                </span>
+              </button>
+              {open ? (
+                <div className="selfEvalCategoryBody">
+                  {cat.items.map((it) => {
+                    const selfPts = String(peerScores[it.id] ?? '').trim()
+                    return (
+                      <article key={it.id} className="selfEvalItemCard">
+                        <div className="selfEvalItemCardTop">
+                          <h4 className="selfEvalItemTitle">{it.title}</h4>
+                        </div>
                                 {String(previousPeriodScoresByItem[it.id] ?? '').trim() ? (
                                   <p className="selfEvalPrevScoreHint">
                                     前期: {String(previousPeriodScoresByItem[it.id]).trim()}点
                                   </p>
                                 ) : null}
-                                {isBoss ? (
-                                  <p className="bossEvalSelfNote">
-                                    自己評価の点数: {selfPts ? `${selfPts}点` : '（未入力）'}
-                                  </p>
+                        {isBoss ? (
+                          <p className="bossEvalSelfNote">
+                            自己評価の点数: {selfPts ? `${selfPts}点` : '（未入力）'}
+                          </p>
+                        ) : null}
+                                {isExec ? (
+                                  <>
+                                    <p className="bossEvalSelfNote">
+                                      自己評価の点数: {selfPts ? `${selfPts}点` : '（未入力）'}
+                                    </p>
+                                    <p className="bossEvalSelfNote">
+                                      1次評価(上司)の点数:{' '}
+                                      {String(peerBossScores[it.id] ?? '').trim()
+                                        ? `${String(peerBossScores[it.id]).trim()}点`
+                                        : '（未入力）'}
+                                    </p>
+                                  </>
                                 ) : null}
                                 <div className={`selfEvalItemGrid${isBoss ? '' : ' isSingleField'}`}>
-                                  <label className="selfEvalFieldLabel">
+                          <label className="selfEvalFieldLabel">
                                     <span className="selfEvalFieldHead">
-                                      <span>{isBoss ? '上司評価の点数' : '評価点数'}</span>
+                                      <span>{isExec ? '2次評価(経営層)の点数' : isBoss ? '1次評価(上司)の点数' : '評価点数'}</span>
                                       <button
                                         type="button"
                                         className="selfEvalDetailLink"
@@ -6481,40 +7202,46 @@ function EvalQuestionnairePage({
                                       {[1, 2, 3, 4, 5].map((n) => {
                                         const value = String(n)
                                         const selected = String(scores[it.id] ?? '') === value
+                                        const isSelfMarked = (isBoss || isExec) && String(peerScores[it.id] ?? '') === value
+                                        const isBossMarked = isExec && String(peerBossScores[it.id] ?? '') === value
                                         return (
                                           <button
                                             key={n}
                                             type="button"
-                                            className={`selfEvalScorePill${selected ? ' isActive' : ''}`}
-                                            disabled={isSubmittedForPeriod}
+                                            className={`selfEvalScorePill${selected ? ' isActive' : ''}${
+                                              isSelfMarked ? ' isPeerSelfMarked' : ''
+                                            }${isBossMarked ? ' isPeerBossMarked' : ''}`}
+                                            disabled={isSubmittedForPeriod || !canEvaluate}
                                             onClick={() => patchScore(it.id, value)}
                                             aria-pressed={selected}
                                           >
                                             {n}
+                                            {isSelfMarked ? <span className="selfEvalPeerMark selfEvalPeerMark--self">自己</span> : null}
+                                            {isBossMarked ? <span className="selfEvalPeerMark selfEvalPeerMark--boss">1次</span> : null}
                                           </button>
                                         )
                                       })}
                                     </div>
-                                  </label>
-                                  {isBoss ? (
-                                    <label className="selfEvalFieldLabel">
+                          </label>
+                                  {isBoss || isExec ? (
+                          <label className="selfEvalFieldLabel">
                                       <span>コメント（評価の根拠など）</span>
-                                      <input
-                                        type="text"
-                                        value={comments[it.id] ?? ''}
-                                        disabled={isSubmittedForPeriod}
-                                        onChange={(event) => patchComment(it.id, event.target.value)}
+                            <input
+                              type="text"
+                              value={comments[it.id] ?? ''}
+                                        disabled={isSubmittedForPeriod || !canEvaluate}
+                              onChange={(event) => patchComment(it.id, event.target.value)}
                                         placeholder="評価の根拠や補足があれば入力"
-                                      />
-                                    </label>
+                            />
+                          </label>
                                   ) : null}
-                                </div>
-                              </article>
-                            )
-                          })}
                         </div>
-                      ) : null}
-                    </section>
+                      </article>
+                    )
+                  })}
+                </div>
+              ) : null}
+            </section>
                   )
                 })}
               </div>
@@ -6531,21 +7258,29 @@ function EvalQuestionnairePage({
             </button>
             <h3>{detailItem.title}</h3>
             <div className="selfEvalDetailScoreBox">
-              <p className="selfEvalDetailScoreLabel">{isBoss ? '上司評価の点数' : '評価点数'}</p>
+              <p className="selfEvalDetailScoreLabel">
+                {isExec ? '2次評価(経営層)の点数' : isBoss ? '1次評価(上司)の点数' : '評価点数'}
+              </p>
               <div className="selfEvalScoreSegment" role="group" aria-label={`${detailItem.title}の評価点数`}>
                 {[1, 2, 3, 4, 5].map((n) => {
                   const value = String(n)
                   const selected = String(scores[detailItem.id] ?? '') === value
+                  const isSelfMarked = (isBoss || isExec) && String(peerScores[detailItem.id] ?? '') === value
+                  const isBossMarked = isExec && String(peerBossScores[detailItem.id] ?? '') === value
                   return (
                     <button
                       key={n}
                       type="button"
-                      className={`selfEvalScorePill${selected ? ' isActive' : ''}`}
-                      disabled={isSubmittedForPeriod}
+                      className={`selfEvalScorePill${selected ? ' isActive' : ''}${isSelfMarked ? ' isPeerSelfMarked' : ''}${
+                        isBossMarked ? ' isPeerBossMarked' : ''
+                      }`}
+                      disabled={isSubmittedForPeriod || !canEvaluate}
                       onClick={() => patchScore(detailItem.id, value)}
                       aria-pressed={selected}
                     >
                       {n}
+                      {isSelfMarked ? <span className="selfEvalPeerMark selfEvalPeerMark--self">自己</span> : null}
+                      {isBossMarked ? <span className="selfEvalPeerMark selfEvalPeerMark--boss">1次</span> : null}
                     </button>
                   )
                 })}
@@ -6709,6 +7444,8 @@ function SupervisorEvaluationPage({
   supervisorEvalHistoryByEmployee,
   isSubmittedForPeriod,
   onSubmitEvaluation,
+  canEvaluate,
+  blockedReason,
 }) {
   return (
     <EvalQuestionnairePage
@@ -6725,6 +7462,8 @@ function SupervisorEvaluationPage({
       evalPeriodFallbackKey={evalPeriodFallbackKey}
       isSubmittedForPeriod={isSubmittedForPeriod}
       onSubmitEvaluation={onSubmitEvaluation}
+      canEvaluate={canEvaluate}
+      blockedReason={blockedReason}
     />
   )
 }
@@ -6734,225 +7473,76 @@ function ExecutiveEvaluationPage({
   evalState,
   setEvalState,
   evaluationCriteria,
+  activeEvalPeriodKey,
+  setActiveEvalPeriodKey,
+  evalPeriodSelectOptions,
+  evalPeriodFallbackKey,
+  executiveEvalHistoryByEmployee,
+  isSubmittedForPeriod,
+  onSubmitEvaluation,
+  peerSelfEval,
+  peerSupervisorEval,
+  canEvaluate,
+  blockedReason,
 }) {
-  const [draftDelta, setDraftDelta] = useState(0)
-  const [draftComment, setDraftComment] = useState('')
-  const [draftMajorCategory, setDraftMajorCategory] = useState('')
-  const majorCategoryOptions = useMemo(() => {
-    const sharedMajors = Array.isArray(evaluationCriteria?.sharedMajors) ? evaluationCriteria.sharedMajors : []
-    if (sharedMajors.length) {
-      return sharedMajors
-        .map((m, idx) => ({
-          id: String(m?.id ?? '').trim() || `major-${idx}`,
-          title: String(m?.title ?? '').trim() || `大項目${idx + 1}`,
-        }))
-        .filter((m) => m.id)
-    }
-    const grade = String(employee?.grade ?? '').trim()
-    return buildEvalCategoriesForGrade(evaluationCriteria, grade).map((c, idx) => ({
-      id: String(c?.id ?? '').trim() || `major-${idx}`,
-      title: String(c?.title ?? '').trim() || `大項目${idx + 1}`,
-    }))
-  }, [evaluationCriteria, employee])
-  const majorCategoryLabelById = useMemo(
-    () => Object.fromEntries(majorCategoryOptions.map((m) => [m.id, m.title])),
-    [majorCategoryOptions],
-  )
-  const baseScore = executiveEvalOverallBaseScore(evalState, majorCategoryOptions)
-  const commentHistory = Array.isArray(evalState?.commentHistory) ? evalState.commentHistory : []
-  const commentTotal = commentHistory.reduce((sum, row) => sum + (Number(row.delta) || 0), 0)
-  const finalScoreRaw = baseScore + commentTotal
-  const finalScore = quantizeExecutiveScore100(finalScoreRaw)
-
-  const setBaseScoreForMajor = (majorId, value) => {
-    const key = String(majorId ?? '').trim()
-    if (!key) return
-    const next = Math.max(0, Math.min(100, Number(value) || 0))
-    setEvalState((prev) => ({
-      baseScore: Number(prev.baseScore ?? 0),
-      baseByMajor: { ...(prev.baseByMajor ?? {}), [key]: next },
-      commentHistory: [...(prev.commentHistory ?? [])],
-    }))
+  const normalizedEvalState = {
+    scores: evalState?.scores ?? {},
+    comments: evalState?.comments ?? {},
   }
-
-  const addCommentEvaluation = () => {
-    const text = draftComment.trim()
-    if (!text) {
-      window.alert('コメント内容を入力してください。')
-      return
-    }
-    const majorCategoryKey = String(draftMajorCategory ?? '').trim()
-    if (!majorCategoryKey) {
-      window.alert('対象の大項目を選択してください。')
-      return
-    }
-    const delta = Math.max(-20, Math.min(20, Number(draftDelta) || 0))
-    const item = {
-      id: `exec-log-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      delta,
-      comment: text,
-      majorCategoryKey,
-      createdAt: new Date().toISOString(),
-    }
-    setEvalState((prev) => ({
-      baseScore: Number(prev.baseScore ?? 0),
-      baseByMajor: { ...(prev.baseByMajor ?? {}) },
-      commentHistory: [item, ...(prev.commentHistory ?? [])],
-    }))
-    setDraftComment('')
-    setDraftDelta(0)
-    setDraftMajorCategory('')
-  }
-
-  const removeHistory = (id) => {
-    if (!window.confirm('このコメント評価履歴を削除しますか？')) return
-    setEvalState((prev) => ({
-      baseScore: Number(prev.baseScore ?? 0),
-      baseByMajor: { ...(prev.baseByMajor ?? {}) },
-      commentHistory: (prev.commentHistory ?? []).filter((row) => row.id !== id),
-    }))
-  }
-
-  const formatJpDateTime = (iso) => {
-    const d = new Date(iso)
-    if (Number.isNaN(d.getTime())) return String(iso ?? '')
-    return d.toLocaleString('ja-JP')
-  }
-
-  if (!employee) {
     return (
-      <section className="execEvalPage">
-        <p className="skillUpEmpty">従業員が登録されていません。従業員管理から登録してください。</p>
-      </section>
-    )
-  }
-
-  return (
-    <section className="execEvalPage">
-      <header className="execEvalHeader">
-        <h2>経営層評価</h2>
-        <p className="execEvalTarget">
-          評価対象: {employee.name}（{employee.dept} / {employee.grade}）
-        </p>
-        <p className="execEvalTarget">経営層評価は評価期に依存せず、累積スコアとして管理します。</p>
-      </header>
-
-      <article className={`execEvalScoreCard ${executiveEvalScoreCardToneClass(baseScore, finalScore)}`}>
-        <p className="execEvalScoreLabel">最終スコア</p>
-        <p className="execEvalScoreValue">
-          {finalScore}
-          <span>/ 100点</span>
-        </p>
-        <div className="execEvalScoreBreakdown">
-          <span>基本点: {baseScore}</span>
-          <span>コメント点: {commentTotal >= 0 ? `+${commentTotal}` : commentTotal}</span>
-        </div>
-      </article>
-
-      <article className="execEvalSection">
-        <h3>基本評価（大項目ごと / 100点満点）</h3>
-        <p>各大項目ごとに該当する評価を選択してください</p>
-        {majorCategoryOptions.map((major) => {
-          const activeScore = Number(evalState?.baseByMajor?.[major.id])
-          return (
-            <div key={major.id} className="execEvalMajorBaseGroup">
-              <h4>{major.title}</h4>
-              <div className="execEvalBaseButtons">
-                {[
-                  [100, '優秀'],
-                  [80, '良好'],
-                  [60, '標準'],
-                  [40, '要改善'],
-                  [20, '不十分'],
-                ].map(([score, label]) => (
-                  <button
-                    key={`${major.id}-${score}`}
-                    type="button"
-                    className={`execEvalBaseBtn ${activeScore === score ? 'isActive' : ''}`}
-                    onClick={() => setBaseScoreForMajor(major.id, score)}
-                  >
-                    <strong>{score}</strong>
-                    <small>{label}</small>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )
-        })}
-      </article>
-
-      <article className="execEvalSection">
-        <h3>コメント評価（加減点）</h3>
-        <p>コメントを追加するたびに加減点が履歴として蓄積されます。</p>
-        <div className="execEvalDeltaRow">
-          {[-10, -5, -3, 0, 3, 5, 10].map((n) => (
-            <button
-              key={n}
-              type="button"
-              className={`execEvalDeltaBtn ${draftDelta === n ? 'isActive' : ''}`}
-              onClick={() => setDraftDelta(n)}
-            >
-              {n > 0 ? `+${n}` : n}
-            </button>
-          ))}
-        </div>
-        <label className="execEvalMajorField">
-          対象大項目
-          <select value={draftMajorCategory} onChange={(event) => setDraftMajorCategory(event.target.value)}>
-            <option value="">選択してください（必須）</option>
-            {majorCategoryOptions.map((row) => (
-              <option key={row.id} value={row.id}>
-                {row.title}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="execEvalCommentField">
-          コメント内容
-          <textarea
-            value={draftComment}
-            onChange={(event) => setDraftComment(event.target.value)}
-            placeholder="評価の詳細や特記事項を入力してください"
-            rows={4}
-          />
-        </label>
-        <button type="button" className="execEvalAddBtn" onClick={addCommentEvaluation}>
-          コメント評価を追加
-        </button>
-      </article>
-
-      <article className="execEvalSection">
-        <h3>コメント評価の履歴</h3>
-        {commentHistory.length === 0 ? (
-          <p className="execEvalEmpty">履歴はまだありません。</p>
-        ) : (
-          <ul className="execEvalHistoryList">
-            {commentHistory.map((row) => (
-              <li key={row.id} className="execEvalHistoryItem">
-                <div className="execEvalHistoryTop">
-                  <span className={`execEvalHistoryDelta ${row.delta >= 0 ? 'isPlus' : 'isMinus'}`}>
-                    {row.delta >= 0 ? `+${row.delta}` : row.delta}点
-                  </span>
-                  <span className="execEvalHistoryDate">{formatJpDateTime(row.createdAt)}</span>
-                  <button type="button" className="execEvalDeleteBtn" onClick={() => removeHistory(row.id)}>
-                    削除
-                  </button>
-                </div>
-                <p className="execEvalHistoryComment">{row.comment}</p>
-                <p className="execEvalHistoryMeta">
-                  対象大項目: {majorCategoryLabelById[row.majorCategoryKey] ?? row.majorCategoryKey ?? '未分類'}
-                </p>
-              </li>
-            ))}
-          </ul>
-        )}
-      </article>
-    </section>
+    <EvalQuestionnairePage
+      variant="exec"
+      employees={employee ? [employee] : []}
+      evalState={normalizedEvalState}
+      setEvalState={(updater) => {
+        setEvalState((prev) => {
+          const current = {
+            scores: prev?.scores ?? {},
+            comments: prev?.comments ?? {},
+          }
+          const next = typeof updater === 'function' ? updater(current) : updater
+          return {
+            ...(prev ?? {}),
+            scores: { ...(next?.scores ?? {}) },
+            comments: { ...(next?.comments ?? {}) },
+          }
+        })
+      }}
+      peerSelfEval={peerSelfEval}
+      peerSupervisorEval={peerSupervisorEval}
+      evaluationCriteria={evaluationCriteria}
+      activeEvalPeriodKey={activeEvalPeriodKey}
+      setActiveEvalPeriodKey={setActiveEvalPeriodKey}
+      selfEvalHistoryByEmployee={null}
+      evalHistoryByEmployee={executiveEvalHistoryByEmployee}
+      evalPeriodSelectOptions={evalPeriodSelectOptions}
+      evalPeriodFallbackKey={evalPeriodFallbackKey}
+      isSubmittedForPeriod={Boolean(isSubmittedForPeriod)}
+      onSubmitEvaluation={onSubmitEvaluation}
+      canEvaluate={canEvaluate}
+      blockedReason={blockedReason}
+    />
   )
 }
 
-function GoalManagementPage({ employee, goals, setGoals }) {
+function GoalManagementPage({
+  employee,
+  goals,
+  setGoals,
+  periodDirectionGoal = '',
+  setPeriodDirectionGoal,
+  radarSeries = [],
+  radarGradeLabel = '',
+  radarHeadlineScore = Number.NaN,
+  activeEvalPeriodKey,
+  setActiveEvalPeriodKey,
+  evalPeriodSelectOptions,
+  evalPeriodFallbackKey,
+  isSubmittedForPeriod = false,
+  onSubmitPeriod,
+}) {
   const [addOpen, setAddOpen] = useState(false)
+  const [showDraftCadetail, setShowDraftCadetail] = useState(false)
   const [draftPlan, setDraftPlan] = useState('')
   const [draftDo, setDraftDo] = useState('')
   const [draftCheck, setDraftCheck] = useState('')
@@ -6968,6 +7558,13 @@ function GoalManagementPage({ employee, goals, setGoals }) {
       `A（改善）: ${String(actionText ?? '').trim() || '（未入力）'}`,
     ].join('\n')
   }, [])
+  const normalizePdcaFreeText = useCallback((value) => {
+    const s = String(value ?? '').trim()
+    if (!s) return ''
+    const normalized = s.replace(/[()（）\s]/g, '')
+    if (normalized === '未入力') return ''
+    return s
+  }, [])
 
   const normalizeGoalPdca = useCallback((goal) => {
     const plan = String(goal?.plan ?? goal?.title ?? '').trim()
@@ -6976,12 +7573,13 @@ function GoalManagementPage({ employee, goals, setGoals }) {
       const line = lines.find((x) => String(x ?? '').trim().startsWith(prefix))
       return line ? String(line).replace(prefix, '').trim() : ''
     }
-    const doText =
+    const doText = normalizePdcaFreeText(
       String(goal?.doText ?? '').trim() ||
-      readLine('D（実行）:') ||
-      (lines.length <= 1 ? String(goal?.detail ?? '').trim() : '')
-    const checkText = String(goal?.checkText ?? '').trim() || readLine('C（評価）:')
-    const actionText = String(goal?.actionText ?? '').trim() || readLine('A（改善）:')
+        readLine('D（実行）:') ||
+        (lines.length <= 1 ? String(goal?.detail ?? '').trim() : ''),
+    )
+    const checkText = normalizePdcaFreeText(String(goal?.checkText ?? '').trim() || readLine('C（評価）:'))
+    const actionText = normalizePdcaFreeText(String(goal?.actionText ?? '').trim() || readLine('A（改善）:'))
     const isAchievedAuto = Boolean(plan && doText && checkText && actionText)
     return {
       id: goal?.id,
@@ -6993,14 +7591,18 @@ function GoalManagementPage({ employee, goals, setGoals }) {
       achieved: isAchievedAuto,
       detail: buildPdcaDetailText(doText, checkText, actionText),
     }
-  }, [buildPdcaDetailText])
+  }, [buildPdcaDetailText, normalizePdcaFreeText])
 
   const normalizedGoals = useMemo(() => goals.map(normalizeGoalPdca), [goals, normalizeGoalPdca])
   const total = normalizedGoals.length
   const achieved = useMemo(() => normalizedGoals.filter((g) => g.achieved).length, [normalizedGoals])
   const ratePct = total === 0 ? 0 : Math.round((achieved / total) * 100)
+  const currentPeriodKey = String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '').trim()
+  const canSubmit = Boolean(currentPeriodKey && periodDirectionGoal.trim() && normalizedGoals.length > 0)
 
   const openAddModal = () => {
+    if (isSubmittedForPeriod) return
+    setShowDraftCadetail(false)
     setDraftPlan('')
     setDraftDo('')
     setDraftCheck('')
@@ -7010,12 +7612,19 @@ function GoalManagementPage({ employee, goals, setGoals }) {
   }
 
   const closeAddModal = () => setAddOpen(false)
+  const handlePeriodDirectionBlur = useCallback(
+    (value) => {
+      setPeriodDirectionGoal?.(String(value ?? '').trim())
+    },
+    [setPeriodDirectionGoal],
+  )
 
   const handleCreateGoal = () => {
+    if (isSubmittedForPeriod) return
     const plan = draftPlan.trim()
     const doText = draftDo.trim()
-    const checkText = draftCheck.trim()
-    const actionText = draftAction.trim()
+    const checkText = normalizePdcaFreeText(draftCheck.trim())
+    const actionText = normalizePdcaFreeText(draftAction.trim())
     const deadline = draftDeadline.trim()
     if (!plan || !doText || !deadline) {
       window.alert('必須項目（P: Plan・D: Do・目標期日）を入力してください。')
@@ -7044,13 +7653,14 @@ function GoalManagementPage({ employee, goals, setGoals }) {
 
   const updateGoalPdcaField = useCallback(
     (id, field, value) => {
+      if (isSubmittedForPeriod) return
       setGoals((prev) =>
         prev.map((g) => {
           if (g.id !== id) return g
           const current = normalizeGoalPdca(g)
           const next = {
             ...current,
-            [field]: String(value ?? ''),
+            [field]: normalizePdcaFreeText(value),
           }
           const achievedAuto = Boolean(
             String(next.plan).trim() &&
@@ -7071,10 +7681,11 @@ function GoalManagementPage({ employee, goals, setGoals }) {
         }),
       )
     },
-    [setGoals, normalizeGoalPdca, buildPdcaDetailText],
+    [setGoals, normalizeGoalPdca, buildPdcaDetailText, normalizePdcaFreeText, isSubmittedForPeriod],
   )
 
   const removeGoal = (id) => {
+    if (isSubmittedForPeriod) return
     if (!window.confirm('この目標を削除しますか？')) return
     setGoals((prev) => prev.filter((g) => g.id !== id))
   }
@@ -7104,7 +7715,31 @@ function GoalManagementPage({ employee, goals, setGoals }) {
         <p className="goalMgmtMeta">
           {periodLabel} ・ {employee.name}
         </p>
+        <label className="selfEvalPeriodField">
+          評価期
+          <select
+            value={activeEvalPeriodKey ?? evalPeriodFallbackKey ?? ''}
+            onChange={(event) => setActiveEvalPeriodKey?.(event.target.value)}
+          >
+            {(evalPeriodSelectOptions ?? []).map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </label>
       </header>
+      {Array.isArray(radarSeries) && radarSeries.length > 0 ? (
+        <section className="goalMgmtRadarCard">
+          <MemberEvalRadarChart
+            series={radarSeries}
+            compact
+            gradeLabel={radarGradeLabel}
+            headlineScore={radarHeadlineScore}
+            activePeriodKey={activeEvalPeriodKey ?? evalPeriodFallbackKey ?? ''}
+          />
+        </section>
+      ) : null}
 
       <div className="goalMgmtSummaryGrid">
         <article className="goalMgmtStatCard goalMgmtStatSet">
@@ -7135,9 +7770,50 @@ function GoalManagementPage({ employee, goals, setGoals }) {
           </div>
         </article>
       </div>
+      <section className="goalMgmtDirectionCard">
+        <h3>今期の方針目標（P: Plan）</h3>
+        <p className="goalMgmtDirectionHint">
+          まず今期の方向性を1つ定め、その達成に向けて下のPDCAを回します。
+        </p>
+        <textarea
+          value={periodDirectionGoal}
+          onChange={(event) => {
+            if (isSubmittedForPeriod) return
+            setPeriodDirectionGoal?.(event.target.value)
+          }}
+          onBlur={(event) => {
+            if (isSubmittedForPeriod) return
+            handlePeriodDirectionBlur(event.target.value)
+          }}
+          disabled={isSubmittedForPeriod}
+          placeholder="例: 自費率を維持しつつ再製率を改善し、チーム全体の生産性を引き上げる"
+          rows={3}
+        />
+      </section>
+      <div className="selfEvalSubmitBar">
+        <button
+          type="button"
+          className={`selfEvalSubmitBtn${isSubmittedForPeriod ? ' isLocked' : ''}`}
+          onClick={() => onSubmitPeriod?.()}
+          disabled={isSubmittedForPeriod || !canSubmit}
+        >
+          目標管理を提出
+        </button>
+        <p className="selfEvalSubmitHint">
+          {isSubmittedForPeriod
+            ? '提出済みです。この評価期の目標管理は閲覧のみです。'
+            : !currentPeriodKey
+              ? '評価期を選択してください。'
+              : !periodDirectionGoal.trim()
+                ? '今期の方針目標（P）を入力すると提出できます。'
+                : normalizedGoals.length < 1
+                  ? 'PDCA目標を1件以上登録すると提出できます。'
+                  : '提出すると、この評価期の目標管理は編集できなくなります。'}
+        </p>
+      </div>
 
       <div className="goalMgmtToolbar">
-        <button type="button" className="goalMgmtAddBtn" onClick={openAddModal}>
+        <button type="button" className="goalMgmtAddBtn" onClick={openAddModal} disabled={isSubmittedForPeriod}>
           + 新しい目標を追加
         </button>
       </div>
@@ -7151,20 +7827,19 @@ function GoalManagementPage({ employee, goals, setGoals }) {
         ) : (
           <ul className="goalMgmtList">
             {normalizedGoals.map((g) => (
-              <li key={g.id} className="goalMgmtListItem">
+              <li key={g.id} className={`goalMgmtListItem${g.achieved ? ' isAchieved' : ''}`}>
                 <div className="goalMgmtListHead">
                   <label className="goalMgmtCheckLabel">
-                    <input
-                      type="checkbox"
-                      checked={g.achieved}
-                      readOnly
-                      disabled
-                    />
                     <span className={g.achieved ? 'goalMgmtListTitle isAchieved' : 'goalMgmtListTitle'}>
                       {g.plan}
                     </span>
                   </label>
-                  <button type="button" className="goalMgmtDeleteBtn" onClick={() => removeGoal(g.id)}>
+                  <button
+                    type="button"
+                    className="goalMgmtDeleteBtn"
+                    onClick={() => removeGoal(g.id)}
+                    disabled={isSubmittedForPeriod}
+                  >
                     削除
                   </button>
                 </div>
@@ -7175,6 +7850,7 @@ function GoalManagementPage({ employee, goals, setGoals }) {
                   <textarea
                     value={g.checkText}
                     onChange={(event) => updateGoalPdcaField(g.id, 'checkText', event.target.value)}
+                    disabled={isSubmittedForPeriod}
                     placeholder="結果の確認・評価"
                     rows={2}
                   />
@@ -7184,6 +7860,7 @@ function GoalManagementPage({ employee, goals, setGoals }) {
                   <textarea
                     value={g.actionText}
                     onChange={(event) => updateGoalPdcaField(g.id, 'actionText', event.target.value)}
+                    disabled={isSubmittedForPeriod}
                     placeholder="次の改善アクション"
                     rows={2}
                   />
@@ -7201,7 +7878,7 @@ function GoalManagementPage({ employee, goals, setGoals }) {
               ×
             </button>
             <h3>新しい目標を追加（PDCA）</h3>
-            <p className="goalMgmtModalSub">P / D / C / A の順で入力してください。</p>
+            <p className="goalMgmtModalSub">まず P（計画）と D（実行）を決め、C/A は後から追記できます。</p>
             <div className="goalMgmtPdcaHint">
               <p className="goalMgmtPdcaHintTitle">PDCAの書き方ヒント</p>
               <ul>
@@ -7236,26 +7913,37 @@ function GoalManagementPage({ employee, goals, setGoals }) {
                   rows={3}
                 />
               </label>
-              <label className="goalMgmtFormLabel">
-                C（Check: 評価）
-                <span className="goalMgmtFieldHint">達成度や数値、うまくいった点・課題を整理します。</span>
-                <textarea
-                  value={draftCheck}
-                  onChange={(event) => setDraftCheck(event.target.value)}
-                  placeholder="どう評価・確認するか"
-                  rows={2}
-                />
-              </label>
-              <label className="goalMgmtFormLabel">
-                A（Action: 改善）
-                <span className="goalMgmtFieldHint">次にどう改善して再挑戦するかを書きます。</span>
-                <textarea
-                  value={draftAction}
-                  onChange={(event) => setDraftAction(event.target.value)}
-                  placeholder="次の改善アクション"
-                  rows={2}
-                />
-              </label>
+              <button
+                type="button"
+                className="goalMgmtCadetailToggle"
+                onClick={() => setShowDraftCadetail((prev) => !prev)}
+              >
+                {showDraftCadetail ? '▼ C/A入力欄を閉じる（後で入力可）' : '▶ C/A入力欄を開く（任意・後で入力可）'}
+              </button>
+              {showDraftCadetail ? (
+                <>
+                  <label className="goalMgmtFormLabel">
+                    C（Check: 評価）
+                    <span className="goalMgmtFieldHint">達成度や数値、うまくいった点・課題を整理します。</span>
+                    <textarea
+                      value={draftCheck}
+                      onChange={(event) => setDraftCheck(event.target.value)}
+                      placeholder="どう評価・確認するか（後で入力でもOK）"
+                      rows={2}
+                    />
+                  </label>
+                  <label className="goalMgmtFormLabel">
+                    A（Action: 改善）
+                    <span className="goalMgmtFieldHint">次にどう改善して再挑戦するかを書きます。</span>
+                    <textarea
+                      value={draftAction}
+                      onChange={(event) => setDraftAction(event.target.value)}
+                      placeholder="次の改善アクション（後で入力でもOK）"
+                      rows={2}
+                    />
+                  </label>
+                </>
+              ) : null}
               <label className="goalMgmtFormLabel">
                 目標期日 <span className="goalMgmtReq">*</span>
                 <input type="date" value={draftDeadline} onChange={(event) => setDraftDeadline(event.target.value)} />
@@ -7743,14 +8431,14 @@ function SkillSettingsPage({
                       <p className="skillDeptMasterEmpty">部署マスタに部署がまだありません。先に部署を登録してください。</p>
                     ) : (
                       deptList.map((d) => (
-                        <label key={d} className="skillCheckboxRow">
-                          <input
-                            type="checkbox"
-                            checked={draft.depts.includes(d)}
-                            onChange={() => toggleDept(d)}
-                          />
-                          {d}
-                        </label>
+                      <label key={d} className="skillCheckboxRow">
+                        <input
+                          type="checkbox"
+                          checked={draft.depts.includes(d)}
+                          onChange={() => toggleDept(d)}
+                        />
+                        {d}
+                      </label>
                       ))
                     )}
                   </div>
@@ -7946,7 +8634,7 @@ const MemberBossEvalTab = memo(function MemberBossEvalTab({ rows }) {
       ))}
     </ul>
   ) : (
-    <p className="memberDetailEmpty">上司評価の入力はまだありません。</p>
+    <p className="memberDetailEmpty">1次評価(上司)の入力はまだありません。</p>
   )
 })
 
@@ -7973,7 +8661,7 @@ const MemberHistoryTab = memo(function MemberHistoryTab({ rows, summary }) {
               <th>評価期</th>
               <th>自己評価</th>
               <th>前期比</th>
-              <th>上司評価</th>
+              <th>1次評価(上司)</th>
               <th>前期比</th>
               <th>経営層評価</th>
               <th>前期比</th>
@@ -8020,7 +8708,8 @@ function AdminMockPage({
   selfEvalHistoryByEmployee,
   supervisorEvalHistoryByEmployee,
   executiveEvalHistoryByEmployee,
-  goalsByEmployee,
+  goalsByEmployeePeriod,
+  goalDirectionByEmployeePeriod,
   evaluationCriteria,
   hideGradeSelfEvalAndGradeStats = false,
   canViewExecutiveCommentEval = false,
@@ -8037,7 +8726,10 @@ function AdminMockPage({
   setActiveEvalPeriodKey,
   evalPeriodDefinitions,
   evalPeriodFallbackKey,
+  onSubmitSupervisorEvaluation,
+  onSubmitExecutiveEvaluation,
 }) {
+  const SELF_BOSS_GAP_ALERT_THRESHOLD = 20
   const [selectedMemberId, setSelectedMemberId] = useState(null)
   const [detailTab, setDetailTab] = useState('skill')
   const [adminMemberSearch, setAdminMemberSearch] = useState('')
@@ -8047,12 +8739,13 @@ function AdminMockPage({
   const [adminMemberEmployment, setAdminMemberEmployment] = useState('active')
   /** name | id | grade | retiredFirst */
   const [adminMemberSort, setAdminMemberSort] = useState('name')
+  const [bossCommentDraft, setBossCommentDraft] = useState('')
+  const [bossCommentDraftMajor, setBossCommentDraftMajor] = useState('')
+  const [execCommentDraft, setExecCommentDraft] = useState('')
+  const [execCommentDraftMajor, setExecCommentDraftMajor] = useState('')
   const adminMemberDetailDockRef = useRef(null)
   const adminMockTopRef = useRef(null)
   const [adminScrollTopVisible, setAdminScrollTopVisible] = useState(false)
-  const [execDraftDelta, setExecDraftDelta] = useState(0)
-  const [execDraftComment, setExecDraftComment] = useState('')
-  const [execDraftMajorCategory, setExecDraftMajorCategory] = useState('')
 
   const pendingPromotionRequests = useMemo(
     () => (promotionRequests ?? []).filter((r) => r.status === 'pending'),
@@ -8211,6 +8904,22 @@ function AdminMockPage({
       evaluationCriteria,
     })
   }, [selectedMember, evaluationCriteria, skills, skillProgress, selfEvalByEmployee, supervisorEvalByEmployee, executiveEvalByEmployee])
+  const selectedMemberSelfBossGap = useMemo(() => {
+    if (!selectedMember) return Number.NaN
+    const self100 = weightedEvalScore100ForEmployee(selfEvalByEmployee, selectedMember, evaluationCriteria)
+    const boss100 = weightedEvalScore100ForEmployee(supervisorEvalByEmployee, selectedMember, evaluationCriteria)
+    if (!Number.isFinite(self100) || !Number.isFinite(boss100)) return Number.NaN
+    return Math.abs(self100 - boss100)
+  }, [selectedMember, selfEvalByEmployee, supervisorEvalByEmployee, evaluationCriteria])
+  const selectedMemberSelfBossGapAlert = useMemo(() => {
+    if (!Number.isFinite(selectedMemberSelfBossGap)) return null
+    if (selectedMemberSelfBossGap < SELF_BOSS_GAP_ALERT_THRESHOLD) return null
+    return `自己/上司の評価乖離 ${selectedMemberSelfBossGap.toFixed(1)}点`
+  }, [selectedMemberSelfBossGap])
+  const selectedMemberTopMajorGapLabels = useMemo(() => {
+    const top = topSelfBossMajorGaps(selectedMember, evaluationCriteria, selfEvalByEmployee, supervisorEvalByEmployee, 2)
+    return top.map((x) => `${x.title} ${x.gap.toFixed(1)}点`)
+  }, [selectedMember, evaluationCriteria, selfEvalByEmployee, supervisorEvalByEmployee])
   const adminMemberEvalPeriodSelectOptions = useMemo(() => {
     const full = directoryRows.find((r) => String(r?.id) === String(selectedMember?.id))
     return buildEvalPeriodSelectOptionList({
@@ -8401,126 +9110,225 @@ function AdminMockPage({
     (updater) => {
       if (!selectedMember || !setSupervisorEvalByEmployee) return
       setSupervisorEvalByEmployee((prev) => {
-        const current = prev?.[selectedMember.id] ?? { scores: {}, comments: {} }
+        const currentRaw = prev?.[selectedMember.id] ?? { scores: {}, comments: {}, commentHistory: [] }
+        const current = { scores: currentRaw.scores ?? {}, comments: currentRaw.comments ?? {} }
         const nextState = typeof updater === 'function' ? updater(current) : updater
-        return { ...(prev ?? {}), [selectedMember.id]: nextState }
+        return {
+          ...(prev ?? {}),
+          [selectedMember.id]: {
+            ...currentRaw,
+            scores: { ...(nextState?.scores ?? {}) },
+            comments: { ...(nextState?.comments ?? {}) },
+          },
+        }
       })
     },
     [selectedMember, setSupervisorEvalByEmployee],
   )
+  const selectedMemberExecutiveEvalState = selectedMember
+    ? {
+        scores: executiveEvalByEmployee?.[selectedMember.id]?.scores ?? {},
+        comments: executiveEvalByEmployee?.[selectedMember.id]?.comments ?? {},
+      }
+    : { scores: {}, comments: {} }
+  const setSelectedMemberExecutiveEvalState = useCallback(
+    (updater) => {
+      if (!selectedMember || !setExecutiveEvalByEmployee) return
+      setExecutiveEvalByEmployee((prev) => {
+        const currentRaw = prev?.[selectedMember.id] ?? { baseScore: 0, baseByMajor: {}, commentHistory: [], scores: {}, comments: {} }
+        const current = {
+          scores: currentRaw.scores ?? {},
+          comments: currentRaw.comments ?? {},
+        }
+        const nextState = typeof updater === 'function' ? updater(current) : updater
+        return {
+          ...(prev ?? {}),
+          [selectedMember.id]: {
+            ...currentRaw,
+            scores: { ...(nextState?.scores ?? {}) },
+            comments: { ...(nextState?.comments ?? {}) },
+          },
+        }
+      })
+    },
+    [selectedMember, setExecutiveEvalByEmployee],
+  )
+  const execCommentMajorOptions = useMemo(() => {
+    const majors = Array.isArray(evaluationCriteria?.sharedMajors) ? evaluationCriteria.sharedMajors : []
+    return majors
+      .map((m, idx) => ({
+        id: String(m?.id ?? '').trim() || `major-${idx}`,
+        title: String(m?.title ?? '').trim() || `大項目${idx + 1}`,
+      }))
+      .filter((m) => m.id)
+  }, [evaluationCriteria])
+  const bossCommentMajorOptions = execCommentMajorOptions
+  const bossCommentMajorLabelById = useMemo(
+    () => Object.fromEntries(bossCommentMajorOptions.map((m) => [m.id, m.title])),
+    [bossCommentMajorOptions],
+  )
+  useEffect(() => {
+    if (!bossCommentMajorOptions.length) {
+      setBossCommentDraftMajor('')
+      return
+    }
+    setBossCommentDraftMajor((prev) => {
+      if (prev && bossCommentMajorLabelById[prev]) return prev
+      return bossCommentMajorOptions[0].id
+    })
+  }, [bossCommentMajorOptions, bossCommentMajorLabelById])
+  const selectedMemberBossCommentHistory = useMemo(() => {
+    if (!selectedMember) return []
+    const rows = Array.isArray(supervisorEvalByEmployee?.[selectedMember.id]?.commentHistory)
+      ? supervisorEvalByEmployee[selectedMember.id].commentHistory
+      : []
+    return [...rows].sort((a, b) => String(b?.createdAt ?? '').localeCompare(String(a?.createdAt ?? '')))
+  }, [selectedMember, supervisorEvalByEmployee])
+  const addBossCommentForSelectedMember = useCallback(() => {
+    if (!selectedMember || !setSupervisorEvalByEmployee) return
+    const comment = String(bossCommentDraft ?? '').trim()
+    if (!comment) return
+    const majorCategoryKey = String(bossCommentDraftMajor ?? '').trim()
+    const now = new Date().toISOString()
+    setSupervisorEvalByEmployee((prev) => {
+      const current = prev?.[selectedMember.id] ?? { scores: {}, comments: {}, commentHistory: [] }
+      const history = Array.isArray(current.commentHistory) ? current.commentHistory : []
+      return {
+        ...(prev ?? {}),
+        [selectedMember.id]: {
+          ...current,
+          commentHistory: [
+            ...history,
+            {
+              id: `boss-comment-${selectedMember.id}-${Date.now()}`,
+              comment,
+              majorCategoryKey,
+              createdAt: now,
+            },
+          ],
+        },
+      }
+    })
+    setBossCommentDraft('')
+  }, [selectedMember, setSupervisorEvalByEmployee, bossCommentDraft, bossCommentDraftMajor])
+  const removeBossCommentForSelectedMember = useCallback(
+    (commentId) => {
+      const id = String(commentId ?? '').trim()
+      if (!selectedMember || !setSupervisorEvalByEmployee || !id) return
+      setSupervisorEvalByEmployee((prev) => {
+        const current = prev?.[selectedMember.id]
+        if (!current) return prev
+        const history = Array.isArray(current.commentHistory) ? current.commentHistory : []
+        return {
+          ...(prev ?? {}),
+          [selectedMember.id]: {
+            ...current,
+            commentHistory: history.filter((h) => String(h?.id ?? '').trim() !== id),
+          },
+        }
+      })
+    },
+    [selectedMember, setSupervisorEvalByEmployee],
+  )
+  const execCommentMajorLabelById = useMemo(
+    () => Object.fromEntries(execCommentMajorOptions.map((m) => [m.id, m.title])),
+    [execCommentMajorOptions],
+  )
+  useEffect(() => {
+    if (!execCommentMajorOptions.length) {
+      setExecCommentDraftMajor('')
+      return
+    }
+    setExecCommentDraftMajor((prev) => {
+      if (prev && execCommentMajorLabelById[prev]) return prev
+      return execCommentMajorOptions[0].id
+    })
+  }, [execCommentMajorOptions, execCommentMajorLabelById])
+  const selectedMemberExecCommentHistory = useMemo(() => {
+    if (!selectedMember) return []
+    const rows = Array.isArray(executiveEvalByEmployee?.[selectedMember.id]?.commentHistory)
+      ? executiveEvalByEmployee[selectedMember.id].commentHistory
+      : []
+    return [...rows].sort((a, b) => String(b?.createdAt ?? '').localeCompare(String(a?.createdAt ?? '')))
+  }, [selectedMember, executiveEvalByEmployee])
+  const addExecutiveCommentForSelectedMember = useCallback(() => {
+    if (!selectedMember || !setExecutiveEvalByEmployee) return
+    const comment = String(execCommentDraft ?? '').trim()
+    if (!comment) return
+    const majorCategoryKey = String(execCommentDraftMajor ?? '').trim()
+    const now = new Date().toISOString()
+    setExecutiveEvalByEmployee((prev) => {
+      const current = prev?.[selectedMember.id] ?? { baseScore: 0, baseByMajor: {}, commentHistory: [], scores: {}, comments: {} }
+      const history = Array.isArray(current.commentHistory) ? current.commentHistory : []
+      return {
+        ...(prev ?? {}),
+        [selectedMember.id]: {
+          ...current,
+          commentHistory: [
+            ...history,
+            {
+              id: `exec-comment-${selectedMember.id}-${Date.now()}`,
+              delta: 0,
+              comment,
+              majorCategoryKey,
+              createdAt: now,
+            },
+          ],
+        },
+      }
+    })
+    setExecCommentDraft('')
+  }, [selectedMember, setExecutiveEvalByEmployee, execCommentDraft, execCommentDraftMajor])
+  const removeExecutiveCommentForSelectedMember = useCallback(
+    (commentId) => {
+      const id = String(commentId ?? '').trim()
+      if (!selectedMember || !setExecutiveEvalByEmployee || !id) return
+      setExecutiveEvalByEmployee((prev) => {
+        const current = prev?.[selectedMember.id]
+        if (!current) return prev
+        const history = Array.isArray(current.commentHistory) ? current.commentHistory : []
+        return {
+          ...(prev ?? {}),
+          [selectedMember.id]: {
+            ...current,
+            commentHistory: history.filter((h) => String(h?.id ?? '').trim() !== id),
+          },
+        }
+      })
+    },
+    [selectedMember, setExecutiveEvalByEmployee],
+  )
+  const selectedMemberSelfSubmittedForActive = useMemo(() => {
+    if (!selectedMember) return false
+    const periodKey = activeEvalPeriodKey ?? evalPeriodFallbackKey ?? ''
+    if (!periodKey) return false
+    return Boolean(selfEvalHistoryByEmployee?.[selectedMember.id]?.[periodKey]?.submittedAt)
+  }, [selectedMember, activeEvalPeriodKey, evalPeriodFallbackKey, selfEvalHistoryByEmployee])
   const selectedMemberSupervisorSubmittedForActive = useMemo(() => {
     if (!selectedMember) return false
     const periodKey = activeEvalPeriodKey ?? evalPeriodFallbackKey ?? ''
     if (!periodKey) return false
     return Boolean(supervisorEvalHistoryByEmployee?.[selectedMember.id]?.[periodKey]?.submittedAt)
   }, [selectedMember, activeEvalPeriodKey, evalPeriodFallbackKey, supervisorEvalHistoryByEmployee])
-  const selectedMemberGoals = selectedMember ? goalsByEmployee?.[selectedMember.id] ?? [] : []
+  const selectedMemberExecutiveSubmittedForActive = useMemo(() => {
+    if (!selectedMember) return false
+    const periodKey = activeEvalPeriodKey ?? evalPeriodFallbackKey ?? ''
+    if (!periodKey) return false
+    return Boolean(executiveEvalHistoryByEmployee?.[selectedMember.id]?.[periodKey]?.submittedAt)
+  }, [selectedMember, activeEvalPeriodKey, evalPeriodFallbackKey, executiveEvalHistoryByEmployee])
+  const selectedMemberGoals = useMemo(() => {
+    if (!selectedMember) return []
+    const periodKey = String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '').trim()
+    if (!periodKey) return []
+    return goalsByEmployeePeriod?.[selectedMember.id]?.[periodKey] ?? []
+  }, [selectedMember, activeEvalPeriodKey, evalPeriodFallbackKey, goalsByEmployeePeriod])
+  const selectedMemberGoalDirection = useMemo(() => {
+    if (!selectedMember) return ''
+    const periodKey = String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '').trim()
+    if (!periodKey) return ''
+    return String(goalDirectionByEmployeePeriod?.[selectedMember.id]?.[periodKey] ?? '').trim()
+  }, [selectedMember, activeEvalPeriodKey, evalPeriodFallbackKey, goalDirectionByEmployeePeriod])
   const selectedMemberGoalCount = selectedMemberGoals.length
-  const selectedMemberExecutiveCommentView = useMemo(() => {
-    if (!selectedMember) return { baseScore: 0, baseByMajor: {}, commentTotal: 0, finalScore: 0, history: [] }
-    const raw = executiveEvalByEmployee?.[selectedMember.id]
-    const baseByMajor =
-      raw?.baseByMajor && typeof raw.baseByMajor === 'object' && !Array.isArray(raw.baseByMajor)
-        ? { ...raw.baseByMajor }
-        : {}
-    const baseScore = executiveEvalOverallBaseScore(raw)
-    const history = Array.isArray(raw?.commentHistory)
-      ? raw.commentHistory.map((row) => ({
-          ...row,
-          majorCategoryKey: String(row?.majorCategoryKey ?? '').trim(),
-        }))
-      : []
-    const commentTotal = history.reduce((sum, row) => sum + (Number(row.delta) || 0), 0)
-    const finalScore = quantizeExecutiveScore100(baseScore + commentTotal)
-    return { baseScore, baseByMajor, commentTotal, finalScore, history }
-  }, [selectedMember, executiveEvalByEmployee])
-
-  const updateSelectedMemberExecutiveEval = useCallback(
-    (updater) => {
-      if (!selectedMember || !setExecutiveEvalByEmployee) return
-      setExecutiveEvalByEmployee((prev) => {
-        const cur = prev?.[selectedMember.id] ?? { baseScore: 0, baseByMajor: {}, commentHistory: [] }
-        const next = typeof updater === 'function' ? updater(cur) : updater
-        return { ...(prev ?? {}), [selectedMember.id]: next }
-      })
-    },
-    [selectedMember, setExecutiveEvalByEmployee],
-  )
-
-  const handleExecBaseScoreChange = useCallback(
-    (majorId, score) => {
-      const majorKey = String(majorId ?? '').trim()
-      if (!majorKey) return
-      const n = Math.max(0, Math.min(100, Number(score) || 0))
-      updateSelectedMemberExecutiveEval((prev) => ({
-        baseScore: Number(prev.baseScore ?? 0),
-        baseByMajor: { ...(prev.baseByMajor ?? {}), [majorKey]: n },
-        commentHistory: [...(prev.commentHistory ?? [])],
-      }))
-    },
-    [updateSelectedMemberExecutiveEval],
-  )
-
-  const handleExecAddComment = useCallback(() => {
-    const text = execDraftComment.trim()
-    if (!text) {
-      window.alert('コメント内容を入力してください。')
-      return
-    }
-    const majorCategoryKey = String(execDraftMajorCategory ?? '').trim()
-    if (!majorCategoryKey) {
-      window.alert('対象の大項目を選択してください。')
-      return
-    }
-    const delta = Math.max(-20, Math.min(20, Number(execDraftDelta) || 0))
-    const item = {
-      id: `exec-log-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      delta,
-      comment: text,
-      majorCategoryKey,
-      createdAt: new Date().toISOString(),
-    }
-    updateSelectedMemberExecutiveEval((prev) => ({
-      baseScore: Number(prev.baseScore ?? 0),
-      baseByMajor: { ...(prev.baseByMajor ?? {}) },
-      commentHistory: [item, ...(prev.commentHistory ?? [])],
-    }))
-    setExecDraftComment('')
-    setExecDraftDelta(0)
-    setExecDraftMajorCategory('')
-  }, [execDraftComment, execDraftDelta, execDraftMajorCategory, updateSelectedMemberExecutiveEval])
-
-  const handleExecRemoveComment = useCallback(
-    (id) => {
-      if (!window.confirm('このコメント評価履歴を削除しますか？')) return
-      updateSelectedMemberExecutiveEval((prev) => ({
-        baseScore: Number(prev.baseScore ?? 0),
-        baseByMajor: { ...(prev.baseByMajor ?? {}) },
-        commentHistory: (prev.commentHistory ?? []).filter((row) => row.id !== id),
-      }))
-    },
-    [updateSelectedMemberExecutiveEval],
-  )
-  const execMajorCategoryOptions = useMemo(() => {
-    const sharedMajors = Array.isArray(evaluationCriteria?.sharedMajors) ? evaluationCriteria.sharedMajors : []
-    if (sharedMajors.length) {
-      return sharedMajors
-        .map((m, idx) => ({
-          id: String(m?.id ?? '').trim() || `major-${idx}`,
-          title: String(m?.title ?? '').trim() || `大項目${idx + 1}`,
-        }))
-        .filter((m) => m.id)
-    }
-    return buildEvalCategoriesForGrade(evaluationCriteria, selectedMemberActiveEvalGrade).map((c, idx) => ({
-      id: String(c?.id ?? '').trim() || `major-${idx}`,
-      title: String(c?.title ?? '').trim() || `大項目${idx + 1}`,
-    }))
-  }, [evaluationCriteria, selectedMemberActiveEvalGrade])
-  const execMajorCategoryLabelById = useMemo(
-    () => Object.fromEntries(execMajorCategoryOptions.map((m) => [m.id, m.title])),
-    [execMajorCategoryOptions],
-  )
-
   const selectedMemberEvalHistoryRows = useMemo(() => {
     if (detailTab !== 'history') return []
     if (!selectedMember) return []
@@ -8531,11 +9339,7 @@ function AdminMockPage({
     const cumulativeExecState = executiveEvalByEmployee?.[empId] ?? executiveEvalHistoryByEmployee?.[empId]?.cumulative
     const execScore = (state) => {
       if (!state) return null
-      const base = executiveEvalOverallBaseScore(state)
-      const diff = Array.isArray(state.commentHistory)
-        ? state.commentHistory.reduce((sum, row) => sum + (Number(row.delta) || 0), 0)
-        : 0
-      return quantizeExecutiveScore100(base + diff)
+      return executiveScore100ForState(state, evaluationCriteria, selectedMember?.grade)
     }
     const rawRows = periodKeys.map((periodKey) => {
       const selfState = selfEvalHistoryByEmployee?.[empId]?.[periodKey]
@@ -8603,7 +9407,7 @@ function AdminMockPage({
     const execD = parseDelta(latest.execDelta)
     const maxAbs = [
       { key: '自己評価', v: selfD },
-      { key: '上司評価', v: bossD },
+      { key: '1次評価(上司)', v: bossD },
       { key: '経営層評価', v: execD },
     ]
       .filter((x) => Number.isFinite(x.v))
@@ -8617,12 +9421,6 @@ function AdminMockPage({
       focusLabel: maxAbs ? `${maxAbs.key} ${maxAbs.v > 0 ? '改善' : '要確認'}（${maxAbs.v > 0 ? '+' : ''}${maxAbs.v.toFixed(1)}）` : '比較データ不足',
     }
   }, [detailTab, selectedMemberEvalHistoryRows])
-
-  const formatExecutiveCommentDate = (iso) => {
-    const d = new Date(iso)
-    if (Number.isNaN(d.getTime())) return String(iso ?? '')
-    return d.toLocaleString('ja-JP')
-  }
 
   const gradeRows = useMemo(() => {
     const order = ['G6', 'G5', 'G4', 'G3', 'G2', 'G1']
@@ -8686,18 +9484,33 @@ function AdminMockPage({
 
         const selfDone = hasEvalScore(selfEvalByEmployee?.[row.id])
         const supervisorDone = hasEvalScore(supervisorEvalByEmployee?.[row.id])
+        const self100 = weightedEvalScore100ForEmployee(selfEvalByEmployee, row, evaluationCriteria)
+        const boss100 = weightedEvalScore100ForEmployee(supervisorEvalByEmployee, row, evaluationCriteria)
+        const selfBossGap =
+          Number.isFinite(self100) && Number.isFinite(boss100) ? Math.abs(self100 - boss100) : Number.NaN
         const execData = executiveEvalByEmployee?.[row.id]
+        const execScores =
+          execData?.scores && typeof execData.scores === 'object' && !Array.isArray(execData.scores) ? execData.scores : {}
         const execBase = executiveEvalOverallBaseScore(execData)
         const executiveDone = !!(
           execData &&
-          (execBase > 0 || (Array.isArray(execData.commentHistory) && execData.commentHistory.length > 0))
+          (Object.keys(execScores).length > 0 ||
+            execBase > 0 ||
+            (Array.isArray(execData.commentHistory) && execData.commentHistory.length > 0))
         )
 
         const tags = []
         if (isSkillStagnated) tags.push('スキル更新停滞(3か月以上)')
         if (!selfDone) tags.push('自己評価未実施')
-        if (!supervisorDone) tags.push('上司評価未実施')
+        if (!supervisorDone) tags.push('1次評価(上司)未実施')
         if (!executiveDone) tags.push('経営層評価未実施')
+        if (Number.isFinite(selfBossGap) && selfBossGap >= SELF_BOSS_GAP_ALERT_THRESHOLD) {
+          tags.push(`自己/上司の評価乖離 ${selfBossGap.toFixed(1)}点`)
+          const topMajor = topSelfBossMajorGaps(row, evaluationCriteria, selfEvalByEmployee, supervisorEvalByEmployee, 2)
+          for (const item of topMajor) {
+            tags.push(`乖離大項目: ${item.title} ${item.gap.toFixed(1)}点`)
+          }
+        }
         if (!tags.length) return null
 
         return {
@@ -8714,13 +9527,14 @@ function AdminMockPage({
     selfEvalByEmployee,
     supervisorEvalByEmployee,
     executiveEvalByEmployee,
+    evaluationCriteria,
   ])
 
   return (
     <>
       <section ref={adminMockTopRef} className="adminMock">
-        <div className="adminMain only">
-        {selectedMember ? (
+      <div className="adminMain only">
+          {selectedMember ? (
           <div
             ref={adminMemberDetailDockRef}
             className="adminMemberDetailDock"
@@ -8736,7 +9550,7 @@ function AdminMockPage({
                   </div>
                   <div className="memberDetailHeroIdentity">
                     <div className="memberDetailHeroNameRow">
-                      <h4>{selectedMember.name}</h4>
+                    <h4>{selectedMember.name}</h4>
                       {hideGradeSelfEvalAndGradeStats ? null : (
                         <div
                           className="memberDetailGradeInline"
@@ -8746,38 +9560,22 @@ function AdminMockPage({
                         >
                           <span className="memberDetailGradeInlineLabel">等級</span>
                           <strong className="memberDetailGradeInlineValue">{selectedMember.grade}</strong>
-                          <button
-                            type="button"
-                            className="memberPromoteBtn memberPromoteBtnInline"
-                            disabled={
-                              selectedMember.retired ||
-                              !selectedMemberPromotionTarget ||
-                              selectedMemberHasPendingPromotion
-                            }
-                            title={
-                              selectedMemberHasPendingPromotion
-                                ? 'すでに昇級申請が出ています'
-                                : !selectedMemberPromotionTarget
-                                  ? 'これ以上昇級できません'
-                                  : '昇級申請'
-                            }
-                            onClick={() => {
-                              if (!selectedMember || !selectedMemberPromotionTarget) return
-                              onSubmitPromotionRequest?.(
-                                selectedMember.id,
-                                selectedMember.name,
-                                selectedMember.grade,
-                              )
-                            }}
-                          >
-                            昇級
-                          </button>
                         </div>
                       )}
                     </div>
                     <p>{selectedMember.dept}</p>
                     <small>入社日: {selectedMember.joinDate || '―'}</small>
+                    {selectedMemberSelfBossGapAlert ? (
+                      <div className="memberDetailGapAlertWrap">
+                        <p className="memberDetailGapAlert">{selectedMemberSelfBossGapAlert}</p>
+                        {selectedMemberTopMajorGapLabels.map((label) => (
+                          <p key={label} className="memberDetailGapAlertSub">
+                            {label}
+                          </p>
+                        ))}
                   </div>
+                    ) : null}
+                </div>
                   {selectedMemberEvalRadarSeries.length > 0 ? (
                     <div className="memberDetailHeroRadar">
                       <MemberEvalRadarChart
@@ -8785,16 +9583,17 @@ function AdminMockPage({
                         compact
                         gradeLabel={selectedMemberActiveEvalGrade}
                         headlineScore={selectedMemberWeightedTotal100}
+                        activePeriodKey={activeEvalPeriodKey ?? evalPeriodFallbackKey ?? ''}
                       />
-                    </div>
+                </div>
                   ) : null}
                 </div>
                 <div
                   className={`memberDetailActions${hideGradeSelfEvalAndGradeStats ? ' memberDetailActions--three' : ''}`}
                 >
                   {hideGradeSelfEvalAndGradeStats ? (
-                    <button
-                      type="button"
+                  <button
+                    type="button"
                       className="memberDetailPromoteBtn"
                       disabled={
                         !selectedMember ||
@@ -8802,7 +9601,7 @@ function AdminMockPage({
                         !selectedMemberPromotionTarget ||
                         selectedMemberHasPendingPromotion
                       }
-                      onClick={() => {
+                    onClick={() => {
                         if (!selectedMember || !selectedMemberPromotionTarget) return
                         onSubmitPromotionRequest?.(
                           selectedMember.id,
@@ -8812,7 +9611,7 @@ function AdminMockPage({
                       }}
                     >
                       📋 昇級申請
-                    </button>
+                  </button>
                   ) : null}
                 </div>
               </header>
@@ -8829,16 +9628,16 @@ function AdminMockPage({
                   スキル習得状況
                 </button>
                 {hideGradeSelfEvalAndGradeStats ? null : (
-                  <button
-                    type="button"
-                    className={detailTab === 'self' ? 'isActive' : ''}
-                    onClick={() => {
-                      setDetailTab('self')
-                      onChangeDetailTab?.('self')
-                    }}
-                  >
-                    自己評価
-                  </button>
+                <button
+                  type="button"
+                  className={detailTab === 'self' ? 'isActive' : ''}
+                  onClick={() => {
+                    setDetailTab('self')
+                    onChangeDetailTab?.('self')
+                  }}
+                >
+                  自己評価
+                </button>
                 )}
                 <button
                   type="button"
@@ -8848,7 +9647,17 @@ function AdminMockPage({
                     onChangeDetailTab?.('boss')
                   }}
                 >
-                  上司評価
+                  1次評価(上司)
+                </button>
+                <button
+                  type="button"
+                  className={detailTab === 'bossnote' ? 'isActive' : ''}
+                  onClick={() => {
+                    setDetailTab('bossnote')
+                    onChangeDetailTab?.('bossnote')
+                  }}
+                >
+                  1次評価コメント
                 </button>
                 <button
                   type="button"
@@ -8879,7 +9688,19 @@ function AdminMockPage({
                       onChangeDetailTab?.('execcomments')
                     }}
                   >
-                    経営層のコメント評価
+                    2次評価(経営層)
+                  </button>
+                ) : null}
+                {canViewExecutiveCommentEval ? (
+                  <button
+                    type="button"
+                    className={detailTab === 'execnote' ? 'isActive' : ''}
+                    onClick={() => {
+                      setDetailTab('execnote')
+                      onChangeDetailTab?.('execnote')
+                    }}
+                  >
+                    経営層コメント
                   </button>
                 ) : null}
               </div>
@@ -8904,7 +9725,7 @@ function AdminMockPage({
                       </select>
                     </label>
                     <p className="memberDetailEvalPeriodHint">
-                      自己評価・上司評価はこの期のデータです。経営層評価は期に依存しない累積データです。
+                      自己評価・1次評価(上司)・2次評価(経営層)はこの期のデータです。
                     </p>
                   </div>
                 ) : null}
@@ -8914,11 +9735,11 @@ function AdminMockPage({
                       <p className="memberSkillEditHint">
                         面談などのタイミングで進捗レベルを更新できます（0＝未習得、保存は自動です）。
                       </p>
-                      <ul className="memberSkillList">
+                    <ul className="memberSkillList">
                         {selectedMemberSkills.map((s) => (
                           <li key={s.id} className="memberSkillRow">
                             <div className="memberSkillRowMain">
-                              <p className="memberSkillTitle">{s.title}</p>
+                          <p className="memberSkillTitle">{s.title}</p>
                               <p className="memberSkillMeta">最大 Lv.{s.max}</p>
                             </div>
                             <label className="memberSkillLevelLabel">
@@ -8950,9 +9771,9 @@ function AdminMockPage({
                                 ))}
                               </select>
                             </label>
-                          </li>
-                        ))}
-                      </ul>
+                        </li>
+                      ))}
+                    </ul>
                     </>
                   ) : (
                     <p className="memberDetailEmpty">この等級のスキル設定がありません。</p>
@@ -8974,107 +9795,63 @@ function AdminMockPage({
                     evalPeriodFallbackKey={evalPeriodFallbackKey}
                     supervisorEvalHistoryByEmployee={supervisorEvalHistoryByEmployee}
                     isSubmittedForPeriod={selectedMemberSupervisorSubmittedForActive}
-                    onSubmitEvaluation={null}
+                    onSubmitEvaluation={() => onSubmitSupervisorEvaluation?.(selectedMember?.id)}
+                    canEvaluate={selectedMemberSelfSubmittedForActive}
+                    blockedReason="自己評価の提出後に1次評価(上司)を入力できます。"
                   />
                 ) : null}
                 {detailTab === 'goal' ? (
                   selectedMemberGoalCount > 0 ? (
-                    <ul className="memberGoalList">
-                      {selectedMemberGoals.map((goal) => (
-                        <li key={goal.id} className="memberGoalItem">
-                          <div className="memberGoalHead">
-                            <p className={goal.achieved ? 'memberGoalTitle isDone' : 'memberGoalTitle'}>{goal.title}</p>
-                            <span className={`memberGoalStatus${goal.achieved ? ' isDone' : ''}`}>
-                              {goal.achieved ? '達成済み' : '進行中'}
-                            </span>
-                          </div>
-                          <p className="memberGoalDeadline">期日: {goal.deadline || '―'}</p>
-                          <p className="memberGoalDetail">{goal.detail || '（詳細なし）'}</p>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="memberDetailEmpty">登録目標はありません。</p>
-                  )
+                    <>
+                      {selectedMemberGoalDirection ? (
+                        <section className="goalMgmtDirectionCard">
+                          <h3>今期の方針目標（P: Plan）</h3>
+                          <p className="goalMgmtDirectionHint">{selectedMemberGoalDirection}</p>
+                        </section>
                 ) : null}
-                {canViewExecutiveCommentEval && detailTab === 'execcomments' ? (
-                  <div className="memberDetailExecComments">
-                    <article
-                      className={`execEvalScoreCard memberDetailExecScoreCard ${executiveEvalScoreCardToneClass(
-                        selectedMemberExecutiveCommentView.baseScore,
-                        selectedMemberExecutiveCommentView.finalScore,
-                      )}`}
-                    >
-                      <p className="execEvalScoreLabel">経営層評価スコア</p>
-                      <p className="execEvalScoreValue">
-                        {selectedMemberExecutiveCommentView.finalScore}
-                        <span>/ 100点</span>
-                      </p>
-                      <div className="execEvalScoreBreakdown">
-                        <span>基本点: {selectedMemberExecutiveCommentView.baseScore}</span>
-                        <span>
-                          コメント点:{' '}
-                          {selectedMemberExecutiveCommentView.commentTotal >= 0
-                            ? `+${selectedMemberExecutiveCommentView.commentTotal}`
-                            : selectedMemberExecutiveCommentView.commentTotal}
-                        </span>
-                      </div>
-                    </article>
-                    <article className="execEvalSection">
-                      <h4>基本評価（大項目ごと / 100点満点）</h4>
-                      {execMajorCategoryOptions.map((major) => {
-                        const activeScore = Number(selectedMemberExecutiveCommentView.baseByMajor?.[major.id])
-                        return (
-                          <div key={major.id} className="execEvalMajorBaseGroup">
-                            <p className="execEvalMajorBaseTitle">{major.title}</p>
-                            <div className="execEvalBaseButtons">
-                              {[
-                                [100, '優秀'],
-                                [80, '良好'],
-                                [60, '標準'],
-                                [40, '要改善'],
-                                [20, '不十分'],
-                              ].map(([score, label]) => (
-                                <button
-                                  key={`${major.id}-${score}`}
-                                  type="button"
-                                  className={`execEvalBaseBtn ${activeScore === score ? 'isActive' : ''}`}
-                                  onClick={() => handleExecBaseScoreChange(major.id, score)}
-                                >
-                                  <strong>{score}</strong>
-                                  <small>{label}</small>
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </article>
-                    <article className="execEvalSection">
-                      <h4>コメント評価（加減点）</h4>
-                      <div className="execEvalDeltaRow">
-                        {[-10, -5, -3, 0, 3, 5, 10].map((n) => (
-                          <button
-                            key={n}
-                            type="button"
-                            className={`execEvalDeltaBtn ${execDraftDelta === n ? 'isActive' : ''}`}
-                            onClick={() => setExecDraftDelta(n)}
-                          >
-                            {n > 0 ? `+${n}` : n}
-                          </button>
+                      <ul className="memberGoalList">
+                        {selectedMemberGoals.map((goal) => (
+                          <li key={goal.id} className="memberGoalItem">
+                            <div className="memberGoalHead">
+                              <p className={goal.achieved ? 'memberGoalTitle isDone' : 'memberGoalTitle'}>{goal.title}</p>
+                              <span className={`memberGoalStatus${goal.achieved ? ' isDone' : ''}`}>
+                                {goal.achieved ? '達成済み' : '進行中'}
+                              </span>
+              </div>
+                            <p className="memberGoalDeadline">期日: {goal.deadline || '―'}</p>
+                            <p className="memberGoalDetail">{goal.detail || '（詳細なし）'}</p>
+                          </li>
                         ))}
-                      </div>
+                      </ul>
+                    </>
+                  ) : (
+                    selectedMemberGoalDirection ? (
+                      <>
+                        <section className="goalMgmtDirectionCard">
+                          <h3>今期の方針目標（P: Plan）</h3>
+                          <p className="goalMgmtDirectionHint">{selectedMemberGoalDirection}</p>
+            </section>
+                        <p className="memberDetailEmpty">この期のPDCA目標はまだありません。</p>
+                      </>
+                    ) : (
+                      <p className="memberDetailEmpty">この期の目標管理データはまだありません。</p>
+                    )
+                  )
+          ) : null}
+                {detailTab === 'bossnote' ? (
+                  <div className="memberDetailExecComments">
+                    <article className="execEvalSection">
+                      <h4>1次評価コメントを追加</h4>
+                      <p className="memberDetailExecCommentsNote">
+                        このコメント履歴は累積です（評価期で締めません）。点数には影響しません。
+                      </p>
                       <div className="execEvalMajorSelectRow">
                         <label className="execEvalMajorField">
-                          対象大項目（必須）
-                          <select
-                            value={execDraftMajorCategory}
-                            onChange={(event) => setExecDraftMajorCategory(event.target.value)}
-                          >
-                            <option value="">選択してください</option>
-                            {execMajorCategoryOptions.map((row) => (
-                              <option key={row.id} value={row.id}>
-                                {row.title}
+                          <span>対象の大項目</span>
+                          <select value={bossCommentDraftMajor} onChange={(event) => setBossCommentDraftMajor(event.target.value)}>
+                            {bossCommentMajorOptions.map((opt) => (
+                              <option key={opt.id} value={opt.id}>
+                                {opt.title}
                               </option>
                             ))}
                           </select>
@@ -9083,45 +9860,132 @@ function AdminMockPage({
                       <div className="execEvalCommentForm">
                         <input
                           type="text"
-                          value={execDraftComment}
-                          onChange={(event) => setExecDraftComment(event.target.value)}
-                          placeholder="評価コメントを入力"
+                          value={bossCommentDraft}
+                          onChange={(event) => setBossCommentDraft(event.target.value)}
+                          placeholder="1次評価コメントを入力"
                         />
-                        <button type="button" onClick={handleExecAddComment}>
-                          コメントを追加
+                        <button type="button" onClick={addBossCommentForSelectedMember}>
+                          追加
                         </button>
                       </div>
                     </article>
-                    <h4 className="memberDetailExecCommentsHeading">コメント評価の履歴</h4>
-                    {selectedMemberExecutiveCommentView.history.length === 0 ? (
-                      <p className="memberDetailEmpty">経営層のコメント評価はまだありません。</p>
+                    {selectedMemberBossCommentHistory.length ? (
+                      <article className="execEvalSection">
+                        <h4 className="memberDetailExecCommentsHeading">コメント履歴</h4>
+                        <ul className="execEvalHistoryList memberDetailExecHistoryList">
+                          {selectedMemberBossCommentHistory.map((row) => (
+                            <li key={row.id} className="execEvalHistoryItem">
+                              <div className="execEvalHistoryTop">
+                                <span className="execEvalHistoryDate">
+                                  {(() => {
+                                    const d = new Date(row.createdAt)
+                                    return Number.isNaN(d.getTime()) ? String(row.createdAt ?? '') : d.toLocaleString('ja-JP')
+                                  })()}
+                                </span>
+                                <button
+                                  type="button"
+                                  className="execEvalDeleteBtn"
+                                  onClick={() => removeBossCommentForSelectedMember(row.id)}
+                                >
+                                  削除
+                                </button>
+                              </div>
+                              <p className="execEvalHistoryComment">{row.comment}</p>
+                              <p className="execEvalHistoryMeta">
+                                対象: {bossCommentMajorLabelById[String(row?.majorCategoryKey ?? '').trim()] ?? '未指定'}
+                              </p>
+                            </li>
+                          ))}
+                        </ul>
+                      </article>
                     ) : (
-                      <ul className="execEvalHistoryList memberDetailExecHistoryList">
-                        {selectedMemberExecutiveCommentView.history.map((row) => (
-                          <li key={row.id} className="execEvalHistoryItem">
-                            <div className="execEvalHistoryTop">
-                              <span
-                                className={`execEvalHistoryDelta ${row.delta >= 0 ? 'isPlus' : 'isMinus'}`}
-                              >
-                                {row.delta >= 0 ? `+${row.delta}` : row.delta}点
-                              </span>
-                              <span className="execEvalHistoryDate">{formatExecutiveCommentDate(row.createdAt)}</span>
-                            </div>
-                            <p className="execEvalHistoryComment">{row.comment}</p>
-                            <p className="execEvalHistoryMeta">
-                              対象大項目:{' '}
-                              {execMajorCategoryLabelById[row.majorCategoryKey] ??
-                                row.majorCategoryKey ??
-                                '未分類（再選択してください）'}
-                            </p>
-                            <div className="execEvalHistoryActions">
-                              <button type="button" onClick={() => handleExecRemoveComment(row.id)}>
-                                削除
-                              </button>
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
+                      <p className="memberDetailEmpty">1次評価コメント履歴はまだありません。</p>
+                    )}
+                  </div>
+                ) : null}
+                {canViewExecutiveCommentEval && detailTab === 'execcomments' ? (
+                  <EvalQuestionnairePage
+                    variant="exec"
+                    employees={selectedMember ? [selectedMember] : []}
+                    evalState={selectedMemberExecutiveEvalState}
+                    setEvalState={setSelectedMemberExecutiveEvalState}
+                    peerSelfEval={selectedMember ? selfEvalByEmployee?.[selectedMember.id] : undefined}
+                    peerSupervisorEval={selectedMember ? supervisorEvalByEmployee?.[selectedMember.id] : undefined}
+                    evaluationCriteria={evaluationCriteria}
+                    activeEvalPeriodKey={activeEvalPeriodKey}
+                    setActiveEvalPeriodKey={setActiveEvalPeriodKey}
+                    selfEvalHistoryByEmployee={selfEvalHistoryByEmployee}
+                    evalHistoryByEmployee={executiveEvalHistoryByEmployee}
+                    evalPeriodSelectOptions={adminMemberEvalPeriodSelectOptions}
+                    evalPeriodFallbackKey={evalPeriodFallbackKey}
+                    isSubmittedForPeriod={selectedMemberExecutiveSubmittedForActive}
+                    onSubmitEvaluation={() => onSubmitExecutiveEvaluation?.(selectedMember?.id)}
+                    canEvaluate={selectedMemberSelfSubmittedForActive && selectedMemberSupervisorSubmittedForActive}
+                    blockedReason="自己評価と1次評価(上司)の提出後に2次評価(経営層)を入力できます。"
+                  />
+                ) : null}
+                {canViewExecutiveCommentEval && detailTab === 'execnote' ? (
+                  <div className="memberDetailExecComments">
+                    <article className="execEvalSection">
+                      <h4>経営層コメントを追加</h4>
+                      <p className="memberDetailExecCommentsNote">
+                        このコメント履歴は累積です（評価期で締めません）。点数には影響しません。
+                      </p>
+                      <div className="execEvalMajorSelectRow">
+                        <label className="execEvalMajorField">
+                          <span>対象の大項目</span>
+                          <select value={execCommentDraftMajor} onChange={(event) => setExecCommentDraftMajor(event.target.value)}>
+                            {execCommentMajorOptions.map((opt) => (
+                              <option key={opt.id} value={opt.id}>
+                                {opt.title}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                      <div className="execEvalCommentForm">
+                        <input
+                          type="text"
+                          value={execCommentDraft}
+                          onChange={(event) => setExecCommentDraft(event.target.value)}
+                          placeholder="経営層コメントを入力"
+                        />
+                        <button type="button" onClick={addExecutiveCommentForSelectedMember}>
+                          追加
+                        </button>
+                      </div>
+                    </article>
+                    {selectedMemberExecCommentHistory.length ? (
+                      <article className="execEvalSection">
+                        <h4 className="memberDetailExecCommentsHeading">コメント履歴</h4>
+                        <ul className="execEvalHistoryList memberDetailExecHistoryList">
+                          {selectedMemberExecCommentHistory.map((row) => (
+                            <li key={row.id} className="execEvalHistoryItem">
+                              <div className="execEvalHistoryTop">
+                                <span className="execEvalHistoryDate">
+                                  {(() => {
+                                    const d = new Date(row.createdAt)
+                                    return Number.isNaN(d.getTime()) ? String(row.createdAt ?? '') : d.toLocaleString('ja-JP')
+                                  })()}
+                                </span>
+                                <button
+                                  type="button"
+                                  className="execEvalDeleteBtn"
+                                  onClick={() => removeExecutiveCommentForSelectedMember(row.id)}
+                                >
+                                  削除
+                                </button>
+                              </div>
+                              <p className="execEvalHistoryComment">{row.comment}</p>
+                              <p className="execEvalHistoryMeta">
+                                対象: {execCommentMajorLabelById[String(row?.majorCategoryKey ?? '').trim()] ?? '未指定'}
+                              </p>
+                            </li>
+                          ))}
+                        </ul>
+                      </article>
+                    ) : (
+                      <p className="memberDetailEmpty">経営層コメント履歴はまだありません。</p>
                     )}
                   </div>
                 ) : null}
@@ -9129,7 +9993,7 @@ function AdminMockPage({
                   <MemberHistoryTab rows={selectedMemberEvalHistoryRows} summary={selectedMemberEvalHistorySummary} />
                 ) : null}
               </div>
-            </section>
+        </section>
           </div>
         ) : null}
         <AdminDashAccordion
@@ -9322,35 +10186,35 @@ function AdminMockPage({
             className="adminDashAccordion--grades"
           >
             <div className="adminPanel adminPanel--inAccordion">
-            <div className="gradeDistribution">
-              {gradeRows.map((row, index) => (
-                <article className="gradeRow" key={`${row.label}-${index}`}>
-                  <div className="gradeMeta">
-                    <span className={`gradeBadge ${row.tone}`}>{row.badge}</span>
-                    <span className="gradeLabel">{row.label}</span>
-                    <span className="gradeCount">
-                      {row.count}人 <small>({row.percent.toFixed(1)}%)</small>
-                    </span>
-                  </div>
-                  <div className="gradeBar">
-                    <span className={`barTone ${row.barTone}`} style={{ width: `${row.percent}%` }} />
-                  </div>
-                </article>
-              ))}
-            </div>
-            <div className="gradeSummary">
-              <p>
+          <div className="gradeDistribution">
+            {gradeRows.map((row, index) => (
+              <article className="gradeRow" key={`${row.label}-${index}`}>
+                <div className="gradeMeta">
+                  <span className={`gradeBadge ${row.tone}`}>{row.badge}</span>
+                  <span className="gradeLabel">{row.label}</span>
+                  <span className="gradeCount">
+                    {row.count}人 <small>({row.percent.toFixed(1)}%)</small>
+                  </span>
+                </div>
+                <div className="gradeBar">
+                  <span className={`barTone ${row.barTone}`} style={{ width: `${row.percent}%` }} />
+                </div>
+              </article>
+            ))}
+          </div>
+          <div className="gradeSummary">
+            <p>
                 総従業員数: <strong>{gradeStatsEligibleCount}</strong>
-              </p>
-              <p>
-                平均等級: <strong>{averageGradeLabel}</strong>
-              </p>
-            </div>
+            </p>
+            <p>
+              平均等級: <strong>{averageGradeLabel}</strong>
+            </p>
+          </div>
             </div>
           </AdminDashAccordion>
         )}
-        </div>
-      </section>
+      </div>
+    </section>
       {typeof document !== 'undefined'
       ? createPortal(
           <button
@@ -9746,8 +10610,8 @@ function EmployeeManagePage({
           <span>部署</span>
           {hideGradeAndTotalScore ? null : (
             <>
-              <span>等級</span>
-              <span>総合得点</span>
+          <span>等級</span>
+          <span>総合得点</span>
             </>
           )}
           <span>役割</span>
@@ -9757,37 +10621,37 @@ function EmployeeManagePage({
         {rows.map((row) => {
           const isExecutive = String(row.role ?? '').trim() === '役員'
           return (
-            <div className="row" key={row.id}>
-              <span>{row.id}</span>
-              <span>{row.name}</span>
-              <span>{row.dept}</span>
+          <div className="row" key={row.id}>
+            <span>{row.id}</span>
+            <span>{row.name}</span>
+            <span>{row.dept}</span>
               {hideGradeAndTotalScore ? null : (
                 <>
                   <span className="grade">{isExecutive ? '役員' : row.grade}</span>
                   <span className="score">{isExecutive ? '役員' : scoreByEmployeeId[row.id] ?? '0.0点'}</span>
                 </>
               )}
-              <span>
-                <em className="roleTag">{row.role}</em>
-              </span>
-              <span className="passwordCell">
+            <span>
+              <em className="roleTag">{row.role}</em>
+            </span>
+            <span className="passwordCell">
                 <span className="passwordText">********</span>
-              </span>
-              <span className="actions">
-                <button type="button" className="actionIcon" onClick={() => handleStartEdit(row)} aria-label="編集">
-                  ✎
-                </button>
-                <button
-                  type="button"
-                  className="delete"
-                  title="削除（確認のあと実行）"
-                  onClick={() => handleDeleteRow(row.id)}
-                  aria-label="削除"
-                >
-                  🗑
-                </button>
-              </span>
-            </div>
+            </span>
+            <span className="actions">
+              <button type="button" className="actionIcon" onClick={() => handleStartEdit(row)} aria-label="編集">
+                ✎
+              </button>
+              <button
+                type="button"
+                className="delete"
+                title="削除（確認のあと実行）"
+                onClick={() => handleDeleteRow(row.id)}
+                aria-label="削除"
+              >
+                🗑
+              </button>
+            </span>
+          </div>
           )
         })}
       </div>
