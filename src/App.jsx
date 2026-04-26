@@ -2188,6 +2188,10 @@ function App() {
     return employeeDirectoryRows[0] ?? null
   }, [employeeDirectoryRows, loggedInEmployeeId])
   const loggedInAccountLabel = loginMode === 'admin' ? '管理者' : loggedInEmployee?.name ?? '従業員'
+  const evalPeriodFallbackKey = useMemo(
+    () => getSuggestedEvalPeriodKey(evalPeriodDefinitions),
+    [evalPeriodDefinitions],
+  )
 
   const goalMgmtEmployee = loggedInEmployee
   const goalMgmtPeriodKey = String(activeEvalPeriodKey ?? getSuggestedEvalPeriodKey(evalPeriodDefinitions) ?? '').trim()
@@ -2450,10 +2454,6 @@ function App() {
     ],
   )
 
-  const evalPeriodFallbackKey = useMemo(
-    () => getSuggestedEvalPeriodKey(evalPeriodDefinitions),
-    [evalPeriodDefinitions],
-  )
   const evalGradeByEmployeeId = useMemo(() => {
     const map = {}
     for (const row of employeeDirectoryRows ?? []) {
