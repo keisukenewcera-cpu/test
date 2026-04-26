@@ -5666,81 +5666,160 @@ function splitRadarCategoryLabel(title, maxFirstLine) {
   return line2 ? [line1, line2] : [line1]
 }
 
-const MemberEvalRadarChart = memo(function MemberEvalRadarChart({ rows, compact = false }) {
-  if (!Array.isArray(rows) || rows.length < 3) return null
-  const n = rows.length
-  /** 軸ラベル2行分の余白を確保 */
+const MemberEvalRadarChart = memo(function MemberEvalRadarChart({ series, compact = false, gradeLabel = '' }) {
+  const usableSeries = useMemo(
+    () =>
+      (Array.isArray(series) ? series : [])
+        .filter((s) => Array.isArray(s?.rows) && s.rows.length >= 3)
+        .slice(0, 3),
+    [series],
+  )
+  const axisRows = usableSeries[0]?.rows ?? []
+  const [radarMode, setRadarMode] = useState('self')
+  const modeOptions = [
+    { id: 'self', label: '自己3期' },
+    { id: 'boss', label: '上司3期' },
+    { id: 'both', label: '自己+上司3期' },
+  ]
+  if (!axisRows.length) return null
+  const n = axisRows.length
   const size = compact ? 292 : 328
   const center = size / 2
   const radius = compact ? 52 : 72
-  const labelRadius = radius + (compact ? 36 : 28)
+  const labelRadius = radius + (compact ? 30 : 28)
   const ringLevels = [20, 40, 60, 80, 100]
   const angleAt = (index) => (-Math.PI / 2) + ((Math.PI * 2 * index) / n)
   const toPoint = (index, value100, r = radius) => {
     const angle = angleAt(index)
     const vv = Math.max(0, Math.min(100, Number(value100) || 0))
     const rr = (vv / 100) * r
-    return {
-      x: center + Math.cos(angle) * rr,
-      y: center + Math.sin(angle) * rr,
-    }
+    return { x: center + Math.cos(angle) * rr, y: center + Math.sin(angle) * rr }
   }
   const labelPoint = (index) => {
     const angle = angleAt(index)
-    return {
-      x: center + Math.cos(angle) * labelRadius,
-      y: center + Math.sin(angle) * labelRadius,
-      angle,
-    }
+    return { x: center + Math.cos(angle) * labelRadius, y: center + Math.sin(angle) * labelRadius, angle }
   }
-  const axisEnds = rows.map((_, idx) => toPoint(idx, 100))
-  const selfPolygon = rows.map((row, idx) => {
-    const p = toPoint(idx, row.self100)
-    return `${p.x},${p.y}`
-  })
-  const bossPolygon = rows.map((row, idx) => {
-    const p = toPoint(idx, row.boss100)
-    return `${p.x},${p.y}`
-  })
-  const avgGap = rows.reduce((sum, row) => sum + Math.abs((Number(row.self100) || 0) - (Number(row.boss100) || 0)), 0) / rows.length
+  const plottedSeries = useMemo(() => {
+    const out = []
+    for (let i = 0; i < usableSeries.length; i += 1) {
+      const s = usableSeries[i]
+      const baseKey = String(s?.periodKey ?? i)
+      if (radarMode === 'self' || radarMode === 'both') {
+        out.push({
+          key: `${baseKey}-self`,
+          label: radarMode === 'both' ? `${s.label} 自己` : s.label,
+          color: s.color ?? '#2563eb',
+          dashed: false,
+          values: axisRows.map((a) => {
+            const row = s.rows.find((r) => r.id === a.id)
+            return Number.isFinite(row?.self100) ? row.self100 : 0
+          }),
+        })
+      }
+      if (radarMode === 'boss' || radarMode === 'both') {
+        out.push({
+          key: `${baseKey}-boss`,
+          label: radarMode === 'both' ? `${s.label} 上司` : s.label,
+          color: s.color ?? '#059669',
+          dashed: true,
+          values: axisRows.map((a) => {
+            const row = s.rows.find((r) => r.id === a.id)
+            return Number.isFinite(row?.boss100) ? row.boss100 : 0
+          }),
+        })
+      }
+    }
+    return out
+  }, [usableSeries, axisRows, radarMode])
+  const axisEnds = axisRows.map((_, idx) => toPoint(idx, 100))
+  const defaultOpacityForIndex = (idx) => (idx === 0 ? 0.88 : idx === 1 ? 0.56 : 0.34)
+  const [opacityBySeries, setOpacityBySeries] = useState({})
+  useEffect(() => {
+    setOpacityBySeries((prev) => {
+      const next = { ...prev }
+      let changed = false
+      for (let i = 0; i < plottedSeries.length; i += 1) {
+        const key = plottedSeries[i].key
+        if (!Object.prototype.hasOwnProperty.call(next, key)) {
+          next[key] = defaultOpacityForIndex(Math.floor(i / (radarMode === 'both' ? 2 : 1)))
+          changed = true
+        }
+      }
+      for (const k of Object.keys(next)) {
+        if (!plottedSeries.some((s) => s.key === k)) {
+          delete next[k]
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [plottedSeries, radarMode])
+  const latestAvg = useMemo(() => {
+    const latest = usableSeries[0]
+    if (!latest) return NaN
+    const key = radarMode === 'boss' ? 'boss100' : 'self100'
+    const vals = latest.rows.map((r) => Number(r?.[key])).filter((v) => Number.isFinite(v))
+    if (!vals.length) return NaN
+    return vals.reduce((sum, v) => sum + v, 0) / vals.length
+  }, [usableSeries, radarMode])
+  const modeTitle = radarMode === 'boss' ? '上司評価3期比較' : radarMode === 'both' ? '自己+上司 3期比較' : '自己評価3期比較'
   const wrapperClass = `memberEvalRadar${compact ? ' isCompact' : ''}`
   return (
     <section className={wrapperClass}>
+      <div className="memberEvalRadarModeSwitch" role="tablist" aria-label="レーダー表示モード">
+        {modeOptions.map((m) => (
+          <button
+            key={m.id}
+            type="button"
+            className={`memberEvalRadarModeBtn ${radarMode === m.id ? 'isActive' : ''}`}
+            onClick={() => setRadarMode(m.id)}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
       {compact ? (
         <div className="memberEvalRadarHead">
-          <h4>評価差分（カテゴリ別）</h4>
-          <p>{Number.isFinite(avgGap) ? `${avgGap.toFixed(1)}点` : '—'}</p>
+          <h4>{modeTitle}</h4>
+          <p>
+            {Number.isFinite(latestAvg) ? `${latestAvg.toFixed(1)}点` : '—'}
+            {String(gradeLabel ?? '').trim() ? ` / 等級 ${String(gradeLabel).trim()}` : ''}
+          </p>
         </div>
       ) : (
         <div className="memberEvalRadarHead">
-          <h4>自己評価と上司評価の差分（カテゴリ別）</h4>
-          <p>平均差: {Number.isFinite(avgGap) ? `${avgGap.toFixed(1)}点` : '—'}</p>
+          <h4>{modeTitle}</h4>
+          <p>最新平均: {Number.isFinite(latestAvg) ? `${latestAvg.toFixed(1)}点` : '—'}</p>
         </div>
       )}
       <div className="memberEvalRadarBody">
-        <svg viewBox={`0 0 ${size} ${size}`} role="img" aria-label="自己評価と上司評価のレーダーチャート">
+        <svg viewBox={`0 0 ${size} ${size}`} role="img" aria-label="3期レーダーチャート">
           {ringLevels.map((lv) => (
-            <circle
-              key={lv}
-              cx={center}
-              cy={center}
-              r={(lv / 100) * radius}
-              className="memberEvalRadarRing"
-            />
+            <circle key={lv} cx={center} cy={center} r={(lv / 100) * radius} className="memberEvalRadarRing" />
           ))}
           {axisEnds.map((pt, idx) => (
-            <line
-              key={`axis-${rows[idx].id}`}
-              x1={center}
-              y1={center}
-              x2={pt.x}
-              y2={pt.y}
-              className="memberEvalRadarAxis"
-            />
+            <line key={`axis-${axisRows[idx].id}`} x1={center} y1={center} x2={pt.x} y2={pt.y} className="memberEvalRadarAxis" />
           ))}
-          <polygon points={selfPolygon.join(' ')} className="memberEvalRadarPolySelf" />
-          <polygon points={bossPolygon.join(' ')} className="memberEvalRadarPolyBoss" />
-          {rows.map((row, idx) => {
+          {plottedSeries.map((s, sIdx) => {
+            const opacity = Math.max(0.1, Math.min(1, Number(opacityBySeries[s.key] ?? defaultOpacityForIndex(sIdx)) || defaultOpacityForIndex(sIdx)))
+            const points = s.values.map((v, idx) => {
+              const p = toPoint(idx, v)
+              return `${p.x},${p.y}`
+            })
+            return (
+              <polygon
+                key={`poly-${s.key}`}
+                points={points.join(' ')}
+                className="memberEvalRadarPolyPeriod"
+                style={{
+                  '--radar-series-color': s.color,
+                  '--radar-series-opacity': opacity,
+                  '--radar-series-dash': s.dashed ? '6 4' : 'none',
+                }}
+              />
+            )
+          })}
+          {axisRows.map((row, idx) => {
             const { x, y, angle } = labelPoint(idx)
             const c = Math.cos(angle)
             let textAnchor = 'middle'
@@ -5750,32 +5829,42 @@ const MemberEvalRadarChart = memo(function MemberEvalRadarChart({ rows, compact 
             const singleDy = s > 0.35 ? '0.42em' : s < -0.35 ? '-0.12em' : '0.28em'
             const lines = splitRadarCategoryLabel(row.title, compact ? 8 : 11)
             const lineGap = compact ? '0.95em' : '1.08em'
-            const twoLineFirstDy =
-              s > 0.35 ? '-0.18em' : s < -0.35 ? '-0.72em' : s > 0 ? '0.05em' : '-0.42em'
+            const twoLineFirstDy = s > 0.35 ? '-0.18em' : s < -0.35 ? '-0.72em' : s > 0 ? '0.05em' : '-0.42em'
             return (
-              <text
-                key={`label-${row.id}`}
-                x={x}
-                y={y}
-                textAnchor={textAnchor}
-                className={`memberEvalRadarLabel${compact ? ' isCompact' : ''}`}
-              >
+              <text key={`label-${row.id}`} x={x} y={y} textAnchor={textAnchor} className={`memberEvalRadarLabel${compact ? ' isCompact' : ''}`}>
                 <title>{row.title}</title>
-                <tspan x={x} dy={lines.length < 2 ? singleDy : twoLineFirstDy}>
-                  {lines[0]}
-                </tspan>
-                {lines[1] ? (
-                  <tspan x={x} dy={lineGap}>
-                    {lines[1]}
-                  </tspan>
-                ) : null}
+                <tspan x={x} dy={lines.length < 2 ? singleDy : twoLineFirstDy}>{lines[0]}</tspan>
+                {lines[1] ? <tspan x={x} dy={lineGap}>{lines[1]}</tspan> : null}
               </text>
             )
           })}
         </svg>
-        <div className="memberEvalRadarLegend">
-          <span className="isSelf">自己評価</span>
-          <span className="isBoss">上司評価</span>
+        <div className="memberEvalRadarLegend memberEvalRadarLegend--period">
+          {plottedSeries.map((s, sIdx) => {
+            const value = Math.round((Number(opacityBySeries[s.key] ?? defaultOpacityForIndex(sIdx)) || defaultOpacityForIndex(sIdx)) * 100)
+            return (
+              <label key={`legend-${s.key}`} className="memberEvalRadarLegendRow">
+                <span
+                  className={`memberEvalRadarLegendSwatch ${s.dashed ? 'isBoss' : 'isSelf'}`}
+                  style={{ '--radar-series-color': s.color }}
+                >
+                  {s.label}
+                </span>
+                <input
+                  type="range"
+                  min="15"
+                  max="100"
+                  step="1"
+                  value={value}
+                  onChange={(event) => {
+                    const n = Math.max(15, Math.min(100, Number(event.target.value) || 15))
+                    setOpacityBySeries((prev) => ({ ...prev, [s.key]: n / 100 }))
+                  }}
+                  aria-label={`${s.label}の透明度`}
+                />
+              </label>
+            )
+          })}
         </div>
       </div>
     </section>
@@ -5819,9 +5908,33 @@ function EvalQuestionnairePage({
     }))
   }
 
+  const viewingEvalGrade = useMemo(() => {
+    const empId = String(employee?.id ?? '').trim()
+    const activeKey = String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '').trim()
+    if (!empId || !activeKey) return String(employee?.grade ?? '').trim()
+    const slot = evalHistoryByEmployee?.[empId]?.[activeKey]
+    const stored = String(slot?.evalGrade ?? '').trim()
+    return stored || String(employee?.grade ?? '').trim()
+  }, [employee?.id, employee?.grade, evalHistoryByEmployee, activeEvalPeriodKey, evalPeriodFallbackKey])
+
+  const resolvedEvalGradeForItems = useMemo(() => {
+    const byGrade =
+      evaluationCriteria?.byGrade &&
+      typeof evaluationCriteria.byGrade === 'object' &&
+      !Array.isArray(evaluationCriteria.byGrade)
+        ? evaluationCriteria.byGrade
+        : {}
+    const available = Object.keys(byGrade).filter((k) => Array.isArray(byGrade[k]))
+    const preferred = String(viewingEvalGrade ?? '').trim()
+    if (preferred && available.includes(preferred)) return preferred
+    const current = String(employee?.grade ?? '').trim()
+    if (current && available.includes(current)) return current
+    return available[0] ?? preferred ?? current
+  }, [evaluationCriteria, viewingEvalGrade, employee?.grade])
+
   const categories = useMemo(
-    () => buildEvalCategoriesForGrade(evaluationCriteria, employee?.grade),
-    [evaluationCriteria, employee?.grade],
+    () => buildEvalCategoriesForGrade(evaluationCriteria, resolvedEvalGradeForItems),
+    [evaluationCriteria, resolvedEvalGradeForItems],
   )
   const allItems = useMemo(() => categories.flatMap((c) => c.items), [categories])
   const totalCount = allItems.length
@@ -6694,8 +6807,43 @@ function GoalManagementPage({ employee, goals, setGoals }) {
 
   const periodLabel = useMemo(() => formatQuarterLabel(new Date()), [])
 
-  const total = goals.length
-  const achieved = useMemo(() => goals.filter((g) => g.achieved).length, [goals])
+  const buildPdcaDetailText = useCallback((doText, checkText, actionText) => {
+    return [
+      `D（実行）: ${String(doText ?? '').trim() || '（未入力）'}`,
+      `C（評価）: ${String(checkText ?? '').trim() || '（未入力）'}`,
+      `A（改善）: ${String(actionText ?? '').trim() || '（未入力）'}`,
+    ].join('\n')
+  }, [])
+
+  const normalizeGoalPdca = useCallback((goal) => {
+    const plan = String(goal?.plan ?? goal?.title ?? '').trim()
+    const lines = String(goal?.detail ?? '').split(/\r?\n/)
+    const readLine = (prefix) => {
+      const line = lines.find((x) => String(x ?? '').trim().startsWith(prefix))
+      return line ? String(line).replace(prefix, '').trim() : ''
+    }
+    const doText =
+      String(goal?.doText ?? '').trim() ||
+      readLine('D（実行）:') ||
+      (lines.length <= 1 ? String(goal?.detail ?? '').trim() : '')
+    const checkText = String(goal?.checkText ?? '').trim() || readLine('C（評価）:')
+    const actionText = String(goal?.actionText ?? '').trim() || readLine('A（改善）:')
+    const isAchievedAuto = Boolean(plan && doText && checkText && actionText)
+    return {
+      id: goal?.id,
+      plan,
+      doText,
+      checkText,
+      actionText,
+      deadline: String(goal?.deadline ?? '').trim(),
+      achieved: isAchievedAuto,
+      detail: buildPdcaDetailText(doText, checkText, actionText),
+    }
+  }, [buildPdcaDetailText])
+
+  const normalizedGoals = useMemo(() => goals.map(normalizeGoalPdca), [goals, normalizeGoalPdca])
+  const total = normalizedGoals.length
+  const achieved = useMemo(() => normalizedGoals.filter((g) => g.achieved).length, [normalizedGoals])
   const ratePct = total === 0 ? 0 : Math.round((achieved / total) * 100)
 
   const openAddModal = () => {
@@ -6715,25 +6863,62 @@ function GoalManagementPage({ employee, goals, setGoals }) {
     const checkText = draftCheck.trim()
     const actionText = draftAction.trim()
     const deadline = draftDeadline.trim()
-    if (!plan || !deadline) {
-      window.alert('必須項目（P: Plan・目標期日）を入力してください。')
+    if (!plan || !doText || !deadline) {
+      window.alert('必須項目（P: Plan・D: Do・目標期日）を入力してください。')
       return
     }
-    const detailLines = [
-      `D（実行）: ${doText || '（未入力）'}`,
-      `C（評価）: ${checkText || '（未入力）'}`,
-      `A（改善）: ${actionText || '（未入力）'}`,
-    ]
     const title = plan
-    const detail = detailLines.join('\n')
+    const detail = buildPdcaDetailText(doText, checkText, actionText)
+    const achievedAuto = Boolean(plan && doText && checkText && actionText)
     const id = `goal-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-    setGoals((prev) => [...prev, { id, title, detail, deadline, achieved: false }])
+    setGoals((prev) => [
+      ...prev,
+      {
+        id,
+        title,
+        detail,
+        deadline,
+        achieved: achievedAuto,
+        plan,
+        doText,
+        checkText,
+        actionText,
+      },
+    ])
     closeAddModal()
   }
 
-  const setGoalAchieved = (id, checked) => {
-    setGoals((prev) => prev.map((g) => (g.id === id ? { ...g, achieved: checked } : g)))
-  }
+  const updateGoalPdcaField = useCallback(
+    (id, field, value) => {
+      setGoals((prev) =>
+        prev.map((g) => {
+          if (g.id !== id) return g
+          const current = normalizeGoalPdca(g)
+          const next = {
+            ...current,
+            [field]: String(value ?? ''),
+          }
+          const achievedAuto = Boolean(
+            String(next.plan).trim() &&
+              String(next.doText).trim() &&
+              String(next.checkText).trim() &&
+              String(next.actionText).trim(),
+          )
+          return {
+            ...g,
+            title: String(next.plan ?? '').trim(),
+            detail: buildPdcaDetailText(next.doText, next.checkText, next.actionText),
+            achieved: achievedAuto,
+            plan: next.plan,
+            doText: next.doText,
+            checkText: next.checkText,
+            actionText: next.actionText,
+          }
+        }),
+      )
+    },
+    [setGoals, normalizeGoalPdca, buildPdcaDetailText],
+  )
 
   const removeGoal = (id) => {
     if (!window.confirm('この目標を削除しますか？')) return
@@ -6811,23 +6996,44 @@ function GoalManagementPage({ employee, goals, setGoals }) {
           </div>
         ) : (
           <ul className="goalMgmtList">
-            {goals.map((g) => (
+            {normalizedGoals.map((g) => (
               <li key={g.id} className="goalMgmtListItem">
                 <div className="goalMgmtListHead">
                   <label className="goalMgmtCheckLabel">
                     <input
                       type="checkbox"
                       checked={g.achieved}
-                      onChange={(event) => setGoalAchieved(g.id, event.target.checked)}
+                      readOnly
+                      disabled
                     />
-                    <span className={g.achieved ? 'goalMgmtListTitle isAchieved' : 'goalMgmtListTitle'}>{g.title}</span>
+                    <span className={g.achieved ? 'goalMgmtListTitle isAchieved' : 'goalMgmtListTitle'}>
+                      {g.plan}
+                    </span>
                   </label>
                   <button type="button" className="goalMgmtDeleteBtn" onClick={() => removeGoal(g.id)}>
                     削除
                   </button>
                 </div>
                 <p className="goalMgmtListDeadline">期日: {deadlineLabel(g.deadline)}</p>
-                <p className="goalMgmtListDetail">{g.detail}</p>
+                <p className="goalMgmtListDetail">{`D（実行）: ${g.doText || '（未入力）'}`}</p>
+                <label className="goalMgmtPdcaInlineField">
+                  C（Check: 評価）
+                  <textarea
+                    value={g.checkText}
+                    onChange={(event) => updateGoalPdcaField(g.id, 'checkText', event.target.value)}
+                    placeholder="結果の確認・評価"
+                    rows={2}
+                  />
+                </label>
+                <label className="goalMgmtPdcaInlineField">
+                  A（Action: 改善）
+                  <textarea
+                    value={g.actionText}
+                    onChange={(event) => updateGoalPdcaField(g.id, 'actionText', event.target.value)}
+                    placeholder="次の改善アクション"
+                    rows={2}
+                  />
+                </label>
               </li>
             ))}
           </ul>
@@ -6867,6 +7073,7 @@ function GoalManagementPage({ employee, goals, setGoals }) {
               </label>
               <label className="goalMgmtFormLabel">
                 D（Do: 実行）
+                <span className="goalMgmtReq">*</span>
                 <span className="goalMgmtFieldHint">何を・どの頻度で実行するかを書きます。</span>
                 <textarea
                   value={draftDo}
@@ -7884,30 +8091,115 @@ function AdminMockPage({
         return { id: s.id, title: s.title, description: s.description, current, max }
       })
   }, [selectedMember, skills, skillProgress])
+  const selectedMemberActiveEvalGrade = useMemo(() => {
+    if (!selectedMember) return ''
+    const periodKey = String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '').trim()
+    const empId = String(selectedMember.id ?? '').trim()
+    const selfStored = String(selfEvalHistoryByEmployee?.[empId]?.[periodKey]?.evalGrade ?? '').trim()
+    const bossStored = String(supervisorEvalHistoryByEmployee?.[empId]?.[periodKey]?.evalGrade ?? '').trim()
+    const preferred = selfStored || bossStored || String(selectedMember.grade ?? '').trim()
+    const byGrade =
+      evaluationCriteria?.byGrade &&
+      typeof evaluationCriteria.byGrade === 'object' &&
+      !Array.isArray(evaluationCriteria.byGrade)
+        ? evaluationCriteria.byGrade
+        : {}
+    const gradeIds = Object.keys(byGrade).filter((k) => Array.isArray(byGrade[k]))
+    if (preferred && gradeIds.includes(preferred)) return preferred
+    const current = String(selectedMember.grade ?? '').trim()
+    if (current && gradeIds.includes(current)) return current
+    return gradeIds[0] ?? preferred ?? current
+  }, [
+    selectedMember,
+    activeEvalPeriodKey,
+    evalPeriodFallbackKey,
+    selfEvalHistoryByEmployee,
+    supervisorEvalHistoryByEmployee,
+    evaluationCriteria,
+  ])
   const selectedMemberEvalItems = useMemo(() => {
-    const cats = buildEvalCategoriesForGrade(evaluationCriteria, selectedMember?.grade)
+    const cats = buildEvalCategoriesForGrade(evaluationCriteria, selectedMemberActiveEvalGrade)
     return cats.flatMap((cat) => cat.items)
-  }, [evaluationCriteria, selectedMember?.grade])
-  const selectedMemberEvalRadarRows = useMemo(() => {
+  }, [evaluationCriteria, selectedMemberActiveEvalGrade])
+  const selectedMemberEvalRadarSeries = useMemo(() => {
     if (!selectedMember) return []
-    const cats = buildEvalCategoriesForGrade(evaluationCriteria, selectedMember.grade)
-    const selfScores = selfEvalByEmployee?.[selectedMember.id]?.scores ?? {}
-    const bossScores = supervisorEvalByEmployee?.[selectedMember.id]?.scores ?? {}
-    return cats
-      .map((cat) => {
-        const self100 = weightedEvalScore100ByItems(cat.items, selfScores)
-        const boss100 = weightedEvalScore100ByItems(cat.items, bossScores)
-        if (self100 == null && boss100 == null) return null
+    const empId = String(selectedMember.id ?? '').trim()
+    if (!empId) return []
+    const activeKey = String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '').trim()
+    const selfHist = selfEvalHistoryByEmployee?.[empId] ?? {}
+    const bossHist = supervisorEvalHistoryByEmployee?.[empId] ?? {}
+    const periodKeys = [...new Set([...Object.keys(selfHist), ...Object.keys(bossHist), activeKey].filter(Boolean))]
+      .sort(compareEvalPeriodDesc)
+      .slice(0, 3)
+    if (!periodKeys.length) return []
+    const sharedMajors = Array.isArray(evaluationCriteria?.sharedMajors) ? evaluationCriteria.sharedMajors : []
+    const axisMajors = (sharedMajors.length
+      ? sharedMajors.map((m, idx) => ({
+          id: String(m?.id ?? '').trim() || `major-${idx}`,
+          title: String(m?.title ?? '').trim() || `大項目${idx + 1}`,
+        }))
+      : buildEvalCategoriesForGrade(evaluationCriteria, selectedMemberActiveEvalGrade).map((c, idx) => ({
+          id: String(c?.id ?? '').trim() || `major-${idx}`,
+          title: String(c?.title ?? '').trim() || `大項目${idx + 1}`,
+        }))
+    ).slice(0, 8)
+    if (!axisMajors.length) return []
+    const palette = ['#2563eb', '#059669', '#7c3aed']
+    return periodKeys
+      .map((periodKey, idx) => {
+        const periodGrade =
+          String(selfHist?.[periodKey]?.evalGrade ?? '').trim() ||
+          String(bossHist?.[periodKey]?.evalGrade ?? '').trim() ||
+          selectedMemberActiveEvalGrade
+        const periodCats = buildEvalCategoriesForGrade(evaluationCriteria, periodGrade)
+        const catById = new Map(periodCats.map((c) => [String(c?.id ?? '').trim(), c]))
+        const catByTitle = new Map(periodCats.map((c) => [String(c?.title ?? '').trim(), c]))
+        const selfScores =
+          periodKey === activeKey
+            ? {
+                ...(selfHist?.[periodKey]?.scores ?? {}),
+                ...(selfEvalByEmployee?.[empId]?.scores ?? {}),
+              }
+            : { ...(selfHist?.[periodKey]?.scores ?? {}) }
+        const bossScores =
+          periodKey === activeKey
+            ? {
+                ...(bossHist?.[periodKey]?.scores ?? {}),
+                ...(supervisorEvalByEmployee?.[empId]?.scores ?? {}),
+              }
+            : { ...(bossHist?.[periodKey]?.scores ?? {}) }
+        const rows = axisMajors.map((major) => {
+          const cat = catById.get(major.id) || catByTitle.get(major.title)
+          const self100 = weightedEvalScore100ByItems(cat?.items ?? [], selfScores)
+          const boss100 = weightedEvalScore100ByItems(cat?.items ?? [], bossScores)
+          return {
+            id: major.id,
+            title: major.title,
+            self100: Number.isFinite(self100) ? self100 : Number.NaN,
+            boss100: Number.isFinite(boss100) ? boss100 : Number.NaN,
+          }
+        })
+        const hasAny = rows.some((r) => Number.isFinite(r.self100) || Number.isFinite(r.boss100))
+        if (!hasAny) return null
         return {
-          id: cat.id,
-          title: cat.title,
-          self100: self100 ?? 0,
-          boss100: boss100 ?? 0,
+          periodKey,
+          label: idx === 0 ? `${periodKey}（最新）` : periodKey,
+          color: palette[idx] ?? palette[palette.length - 1],
+          rows,
         }
       })
       .filter(Boolean)
-      .slice(0, 8)
-  }, [selectedMember, evaluationCriteria, selfEvalByEmployee, supervisorEvalByEmployee])
+  }, [
+    selectedMember,
+    activeEvalPeriodKey,
+    evalPeriodFallbackKey,
+    selfEvalHistoryByEmployee,
+    supervisorEvalHistoryByEmployee,
+    selfEvalByEmployee,
+    supervisorEvalByEmployee,
+    selectedMemberActiveEvalGrade,
+    evaluationCriteria,
+  ])
   const selectedMemberSelfEvalRows = useMemo(() => {
     if (detailTab !== 'self') return []
     if (!selectedMember) return []
@@ -8264,9 +8556,13 @@ function AdminMockPage({
                     <p>{selectedMember.dept}</p>
                     <small>入社日: {selectedMember.joinDate || '―'}</small>
                   </div>
-                  {selectedMemberEvalRadarRows.length >= 3 ? (
+                  {selectedMemberEvalRadarSeries.length > 0 ? (
                     <div className="memberDetailHeroRadar">
-                      <MemberEvalRadarChart rows={selectedMemberEvalRadarRows} compact />
+                      <MemberEvalRadarChart
+                        series={selectedMemberEvalRadarSeries}
+                        compact
+                        gradeLabel={selectedMemberActiveEvalGrade}
+                      />
                     </div>
                   ) : null}
                 </div>

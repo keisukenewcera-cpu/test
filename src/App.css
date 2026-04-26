@@ -2112,6 +2112,7 @@ select:focus {
 .memberEvalRadarBody svg {
   width: min(100%, 320px);
   height: auto;
+  overflow: visible;
 }
 
 .memberEvalRadar.isCompact .memberEvalRadarBody svg {
@@ -2140,6 +2141,41 @@ select:focus {
   fill: rgba(16, 185, 129, 0.2);
   stroke: #059669;
   stroke-width: 2;
+}
+
+.memberEvalRadarPolyPeriod {
+  fill: color-mix(in srgb, var(--radar-series-color) 30%, transparent);
+  stroke: var(--radar-series-color);
+  stroke-width: 2;
+  stroke-dasharray: var(--radar-series-dash, none);
+  opacity: var(--radar-series-opacity, 0.7);
+}
+
+.memberEvalRadarModeSwitch {
+  display: inline-flex;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  padding: 2px;
+  gap: 2px;
+  margin-bottom: 8px;
+  background: #ffffff;
+}
+
+.memberEvalRadarModeBtn {
+  border: none;
+  background: transparent;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 4px 9px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.memberEvalRadarModeBtn.isActive {
+  background: #1d4ed8;
+  color: #ffffff;
 }
 
 .memberEvalRadarLabel {
@@ -2176,6 +2212,59 @@ select:focus {
 .memberEvalRadar.isCompact .memberEvalRadarLegend {
   font-size: 10px;
   gap: 10px;
+}
+
+.memberEvalRadarLegend--period {
+  width: min(100%, 360px);
+  display: grid;
+  gap: 6px;
+}
+
+.memberEvalRadarLegendRow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.memberEvalRadarLegendSwatch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #334155;
+  font-weight: 700;
+}
+
+.memberEvalRadarLegendSwatch::before {
+  content: '';
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  background: var(--radar-series-color);
+  display: inline-block;
+}
+
+.memberEvalRadarLegendSwatch.isBoss::before {
+  border: 2px dashed color-mix(in srgb, var(--radar-series-color) 92%, #ffffff 8%);
+  background: transparent;
+}
+
+.memberEvalRadarLegendRow input[type='range'] {
+  width: 118px;
+}
+
+.memberEvalRadar.isCompact .memberEvalRadarLegend--period {
+  width: min(100%, 248px);
+  gap: 4px;
+}
+
+.memberEvalRadar.isCompact .memberEvalRadarLegendSwatch {
+  font-size: 10px;
+}
+
+.memberEvalRadar.isCompact .memberEvalRadarLegendRow input[type='range'] {
+  width: 94px;
 }
 
 .memberEvalRadarLegend span {
@@ -5264,6 +5353,33 @@ select:focus {
   line-height: 1.55;
   color: #334155;
   white-space: pre-wrap;
+}
+
+.goalMgmtPdcaInlineField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0 0 28px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #475569;
+}
+
+.goalMgmtPdcaInlineField textarea {
+  border: 1px solid #cbd5e1;
+  border-radius: 9px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  color: #0f172a;
+  resize: vertical;
+  min-height: 62px;
+}
+
+.goalMgmtPdcaInlineField textarea:focus {
+  outline: 2px solid #93c5fd;
+  outline-offset: 0;
+  border-color: #3b82f6;
 }
 
 .goalMgmtFormModal {
