@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import './App.css'
 import { supabase } from './lib/supabaseClient'
@@ -204,7 +204,7 @@ function parseEvalPeriodDefinitionList(raw) {
 
 function normalizeEvalPeriodDefinitions(raw) {
   const parsed = parseEvalPeriodDefinitionList(raw)
-  if (parsed.length) return [...parsed].sort((a, b) => compareEvalPeriodDesc(a.key, b.key))
+  if (parsed.length) return parsed
   return []
 }
 
@@ -226,6 +226,24 @@ function mergeEvalPeriodDefinitionArrays(prevRaw, remoteRaw) {
     map.set(row.key, next)
   }
   return [...map.values()].sort((a, b) => compareEvalPeriodDesc(a.key, b.key))
+}
+
+function pickRadarPeriodKeys({ activeKey, selfHist, bossHist, execHist, definitions, limit = 3 }) {
+  const active = String(activeKey ?? '').trim()
+  const selfKeys = Object.keys(selfHist ?? {})
+  const bossKeys = Object.keys(bossHist ?? {})
+  const execKeys = Object.keys(execHist ?? {}).filter((k) => k !== 'cumulative')
+  const available = new Set([...selfKeys, ...bossKeys, ...execKeys, active].filter(Boolean))
+  if (!available.size) return []
+
+  const preferredOrder = (definitions ?? [])
+    .map((d) => String(d?.key ?? '').trim())
+    .filter((k) => k && available.has(k))
+  const preferredSet = new Set(preferredOrder)
+  const rest = [...available]
+    .filter((k) => !preferredSet.has(k))
+    .sort(compareEvalPeriodDesc)
+  return [...preferredOrder, ...rest].slice(0, Math.max(1, Number(limit) || 3))
 }
 
 function getSuggestedEvalPeriodKey(definitions) {
@@ -319,9 +337,9 @@ function buildEvalPeriodSelectOptionList({
       label: row.label ? `${row.label}（この人のみ）` : `${row.key}（この人のみ）`,
     })
   }
-  const all = [...fromDefs, ...tail]
-  all.sort((a, b) => compareEvalPeriodDesc(a.value, b.value))
-  return all
+  // Keep master order as-is; append non-master periods from history/extra after it.
+  const tailSorted = [...tail].sort((a, b) => compareEvalPeriodDesc(a.value, b.value))
+  return [...fromDefs, ...tailSorted]
 }
 
 function pruneEvalHistoryMapByAllowedKeys(historyMap, allowedKeySet) {
@@ -2258,10 +2276,14 @@ function App() {
     const selfHist = selfEvalHistoryByEmployee?.[empId] ?? {}
     const bossHist = supervisorEvalHistoryByEmployee?.[empId] ?? {}
     const execHist = executiveEvalHistoryByEmployee?.[empId] ?? {}
-    const execPeriodKeys = Object.keys(execHist).filter((k) => k !== 'cumulative')
-    const periodKeys = [...new Set([...Object.keys(selfHist), ...Object.keys(bossHist), ...execPeriodKeys, activeKey].filter(Boolean))]
-      .sort(compareEvalPeriodDesc)
-      .slice(0, 3)
+    const periodKeys = pickRadarPeriodKeys({
+      activeKey,
+      selfHist,
+      bossHist,
+      execHist,
+      definitions: evalPeriodDefinitions,
+      limit: 3,
+    })
     if (!periodKeys.length) return []
     const sharedMajors = Array.isArray(evaluationCriteria?.sharedMajors) ? evaluationCriteria.sharedMajors : []
     const axisMajors = (sharedMajors.length
@@ -2344,6 +2366,7 @@ function App() {
     supervisorEvalByEmployee,
     goalMgmtActiveEvalGrade,
     evaluationCriteria,
+    evalPeriodDefinitions,
   ])
   const goalMgmtSubmittedForActive = useMemo(() => {
     const empId = String(goalMgmtEmployee?.id ?? '').trim()
@@ -3373,7 +3396,8 @@ function App() {
       setActiveEvalPeriodKey(payload.activeEvalPeriodKey.trim())
     }
     if (Array.isArray(payload.evalPeriodDefinitions) && payload.evalPeriodDefinitions.length > 0) {
-      setEvalPeriodDefinitions((prev) => mergeEvalPeriodDefinitionArrays(prev, payload.evalPeriodDefinitions))
+      // Replace instead of merge so deleted period keys are not resurrected by late cloud/snapshot payloads.
+      setEvalPeriodDefinitions(normalizeEvalPeriodDefinitions(payload.evalPeriodDefinitions))
     }
     if (
       payload.selfEvalHistoryByEmployee &&
@@ -5215,9 +5239,39 @@ function MenuDisplaySettingsPage({ menuVisibilityByRole, setMenuVisibilityByRole
 }
 
 function EvalPeriodSettingsPage({ definitions, setDefinitions, onSelectActivePeriod, onCleanupHistory, onRemovePeriodKey }) {
-  const [draftKey, setDraftKey] = useState('')
+  const currentYear = new Date().getFullYear()
+  const [draftYear, setDraftYear] = useState(String(currentYear))
+  const [draftMonth, setDraftMonth] = useState('03')
   const [draftLabel, setDraftLabel] = useState('')
   const [draftOnlyForIds, setDraftOnlyForIds] = useState('')
+  const [draggingPeriodKey, setDraggingPeriodKey] = useState('')
+  const [dragOverPeriodKey, setDragOverPeriodKey] = useState('')
+  const rowRefs = useRef({})
+  const prevRowRectsRef = useRef(new Map())
+
+  useLayoutEffect(() => {
+    const nextRects = new Map()
+    for (const row of definitions) {
+      const key = String(row?.key ?? '').trim()
+      if (!key) continue
+      const el = rowRefs.current[key]
+      if (!el) continue
+      const rect = el.getBoundingClientRect()
+      nextRects.set(key, rect)
+      const prevRect = prevRowRectsRef.current.get(key)
+      if (!prevRect) continue
+      const dx = prevRect.left - rect.left
+      const dy = prevRect.top - rect.top
+      if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue
+      el.style.transition = 'none'
+      el.style.transform = `translate(${dx}px, ${dy}px)`
+      requestAnimationFrame(() => {
+        el.style.transition = 'transform 220ms cubic-bezier(0.2, 0, 0, 1)'
+        el.style.transform = 'translate(0, 0)'
+      })
+    }
+    prevRowRectsRef.current = nextRects
+  }, [definitions])
 
   const resetMarSep = () => {
     if (!window.confirm('評価期一覧を「毎年3月・9月」のデフォルト（前後数年分）に置き換えますか？')) return
@@ -5225,29 +5279,30 @@ function EvalPeriodSettingsPage({ definitions, setDefinitions, onSelectActivePer
   }
 
   const addRow = () => {
-    const key = draftKey.trim()
-    if (!key) {
-      window.alert('期キーを入力してください（例: 2027-03 や mid-2026-04）')
+    const year = String(draftYear ?? '').trim()
+    if (!/^\d{4}$/.test(year)) {
+      window.alert('年は4桁で入力してください（例: 2027）')
       return
     }
-    if (!/^[\w.-]+$/.test(key)) {
-      window.alert('期キーは英数字・ハイフン・ドット・アンダースコアのみ使用してください。')
-      return
-    }
+    const month = String(draftMonth ?? '').trim()
+    if (month !== '03' && month !== '09') return
+    const key = `${year}-${month}`
     if (definitions.some((d) => d.key === key)) {
       window.alert('同じキーの行が既にあります。')
       return
     }
     const onlyForEmployeeIds = parseCommaSeparatedEmployeeIds(draftOnlyForIds)
-    const label = draftLabel.trim() || key
+    const defaultLabel = `${year}年${Number(month)}月期`
+    const label = draftLabel.trim() || defaultLabel
     const row =
       onlyForEmployeeIds.length > 0 ? { key, label, onlyForEmployeeIds } : { key, label }
     setDefinitions((prev) => {
       if (prev.some((d) => d.key === key)) return prev
-      return [...prev, row].sort((a, b) => compareEvalPeriodDesc(a.key, b.key))
+      return [row, ...prev]
     })
     onSelectActivePeriod?.(key)
-    setDraftKey('')
+    setDraftYear(String(currentYear))
+    setDraftMonth('03')
     setDraftLabel('')
     setDraftOnlyForIds('')
   }
@@ -5264,6 +5319,34 @@ function EvalPeriodSettingsPage({ definitions, setDefinitions, onSelectActivePer
     onRemovePeriodKey?.(key)
   }
 
+  const moveRowByKey = useCallback((sourceKey, targetKey) => {
+    if (!sourceKey || !targetKey || sourceKey === targetKey) return
+    setDefinitions((prev) => {
+      const from = prev.findIndex((d) => d.key === sourceKey)
+      const to = prev.findIndex((d) => d.key === targetKey)
+      if (from < 0 || to < 0 || from === to) return prev
+      const next = [...prev]
+      const [picked] = next.splice(from, 1)
+      next.splice(to, 0, picked)
+      return next
+    })
+  }, [setDefinitions])
+
+  const handleDragStart = (event, key) => {
+    setDraggingPeriodKey(key)
+    setDragOverPeriodKey('')
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', key)
+  }
+
+  const handleDropOnRow = (event, targetKey) => {
+    event.preventDefault()
+    const sourceKey = String(event.dataTransfer.getData('text/plain') || draggingPeriodKey || '').trim()
+    moveRowByKey(sourceKey, targetKey)
+    setDraggingPeriodKey('')
+    setDragOverPeriodKey('')
+  }
+
   const handleCleanupHistory = () => {
     if (!onCleanupHistory) return
     if (!window.confirm('評価期マスタに無い期キーを、自己評価/上司評価の履歴から削除します。実行しますか？')) return
@@ -5278,9 +5361,33 @@ function EvalPeriodSettingsPage({ definitions, setDefinitions, onSelectActivePer
         評価の単位となる「期」を定義します。必要な期を手動で追加してください。全社で使う臨時期はそのまま追加し、
         <strong>特定の社員だけ</strong>の期は「適用社員C」に社員Cをカンマ区切りで入力してください（空欄のときは全員に表示されます）。
       </p>
+      <p className="evalPeriodSettingsNote evalPeriodSettingsNote--drag">
+        期の行をドラッグ&ドロップすると並び順を変更できます（この順でレーダーの表示期を優先します）。
+      </p>
       <ul className="evalPeriodSettingsList">
         {definitions.map((row) => (
-          <li key={row.key} className="evalPeriodSettingsRow">
+          <li
+            key={row.key}
+            className={`evalPeriodSettingsRow${draggingPeriodKey === row.key ? ' isDragging' : ''}${
+              dragOverPeriodKey === row.key ? ' isDragOver' : ''
+            }`}
+            draggable
+            ref={(el) => {
+              if (el) rowRefs.current[row.key] = el
+              else delete rowRefs.current[row.key]
+            }}
+            onDragStart={(event) => handleDragStart(event, row.key)}
+            onDragOver={(event) => {
+              event.preventDefault()
+              if (dragOverPeriodKey !== row.key) setDragOverPeriodKey(row.key)
+            }}
+            onDragEnter={() => setDragOverPeriodKey(row.key)}
+            onDrop={(event) => handleDropOnRow(event, row.key)}
+            onDragEnd={() => {
+              setDraggingPeriodKey('')
+              setDragOverPeriodKey('')
+            }}
+          >
             <div className="evalPeriodSettingsRowMain">
               <span className="evalPeriodSettingsKey">{row.key}</span>
               <span className="evalPeriodSettingsLabel">{row.label}</span>
@@ -5290,9 +5397,11 @@ function EvalPeriodSettingsPage({ definitions, setDefinitions, onSelectActivePer
                   : '全員'}
               </span>
             </div>
-            <button type="button" className="evalPeriodSettingsRemove" onClick={() => removeRow(row.key)}>
-              削除
-        </button>
+            <div className="evalPeriodSettingsRowActions">
+              <button type="button" className="evalPeriodSettingsRemove" onClick={() => removeRow(row.key)}>
+                削除
+              </button>
+            </div>
           </li>
         ))}
       </ul>
@@ -5300,15 +5409,30 @@ function EvalPeriodSettingsPage({ definitions, setDefinitions, onSelectActivePer
         <h3 className="evalPeriodSettingsSubheading">期の追加</h3>
         <div className="evalPeriodSettingsAddGrid">
           <label className="evalPeriodSettingsAddField">
-            期キー（例: 2027-03）
-            <input value={draftKey} onChange={(e) => setDraftKey(e.target.value)} placeholder="2027-03" />
+            年
+            <input
+              type="number"
+              min="2000"
+              max="2099"
+              step="1"
+              value={draftYear}
+              onChange={(e) => setDraftYear(e.target.value)}
+              placeholder="2027"
+            />
           </label>
           <label className="evalPeriodSettingsAddField">
-            表示名
+            月
+            <select value={draftMonth} onChange={(e) => setDraftMonth(e.target.value)}>
+              <option value="03">3月</option>
+              <option value="09">9月</option>
+            </select>
+          </label>
+          <label className="evalPeriodSettingsAddField evalPeriodSettingsAddField--wide">
+            表示名（任意）
             <input
               value={draftLabel}
               onChange={(e) => setDraftLabel(e.target.value)}
-              placeholder="2027年入社直後 など"
+              placeholder="未入力なら「YYYY年M月期」で自動作成"
             />
           </label>
           <label className="evalPeriodSettingsAddField evalPeriodSettingsAddField--wide">
@@ -6428,6 +6552,7 @@ const MemberEvalRadarChart = memo(function MemberEvalRadarChart({
   gradeLabel = '',
   headlineScore = Number.NaN,
   activePeriodKey = '',
+  showWeightedFormula = true,
 }) {
   const usableSeries = useMemo(
     () =>
@@ -6504,17 +6629,24 @@ const MemberEvalRadarChart = memo(function MemberEvalRadarChart({
     return vals.reduce((sum, v) => sum + v, 0) / vals.length
   }, [usableSeries])
   const shownScore = Number.isFinite(headlineScore) ? headlineScore : latestAvg
+  const targetSeriesForMajorList = useMemo(() => {
+    const activeKey = String(activePeriodKey ?? '').trim()
+    if (activeKey) {
+      const found = usableSeries.find((s) => String(s?.periodKey ?? '').trim() === activeKey)
+      if (found) return found
+    }
+    return usableSeries[0] ?? null
+  }, [usableSeries, activePeriodKey])
   const latestMajorScores = useMemo(() => {
-    const latest = usableSeries[0]
-    if (!latest || !Array.isArray(latest.rows)) return []
-    return latest.rows
+    if (!targetSeriesForMajorList || !Array.isArray(targetSeriesForMajorList.rows)) return []
+    return targetSeriesForMajorList.rows
       .map((row) => ({
         id: String(row?.id ?? ''),
         title: String(row?.title ?? '').trim() || '大項目',
         score: Number(row?.total100),
       }))
       .filter((row) => Number.isFinite(row.score))
-  }, [usableSeries])
+  }, [targetSeriesForMajorList])
   const latestPeriodKey = String(usableSeries[0]?.periodKey ?? '').trim()
   const shownActivePeriodKey = String(activePeriodKey ?? '').trim()
   const modeTitle = '総合得点（一覧式）3期レーダー'
@@ -6535,7 +6667,9 @@ const MemberEvalRadarChart = memo(function MemberEvalRadarChart({
               {latestPeriodKey ? `3期比較の最新: ${latestPeriodKey}` : ''}
             </small>
           ) : null}
-          <small className="memberEvalRadarFormula">式: スキル30% + 自己15% + 上司25% + 経営30%</small>
+          {showWeightedFormula ? (
+            <small className="memberEvalRadarFormula">式: スキル30% + 自己15% + 上司25% + 経営30%</small>
+          ) : null}
         </div>
       ) : (
         <div className="memberEvalRadarHead">
@@ -6548,7 +6682,9 @@ const MemberEvalRadarChart = memo(function MemberEvalRadarChart({
               {latestPeriodKey ? `3期比較の最新: ${latestPeriodKey}` : ''}
             </small>
           ) : null}
-          <small className="memberEvalRadarFormula">式: スキル30% + 自己15% + 上司25% + 経営30%</small>
+          {showWeightedFormula ? (
+            <small className="memberEvalRadarFormula">式: スキル30% + 自己15% + 上司25% + 経営30%</small>
+          ) : null}
         </div>
       )}
       <div className="memberEvalRadarBody">
@@ -6742,6 +6878,8 @@ function EvalQuestionnairePage({
   const [detailItem, setDetailItem] = useState(null)
   const [selfEvalHistoryDetail, setSelfEvalHistoryDetail] = useState(null)
   const [selfEvalRecordAccordionOpen, setSelfEvalRecordAccordionOpen] = useState(false)
+  const [selfEvalSubmitPromptOpen, setSelfEvalSubmitPromptOpen] = useState(false)
+  const selfEvalSubmitPromptSeenRef = useRef({})
 
   const evaluatedCount = useMemo(
     () => allItems.filter((it) => String(scores[it.id] ?? '').trim() !== '').length,
@@ -6752,6 +6890,26 @@ function EvalQuestionnairePage({
     cat.items.filter((it) => String(scores[it.id] ?? '').trim() !== '').length
 
   const allComplete = evaluatedCount >= totalCount
+  const activePeriodKeyText = String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '').trim()
+  const selfEvalPromptScopeKey = `${String(employee?.id ?? '').trim()}::${activePeriodKeyText}`
+  useEffect(() => {
+    const isSelf = !isBoss && !isExec
+    if (!isSelf) return
+    if (!allComplete || isSubmittedForPeriod || !canEvaluate) return
+    if (!employee?.id || !activePeriodKeyText) return
+    if (selfEvalSubmitPromptSeenRef.current[selfEvalPromptScopeKey]) return
+    selfEvalSubmitPromptSeenRef.current[selfEvalPromptScopeKey] = true
+    setSelfEvalSubmitPromptOpen(true)
+  }, [
+    isBoss,
+    isExec,
+    allComplete,
+    isSubmittedForPeriod,
+    canEvaluate,
+    employee?.id,
+    activePeriodKeyText,
+    selfEvalPromptScopeKey,
+  ])
   const previousPeriodScoresByItem = useMemo(() => {
     const empId = String(employee?.id ?? '').trim()
     const activeKey = String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '').trim()
@@ -7395,6 +7553,39 @@ function EvalQuestionnairePage({
           </div>
         </div>
       ) : null}
+      {selfEvalSubmitPromptOpen ? (
+        <div className="employeeModalOverlay" onClick={() => setSelfEvalSubmitPromptOpen(false)}>
+          <div className="employeeModal selfEvalDetailModal" onClick={(event) => event.stopPropagation()}>
+            <button type="button" className="modalClose" onClick={() => setSelfEvalSubmitPromptOpen(false)}>
+              ×
+            </button>
+            <h3>自己評価を提出しますか？</h3>
+            <p className="selfEvalSubmitHint">
+              全項目の入力が完了しています。提出すると、この評価期は閲覧のみになり編集できません。
+            </p>
+            <div className="selfEvalSubmitBar">
+              <button
+                type="button"
+                className="selfEvalSubmitBtn"
+                onClick={() => {
+                  onSubmitEvaluation?.()
+                  setSelfEvalSubmitPromptOpen(false)
+                }}
+                disabled={isSubmittedForPeriod || !allComplete || !canEvaluate}
+              >
+                自己評価を提出
+              </button>
+              <button
+                type="button"
+                className="selfEvalSubmitBtn isLocked"
+                onClick={() => setSelfEvalSubmitPromptOpen(false)}
+              >
+                あとで提出する
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   )
 }
@@ -7737,6 +7928,7 @@ function GoalManagementPage({
             gradeLabel={radarGradeLabel}
             headlineScore={radarHeadlineScore}
             activePeriodKey={activeEvalPeriodKey ?? evalPeriodFallbackKey ?? ''}
+            showWeightedFormula={false}
           />
         </section>
       ) : null}
@@ -9003,10 +9195,14 @@ function AdminMockPage({
     const selfHist = selfEvalHistoryByEmployee?.[empId] ?? {}
     const bossHist = supervisorEvalHistoryByEmployee?.[empId] ?? {}
     const execHist = executiveEvalHistoryByEmployee?.[empId] ?? {}
-    const execPeriodKeys = Object.keys(execHist).filter((k) => k !== 'cumulative')
-    const periodKeys = [...new Set([...Object.keys(selfHist), ...Object.keys(bossHist), ...execPeriodKeys, activeKey].filter(Boolean))]
-      .sort(compareEvalPeriodDesc)
-      .slice(0, 3)
+    const periodKeys = pickRadarPeriodKeys({
+      activeKey,
+      selfHist,
+      bossHist,
+      execHist,
+      definitions: evalPeriodDefinitions,
+      limit: 3,
+    })
     if (!periodKeys.length) return []
     const sharedMajors = Array.isArray(evaluationCriteria?.sharedMajors) ? evaluationCriteria.sharedMajors : []
     const axisMajors = (sharedMajors.length
@@ -9089,6 +9285,7 @@ function AdminMockPage({
     supervisorEvalByEmployee,
     selectedMemberActiveEvalGrade,
     evaluationCriteria,
+    evalPeriodDefinitions,
   ])
   const selectedMemberSelfEvalRows = useMemo(() => {
     if (detailTab !== 'self') return []

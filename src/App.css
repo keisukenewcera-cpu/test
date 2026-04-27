@@ -8307,6 +8307,23 @@ select:focus {
   border-radius: 10px;
   border: 1px solid #e2e8f0;
   background: #f8fafc;
+  cursor: grab;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+}
+
+.evalPeriodSettingsRow:active {
+  cursor: grabbing;
+}
+
+.evalPeriodSettingsRow.isDragging {
+  opacity: 0.55;
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.18);
+}
+
+.evalPeriodSettingsRow.isDragOver {
+  border-color: #93c5fd;
+  box-shadow: 0 0 0 2px rgba(147, 197, 253, 0.22);
 }
 
 .evalPeriodSettingsRowMain {
@@ -8332,6 +8349,12 @@ select:focus {
   font-size: 11px;
   font-weight: 700;
   color: #64748b;
+}
+
+.evalPeriodSettingsRowActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .evalPeriodSettingsRemove {
@@ -8391,6 +8414,15 @@ select:focus {
   font-family: inherit;
 }
 
+.evalPeriodSettingsAddField select {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  font-size: 14px;
+  font-family: inherit;
+  background: #ffffff;
+}
+
 .evalPeriodSettingsAddField--wide {
   grid-column: 1 / -1;
 }
@@ -8443,6 +8475,10 @@ select:focus {
   font-size: 12px;
   line-height: 1.55;
   color: #64748b;
+}
+
+.evalPeriodSettingsNote--drag {
+  margin: 0 0 10px;
 }
 
 .memberDetailEvalPeriodBar {
