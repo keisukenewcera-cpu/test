@@ -2185,6 +2185,11 @@ select:focus {
   stroke-width: 1;
 }
 
+.memberEvalRadarAxis.isFocus {
+  stroke: #f97316;
+  stroke-width: 2;
+}
+
 .memberEvalRadarPolySelf {
   fill: rgba(59, 130, 246, 0.24);
   stroke: #2563eb;
@@ -2236,6 +2241,11 @@ select:focus {
   fill: #334155;
   font-size: 11px;
   font-weight: 700;
+}
+
+.memberEvalRadarLabel.isFocus {
+  fill: #c2410c;
+  font-weight: 800;
 }
 
 .memberEvalRadarLabel tspan {
@@ -2393,6 +2403,11 @@ select:focus {
   border-radius: 8px;
   background: #f8fafc;
   border: 1px solid #e2e8f0;
+}
+
+.memberEvalRadarMajorItem.isFocus {
+  border-color: #fdba74;
+  background: #fff7ed;
 }
 
 .memberEvalRadarMajorTitle {
@@ -4959,6 +4974,10 @@ select:focus {
   box-shadow: 0 2px 10px rgba(15, 23, 42, 0.06);
 }
 
+.selfEvalCategory.isFocusMajor {
+  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.35), 0 3px 12px rgba(249, 115, 22, 0.22);
+}
+
 .selfEvalCategoryHead {
   width: 100%;
   display: flex;
@@ -5474,16 +5493,10 @@ select:focus {
 }
 
 .goalMgmtHeader h2 {
-  margin: 0 0 6px;
+  margin: 0 0 18px;
   font-size: 26px;
   font-weight: 800;
   color: #0f172a;
-}
-
-.goalMgmtMeta {
-  margin: 0 0 22px;
-  font-size: 14px;
-  color: #64748b;
 }
 
 .goalMgmtSummaryGrid {
@@ -8133,11 +8146,6 @@ select:focus {
 
   .goalMgmtHeader h2 {
     font-size: 24px;
-  }
-
-  .goalMgmtMeta {
-    margin-bottom: 14px;
-    font-size: 13px;
   }
 
   .goalMgmtToolbar {
