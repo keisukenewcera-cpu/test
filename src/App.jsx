@@ -2783,8 +2783,8 @@ function App() {
       const perEmp = {}
       for (const [empId, periods] of Object.entries(hist ?? {})) {
         if (!periods || typeof periods !== 'object' || Array.isArray(periods)) continue
-        if (!periods[activeEvalPeriodKey]) continue
-        perEmp[empId] = periods[activeEvalPeriodKey]
+        if (!effectiveEvalPeriodKey || !periods[effectiveEvalPeriodKey]) continue
+        perEmp[empId] = periods[effectiveEvalPeriodKey]
       }
       return normalizer(perEmp)
     }
@@ -2802,16 +2802,11 @@ function App() {
       }
       return merged
     })
-  }, [activeEvalPeriodKey, selfEvalHistoryByEmployee, supervisorEvalHistoryByEmployee])
-
-  const activeEvalPeriodRef = useRef(activeEvalPeriodKey)
-  useEffect(() => {
-    activeEvalPeriodRef.current = activeEvalPeriodKey
-  }, [activeEvalPeriodKey])
+  }, [effectiveEvalPeriodKey, selfEvalHistoryByEmployee, supervisorEvalHistoryByEmployee])
 
   useEffect(() => {
     const now = new Date().toISOString()
-    const periodKey = String(activeEvalPeriodRef.current ?? '').trim()
+    const periodKey = String(effectiveEvalPeriodKey ?? '').trim()
     if (!periodKey) return
     setSelfEvalHistoryByEmployee((prev) => {
       const base = prev ?? {}
@@ -2843,11 +2838,11 @@ function App() {
       }
       return changed ? next : prev
     })
-  }, [selfEvalByEmployee, evalGradeByEmployeeId])
+  }, [selfEvalByEmployee, evalGradeByEmployeeId, effectiveEvalPeriodKey])
 
   useEffect(() => {
     const now = new Date().toISOString()
-    const periodKey = String(activeEvalPeriodRef.current ?? '').trim()
+    const periodKey = String(effectiveEvalPeriodKey ?? '').trim()
     if (!periodKey) return
     setSupervisorEvalHistoryByEmployee((prev) => {
       const base = prev ?? {}
@@ -2879,7 +2874,7 @@ function App() {
       }
       return changed ? next : prev
     })
-  }, [supervisorEvalByEmployee, evalGradeByEmployeeId])
+  }, [supervisorEvalByEmployee, evalGradeByEmployeeId, effectiveEvalPeriodKey])
 
   useEffect(() => {
     const now = new Date().toISOString()
@@ -2889,12 +2884,12 @@ function App() {
         next[empId] = {
           ...(next[empId] ?? {}),
           cumulative: { ...state, savedAt: now },
-          ...(activeEvalPeriodKey ? { [activeEvalPeriodKey]: { ...state, savedAt: now } } : {}),
+          ...(effectiveEvalPeriodKey ? { [effectiveEvalPeriodKey]: { ...state, savedAt: now } } : {}),
         }
       }
       return next
     })
-  }, [executiveEvalByEmployee, activeEvalPeriodKey])
+  }, [executiveEvalByEmployee, effectiveEvalPeriodKey])
 
   const renameEmployeeIdInAppState = useCallback((oldId, newId) => {
     const o = String(oldId ?? '').trim()
@@ -6468,11 +6463,10 @@ function executiveScore100ForState(execState, evaluationCriteria, gradeId) {
 
 function overallWeightedScore100ForEmployee(employee, ctx) {
   if (!employee) return Number.NaN
-  const skill100 = skillProgressScore100ForEmployee(employee, ctx.skills, ctx.skillProgress)
   const self100 = weightedEvalScore100ForEmployee(ctx.selfEvalByEmployee, employee, ctx.evaluationCriteria)
   const supervisor100 = weightedEvalScore100ForEmployee(ctx.supervisorEvalByEmployee, employee, ctx.evaluationCriteria)
   const executive100 = executiveScore100ForEmployee(employee, ctx.executiveEvalByEmployee, ctx.evaluationCriteria)
-  return skill100 * 0.3 + self100 * 0.15 + supervisor100 * 0.25 + executive100 * 0.3
+  return self100 * 0.25 + supervisor100 * 0.35 + executive100 * 0.4
 }
 
 function topSelfBossMajorGaps(employee, evaluationCriteria, selfEvalByEmployee, supervisorEvalByEmployee, limit = 2) {
@@ -6668,7 +6662,7 @@ const MemberEvalRadarChart = memo(function MemberEvalRadarChart({
             </small>
           ) : null}
           {showWeightedFormula ? (
-            <small className="memberEvalRadarFormula">式: スキル30% + 自己15% + 上司25% + 経営30%</small>
+            <small className="memberEvalRadarFormula">式: 自己25% + 上司35% + 経営40%</small>
           ) : null}
         </div>
       ) : (
@@ -6683,7 +6677,7 @@ const MemberEvalRadarChart = memo(function MemberEvalRadarChart({
             </small>
           ) : null}
           {showWeightedFormula ? (
-            <small className="memberEvalRadarFormula">式: スキル30% + 自己15% + 上司25% + 経営30%</small>
+            <small className="memberEvalRadarFormula">式: 自己25% + 上司35% + 経営40%</small>
           ) : null}
         </div>
       )}
@@ -6878,8 +6872,6 @@ function EvalQuestionnairePage({
   const [detailItem, setDetailItem] = useState(null)
   const [selfEvalHistoryDetail, setSelfEvalHistoryDetail] = useState(null)
   const [selfEvalRecordAccordionOpen, setSelfEvalRecordAccordionOpen] = useState(false)
-  const [selfEvalSubmitPromptOpen, setSelfEvalSubmitPromptOpen] = useState(false)
-  const selfEvalSubmitPromptSeenRef = useRef({})
 
   const evaluatedCount = useMemo(
     () => allItems.filter((it) => String(scores[it.id] ?? '').trim() !== '').length,
@@ -6890,25 +6882,44 @@ function EvalQuestionnairePage({
     cat.items.filter((it) => String(scores[it.id] ?? '').trim() !== '').length
 
   const allComplete = evaluatedCount >= totalCount
-  const activePeriodKeyText = String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '').trim()
-  const selfEvalPromptScopeKey = `${String(employee?.id ?? '').trim()}::${activePeriodKeyText}`
-  useEffect(() => {
-    const isSelf = !isBoss && !isExec
-    if (!isSelf) return
-    if (!allComplete || isSubmittedForPeriod || !canEvaluate) return
-    if (!employee?.id || !activePeriodKeyText) return
-    if (selfEvalSubmitPromptSeenRef.current[selfEvalPromptScopeKey]) return
-    selfEvalSubmitPromptSeenRef.current[selfEvalPromptScopeKey] = true
-    setSelfEvalSubmitPromptOpen(true)
+  const bulkCopySourceLabel = isExec ? '1次評価(上司)' : isBoss ? '自己評価' : ''
+  const bulkCopyTargetLabel = isExec ? '2次評価(経営層)' : isBoss ? '1次評価(上司)' : ''
+  const bulkCopyFromCurrentPeriod = useCallback(() => {
+    if (!canEvaluate || isSubmittedForPeriod) return
+    if (!isBoss && !isExec) return
+    const sourceScores = isExec ? peerBossScores : peerScores
+    const nextScores = {}
+    for (const it of allItems) {
+      const v = String(sourceScores?.[it.id] ?? '').trim()
+      if (!v) continue
+      nextScores[it.id] = v
+    }
+    if (!Object.keys(nextScores).length) {
+      window.alert(`この評価期でコピー可能な${bulkCopySourceLabel}の点数がありません。`)
+      return
+    }
+    const confirmed = window.confirm(
+      `選択中の評価期の${bulkCopySourceLabel}を、${bulkCopyTargetLabel}へ一括コピーしますか？`,
+    )
+    if (!confirmed) return
+    setEvalState((prev) => ({
+      scores: {
+        ...(prev?.scores ?? {}),
+        ...nextScores,
+      },
+      comments: { ...(prev?.comments ?? {}) },
+    }))
   }, [
+    canEvaluate,
+    isSubmittedForPeriod,
     isBoss,
     isExec,
-    allComplete,
-    isSubmittedForPeriod,
-    canEvaluate,
-    employee?.id,
-    activePeriodKeyText,
-    selfEvalPromptScopeKey,
+    peerBossScores,
+    peerScores,
+    allItems,
+    bulkCopySourceLabel,
+    bulkCopyTargetLabel,
+    setEvalState,
   ])
   const previousPeriodScoresByItem = useMemo(() => {
     const empId = String(employee?.id ?? '').trim()
@@ -7147,6 +7158,16 @@ function EvalQuestionnairePage({
 
       {typeof onSubmitEvaluation === 'function' ? (
         <div className="selfEvalSubmitBar">
+        {isBoss || isExec ? (
+          <button
+            type="button"
+            className="selfEvalSubmitBtn"
+            onClick={bulkCopyFromCurrentPeriod}
+            disabled={isSubmittedForPeriod || !canEvaluate}
+          >
+            {bulkCopySourceLabel}をこの期に一括コピー
+          </button>
+        ) : null}
         <button
           type="button"
             className={`selfEvalSubmitBtn${isSubmittedForPeriod ? ' isLocked' : ''}`}
@@ -7349,7 +7370,7 @@ function EvalQuestionnairePage({
                                       <button
                                         type="button"
                                         className="selfEvalDetailLink"
-                                        onClick={() => setDetailItem(it)}
+                                        onClick={() => setDetailItem((prev) => (prev?.id === it.id ? null : it))}
                                         aria-label={`${it.title} の詳細を表示`}
                                         title="詳細を表示"
                                       >
@@ -7380,6 +7401,12 @@ function EvalQuestionnairePage({
                                         )
                                       })}
                                     </div>
+                                    {detailItem?.id === it.id ? (
+                                      <div className="selfEvalDetailBody selfEvalDetailBody--inline">
+                                        <h4>点数の目安（1～5点）</h4>
+                                        <pre className="selfEvalDetailCriteria">{it.criteria}</pre>
+                                      </div>
+                                    ) : null}
                           </label>
                                   {isBoss || isExec ? (
                           <label className="selfEvalFieldLabel">
@@ -7407,50 +7434,6 @@ function EvalQuestionnairePage({
           )
         })}
       </div>
-
-      {detailItem ? (
-        <div className="employeeModalOverlay" onClick={() => setDetailItem(null)}>
-          <div className="employeeModal selfEvalDetailModal" onClick={(event) => event.stopPropagation()}>
-            <button type="button" className="modalClose" onClick={() => setDetailItem(null)}>
-              ×
-            </button>
-            <h3>{detailItem.title}</h3>
-            <div className="selfEvalDetailScoreBox">
-              <p className="selfEvalDetailScoreLabel">
-                {isExec ? '2次評価(経営層)の点数' : isBoss ? '1次評価(上司)の点数' : '評価点数'}
-              </p>
-              <div className="selfEvalScoreSegment" role="group" aria-label={`${detailItem.title}の評価点数`}>
-                {[1, 2, 3, 4, 5].map((n) => {
-                  const value = String(n)
-                  const selected = String(scores[detailItem.id] ?? '') === value
-                  const isSelfMarked = (isBoss || isExec) && String(peerScores[detailItem.id] ?? '') === value
-                  const isBossMarked = isExec && String(peerBossScores[detailItem.id] ?? '') === value
-                  return (
-                    <button
-                      key={n}
-                      type="button"
-                      className={`selfEvalScorePill${selected ? ' isActive' : ''}${isSelfMarked ? ' isPeerSelfMarked' : ''}${
-                        isBossMarked ? ' isPeerBossMarked' : ''
-                      }`}
-                      disabled={isSubmittedForPeriod || !canEvaluate}
-                      onClick={() => patchScore(detailItem.id, value)}
-                      aria-pressed={selected}
-                    >
-                      {n}
-                      {isSelfMarked ? <span className="selfEvalPeerMark selfEvalPeerMark--self">自己</span> : null}
-                      {isBossMarked ? <span className="selfEvalPeerMark selfEvalPeerMark--boss">1次</span> : null}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-            <div className="selfEvalDetailBody">
-              <h4>点数の目安（1～5点）</h4>
-              <pre className="selfEvalDetailCriteria">{detailItem.criteria}</pre>
-            </div>
-          </div>
-        </div>
-      ) : null}
 
       {selfEvalHistoryDetail ? (
         <div className="employeeModalOverlay" onClick={() => setSelfEvalHistoryDetail(null)}>
@@ -7549,39 +7532,6 @@ function EvalQuestionnairePage({
                   </>
                 )
               })()}
-            </div>
-          </div>
-        </div>
-      ) : null}
-      {selfEvalSubmitPromptOpen ? (
-        <div className="employeeModalOverlay" onClick={() => setSelfEvalSubmitPromptOpen(false)}>
-          <div className="employeeModal selfEvalDetailModal" onClick={(event) => event.stopPropagation()}>
-            <button type="button" className="modalClose" onClick={() => setSelfEvalSubmitPromptOpen(false)}>
-              ×
-            </button>
-            <h3>自己評価を提出しますか？</h3>
-            <p className="selfEvalSubmitHint">
-              全項目の入力が完了しています。提出すると、この評価期は閲覧のみになり編集できません。
-            </p>
-            <div className="selfEvalSubmitBar">
-              <button
-                type="button"
-                className="selfEvalSubmitBtn"
-                onClick={() => {
-                  onSubmitEvaluation?.()
-                  setSelfEvalSubmitPromptOpen(false)
-                }}
-                disabled={isSubmittedForPeriod || !allComplete || !canEvaluate}
-              >
-                自己評価を提出
-              </button>
-              <button
-                type="button"
-                className="selfEvalSubmitBtn isLocked"
-                onClick={() => setSelfEvalSubmitPromptOpen(false)}
-              >
-                あとで提出する
-              </button>
             </div>
           </div>
         </div>
