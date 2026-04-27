@@ -182,13 +182,41 @@ function parseOnlyForEmployeeIdsFromStored(row) {
   return []
 }
 
+function normalizeDeadlineDate(value) {
+  const s = String(value ?? '').trim()
+  if (!s) return ''
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`
+  const ms = new Date(s).getTime()
+  if (!Number.isFinite(ms)) return ''
+  const d = new Date(ms)
+  const y = d.getFullYear()
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${y}-${mm}-${dd}`
+}
+
+function deadlineStartMs(value) {
+  const s = normalizeDeadlineDate(value)
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) return Number.NaN
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0).getTime()
+}
+
 function normalizeEvalPeriodDefinitionRow(row) {
   const key = String(row?.key ?? '').trim()
   if (!key) return null
   const label = String(row?.label ?? '').trim() || key
   const onlyForEmployeeIds = parseOnlyForEmployeeIdsFromStored(row)
-  if (onlyForEmployeeIds.length) return { key, label, onlyForEmployeeIds }
-  return { key, label }
+  const selfEvalDeadlineAt = normalizeDeadlineDate(row?.selfEvalDeadlineAt)
+  const supervisorEvalDeadlineAt = normalizeDeadlineDate(row?.supervisorEvalDeadlineAt)
+  const executiveEvalDeadlineAt = normalizeDeadlineDate(row?.executiveEvalDeadlineAt)
+  const next = { key, label }
+  if (onlyForEmployeeIds.length) next.onlyForEmployeeIds = onlyForEmployeeIds
+  if (selfEvalDeadlineAt) next.selfEvalDeadlineAt = selfEvalDeadlineAt
+  if (supervisorEvalDeadlineAt) next.supervisorEvalDeadlineAt = supervisorEvalDeadlineAt
+  if (executiveEvalDeadlineAt) next.executiveEvalDeadlineAt = executiveEvalDeadlineAt
+  return next
 }
 
 function parseEvalPeriodDefinitionList(raw) {
@@ -223,6 +251,15 @@ function mergeEvalPeriodDefinitionArrays(prevRaw, remoteRaw) {
     const next = { ...cur, label: cur.label || row.label || cur.key }
     if (ids.length) next.onlyForEmployeeIds = ids
     else delete next.onlyForEmployeeIds
+    const mergedSelfDeadline = normalizeDeadlineDate(cur.selfEvalDeadlineAt ?? row.selfEvalDeadlineAt)
+    if (mergedSelfDeadline) next.selfEvalDeadlineAt = mergedSelfDeadline
+    else delete next.selfEvalDeadlineAt
+    const mergedSupervisorDeadline = normalizeDeadlineDate(cur.supervisorEvalDeadlineAt ?? row.supervisorEvalDeadlineAt)
+    if (mergedSupervisorDeadline) next.supervisorEvalDeadlineAt = mergedSupervisorDeadline
+    else delete next.supervisorEvalDeadlineAt
+    const mergedExecutiveDeadline = normalizeDeadlineDate(cur.executiveEvalDeadlineAt ?? row.executiveEvalDeadlineAt)
+    if (mergedExecutiveDeadline) next.executiveEvalDeadlineAt = mergedExecutiveDeadline
+    else delete next.executiveEvalDeadlineAt
     map.set(row.key, next)
   }
   return [...map.values()].sort((a, b) => compareEvalPeriodDesc(a.key, b.key))
@@ -1068,7 +1105,7 @@ const ADMIN_ROLE_MENU_KEYS = MAIN_WORKSPACE_TAB_ORDER.map((t) => t.key)
 
 const MENU_KEYS_BY_ROLE_CARD = {
   [MENU_ROLE_IPPAN]: ['count', 'honsu', 'skillup', 'selfeval', 'goals'],
-  [MENU_ROLE_JOUSHI]: ['count', 'honsu', 'admin', 'skillup', 'selfeval', 'goals'],
+  [MENU_ROLE_JOUSHI]: ['count', 'honsu', 'admin', 'skillup', 'selfeval', 'goals', 'bossEval', 'execEval'],
   [MENU_ROLE_YAKUIN]: [
     'gyoseki',
     'count',
@@ -1077,13 +1114,15 @@ const MENU_KEYS_BY_ROLE_CARD = {
     'employee',
     'settings',
     'goals',
+    'bossEval',
+    'execEval',
   ],
   [MENU_ROLE_ADMIN]: [...ADMIN_ROLE_MENU_KEYS],
 }
 
 const DEFAULT_MENU_VISIBILITY_BY_ROLE = {
   [MENU_ROLE_IPPAN]: ['count', 'honsu', 'skillup', 'selfeval', 'goals'],
-  [MENU_ROLE_JOUSHI]: ['count', 'honsu', 'skillup', 'selfeval', 'goals'],
+  [MENU_ROLE_JOUSHI]: ['count', 'honsu', 'skillup', 'selfeval', 'goals', 'bossEval', 'execEval'],
   [MENU_ROLE_YAKUIN]: [
     'gyoseki',
     'count',
@@ -1092,6 +1131,8 @@ const DEFAULT_MENU_VISIBILITY_BY_ROLE = {
     'employee',
     'settings',
     'goals',
+    'bossEval',
+    'execEval',
   ],
   [MENU_ROLE_ADMIN]: [...ADMIN_ROLE_MENU_KEYS],
 }
@@ -1145,6 +1186,12 @@ function isWorkspaceVisibleForRole(workspaceKey, roleKey, menuVisibilityByRole) 
     return list.includes('gyoseki')
   }
   if (roleKey === MENU_ROLE_ADMIN && normalizedWorkspaceKey === 'settings') return true
+  if (
+    (normalizedWorkspaceKey === 'bossEval' || normalizedWorkspaceKey === 'execEval') &&
+    (roleKey === MENU_ROLE_JOUSHI || roleKey === MENU_ROLE_YAKUIN || roleKey === MENU_ROLE_ADMIN)
+  ) {
+    return true
+  }
   const keys = MENU_KEYS_BY_ROLE_CARD[roleKey] ?? []
   if (!keys.includes(normalizedWorkspaceKey)) return false
   const list = menuVisibilityByRole[roleKey] ?? []
@@ -1502,6 +1549,8 @@ function App() {
   const [resetId, setResetId] = useState('')
   const [resetPrevPassword, setResetPrevPassword] = useState('')
   const [resetNextPassword, setResetNextPassword] = useState('')
+  const [resetFeedback, setResetFeedback] = useState('')
+  const [resetFeedbackType, setResetFeedbackType] = useState('error')
   const savedData = loadSavedData()
   const __initEvalPeriodState = readInitialEvalPeriodStateFromSavedData(savedData)
   const [rows, setRows] = useState(() => {
@@ -1593,7 +1642,14 @@ function App() {
   })
 
   /** 業績手当の等級はスキル／評価の等級マスタのみ。マスタに無い値は先頭等級へ寄せる */
-  useEffect(() => {
+  const selfEvalStatePeriodRef = useRef('')
+  const supervisorEvalStatePeriodRef = useRef('')
+  const executiveEvalStatePeriodRef = useRef('')
+  const lastSelfEvalSyncPeriodRef = useRef('')
+  const lastSupervisorEvalSyncPeriodRef = useRef('')
+  const lastExecutiveEvalSyncPeriodRef = useRef('')
+
+  useLayoutEffect(() => {
     const ids = skillGrades.map((g) => g.id).filter(Boolean)
     if (!ids.length) return
     const allowed = new Set(ids)
@@ -1786,6 +1842,8 @@ function App() {
     supabase ? 'Supabase同期を確認中...' : 'Supabase未設定（ローカル保存のみ）',
   )
   const [syncError, setSyncError] = useState('')
+  const [isEvalPeriodSwitching, setIsEvalPeriodSwitching] = useState(false)
+  const evalPeriodSwitchStartedAtRef = useRef(0)
 
   useEffect(() => {
     setEvaluationCriteria((prev) => {
@@ -2236,7 +2294,38 @@ function App() {
     () => getSuggestedEvalPeriodKey(evalPeriodDefinitions),
     [evalPeriodDefinitions],
   )
+  const requestEvalPeriodChange = useCallback(
+    (nextKey) => {
+      const next = String(nextKey ?? '').trim()
+      const current = String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '').trim()
+      if (!next || next === current) {
+        setActiveEvalPeriodKey(next)
+        return
+      }
+      evalPeriodSwitchStartedAtRef.current = Date.now()
+      setIsEvalPeriodSwitching(true)
+      setActiveEvalPeriodKey(next)
+    },
+    [activeEvalPeriodKey, evalPeriodFallbackKey],
+  )
   const effectiveEvalPeriodKey = activeEvalPeriodKey ?? evalPeriodFallbackKey
+  const activeEvalPeriodDef = useMemo(() => {
+    const key = String(effectiveEvalPeriodKey ?? '').trim()
+    if (!key) return null
+    return (evalPeriodDefinitions ?? []).find((d) => String(d?.key ?? '').trim() === key) ?? null
+  }, [effectiveEvalPeriodKey, evalPeriodDefinitions])
+  const selfEvalDeadlineAt = normalizeDeadlineDate(activeEvalPeriodDef?.selfEvalDeadlineAt)
+  const supervisorEvalDeadlineAt = normalizeDeadlineDate(activeEvalPeriodDef?.supervisorEvalDeadlineAt)
+  const executiveEvalDeadlineAt = normalizeDeadlineDate(activeEvalPeriodDef?.executiveEvalDeadlineAt)
+  const isSelfEvalDeadlineLocked = Number.isFinite(deadlineStartMs(selfEvalDeadlineAt))
+    ? Date.now() >= deadlineStartMs(selfEvalDeadlineAt)
+    : false
+  const isSupervisorEvalDeadlineLocked = Number.isFinite(deadlineStartMs(supervisorEvalDeadlineAt))
+    ? Date.now() >= deadlineStartMs(supervisorEvalDeadlineAt)
+    : false
+  const isExecutiveEvalDeadlineLocked = Number.isFinite(deadlineStartMs(executiveEvalDeadlineAt))
+    ? Date.now() >= deadlineStartMs(executiveEvalDeadlineAt)
+    : false
 
   const goalMgmtEmployee = loggedInEmployee
   const goalMgmtPeriodKey = String(activeEvalPeriodKey ?? getSuggestedEvalPeriodKey(evalPeriodDefinitions) ?? '').trim()
@@ -2316,6 +2405,10 @@ function App() {
     const palette = ['#2563eb', '#059669', '#7c3aed']
     return periodKeys
       .map((periodKey, idx) => {
+        const selfSubmitted = Boolean(String(selfHist?.[periodKey]?.submittedAt ?? '').trim())
+        const bossSubmitted = Boolean(String(bossHist?.[periodKey]?.submittedAt ?? '').trim())
+        const execSubmitted = Boolean(String(execHist?.[periodKey]?.submittedAt ?? '').trim())
+        if (!selfSubmitted || !bossSubmitted || !execSubmitted) return null
         const periodGrade =
           String(selfHist?.[periodKey]?.evalGrade ?? '').trim() ||
           String(bossHist?.[periodKey]?.evalGrade ?? '').trim() ||
@@ -2337,10 +2430,7 @@ function App() {
                 ...(supervisorEvalByEmployee?.[empId]?.scores ?? {}),
               }
             : { ...(bossHist?.[periodKey]?.scores ?? {}) }
-        const periodExecState =
-          periodKey === activeKey
-            ? (executiveEvalByEmployee?.[empId] ?? execHist?.[periodKey] ?? execHist?.cumulative)
-            : (execHist?.[periodKey] ?? null)
+        const periodExecState = execHist?.[periodKey] ?? null
         const execScores =
           periodExecState?.scores &&
           typeof periodExecState.scores === 'object' &&
@@ -2358,8 +2448,8 @@ function App() {
             : Number.isFinite(execByMajor?.[major.id])
               ? execByMajor[major.id]
               : Number.NaN
-          const totalParts = [self100, boss100, exec100].filter((v) => Number.isFinite(v))
-          const total100 = totalParts.length ? totalParts.reduce((sum, v) => sum + v, 0) / totalParts.length : Number.NaN
+          const allDone = Number.isFinite(self100) && Number.isFinite(boss100) && Number.isFinite(exec100)
+          const total100 = allDone ? (self100 + boss100 + exec100) / 3 : Number.NaN
           return {
             id: major.id,
             title: major.title,
@@ -2369,10 +2459,8 @@ function App() {
             total100,
           }
         })
-        const hasAny = rows.some(
-          (r) => Number.isFinite(r.self100) || Number.isFinite(r.boss100) || Number.isFinite(r.exec100),
-        )
-        if (!hasAny) return null
+        const hasAllEvalCompleted = rows.some((r) => Number.isFinite(r.total100))
+        if (!hasAllEvalCompleted) return null
         return {
           periodKey,
           label: idx === 0 ? `${periodKey}（最新）` : periodKey,
@@ -2395,13 +2483,6 @@ function App() {
     evaluationCriteria,
     evalPeriodDefinitions,
   ])
-  const goalMgmtSubmittedForActive = useMemo(() => {
-    const empId = String(goalMgmtEmployee?.id ?? '').trim()
-    const periodKey = String(activeEvalPeriodKey ?? getSuggestedEvalPeriodKey(evalPeriodDefinitions) ?? '').trim()
-    if (!empId || !periodKey) return false
-    return Boolean(goalSubmissionByEmployee?.[empId]?.[periodKey]?.submittedAt)
-  }, [goalMgmtEmployee?.id, activeEvalPeriodKey, evalPeriodDefinitions, goalSubmissionByEmployee])
-
   const setGoalMgmtGoals = useCallback(
     (updater) => {
       setGoalsByEmployeePeriod((prev) => {
@@ -2475,22 +2556,6 @@ function App() {
     },
     [goalMgmtEmployee, activeEvalPeriodKey, evalPeriodDefinitions],
   )
-  const submitGoalMgmtForActivePeriod = useCallback(() => {
-    const empId = String(goalMgmtEmployee?.id ?? '').trim()
-    const periodKey = String(activeEvalPeriodKey ?? getSuggestedEvalPeriodKey(evalPeriodDefinitions) ?? '').trim()
-    if (!empId || !periodKey) return
-    const confirmed = window.confirm(`目標管理（${periodKey}）を提出しますか？提出後はこの期の編集をロックします。`)
-    if (!confirmed) return
-    const now = new Date().toISOString()
-    setGoalSubmissionByEmployee((prev) => ({
-      ...(prev ?? {}),
-      [empId]: {
-        ...((prev ?? {})[empId] ?? {}),
-        [periodKey]: { submittedAt: now },
-      },
-    }))
-  }, [goalMgmtEmployee?.id, activeEvalPeriodKey, evalPeriodDefinitions])
-
   const evalSubjectEmployee = useMemo(() => {
     if (!employeeDirectoryRows.length) return null
     const byTrimmedId = (targetId) => {
@@ -2613,21 +2678,25 @@ function App() {
       if (!Number.isFinite(weightTotal) || weightTotal <= 0) return Number.NaN
       return parts.reduce((sum, x) => sum + (x.score * x.weight), 0) / weightTotal
   }
-  const selfEvalSubmittedForActive = Boolean(
+  const selfEvalSubmittedRawForActive = Boolean(
     evalSubjectEmployee?.id &&
       selfEvalHistoryByEmployee?.[evalSubjectEmployee.id]?.[effectiveEvalPeriodKey]?.submittedAt,
   )
-  const supervisorEvalSubmittedForActive = Boolean(
+  const supervisorEvalSubmittedRawForActive = Boolean(
     evalSubjectEmployee?.id &&
       supervisorEvalHistoryByEmployee?.[evalSubjectEmployee.id]?.[effectiveEvalPeriodKey]?.submittedAt,
   )
-  const executiveEvalSubmittedForActive = Boolean(
+  const executiveEvalSubmittedRawForActive = Boolean(
     evalSubjectEmployee?.id &&
       executiveEvalHistoryByEmployee?.[evalSubjectEmployee.id]?.[effectiveEvalPeriodKey]?.submittedAt,
   )
+  const selfEvalSubmittedForActive = selfEvalSubmittedRawForActive || isSelfEvalDeadlineLocked
+  const supervisorEvalSubmittedForActive = supervisorEvalSubmittedRawForActive || isSupervisorEvalDeadlineLocked
+  const executiveEvalSubmittedForActive = executiveEvalSubmittedRawForActive || isExecutiveEvalDeadlineLocked
 
   const submitSelfEvalForActivePeriod = useCallback(() => {
     if (!evalSubjectEmployee?.id || !effectiveEvalPeriodKey) return
+    if (isSelfEvalDeadlineLocked) return
     const confirmed = window.confirm(`自己評価（${effectiveEvalPeriodKey}）を提出しますか？提出後はこの期を編集できません。`)
     if (!confirmed) return
     const now = new Date().toISOString()
@@ -2647,10 +2716,11 @@ function App() {
         },
       }
     })
-  }, [evalSubjectEmployee?.id, effectiveEvalPeriodKey, selfBossGapForPeriod])
+  }, [evalSubjectEmployee?.id, effectiveEvalPeriodKey, selfBossGapForPeriod, isSelfEvalDeadlineLocked])
 
   const submitSupervisorEvalForActivePeriod = useCallback(() => {
     if (!evalSubjectEmployee?.id || !effectiveEvalPeriodKey) return
+    if (isSupervisorEvalDeadlineLocked) return
     const confirmed = window.confirm(`1次評価(上司)（${effectiveEvalPeriodKey}）を提出しますか？提出後はこの期を編集できません。`)
     if (!confirmed) return
     const now = new Date().toISOString()
@@ -2689,37 +2759,39 @@ function App() {
       })
       window.alert(`自己/1次評価の乖離が${gap.toFixed(1)}点です。自己評価の再提出を依頼しました。`)
     }
-  }, [evalSubjectEmployee?.id, effectiveEvalPeriodKey])
+  }, [evalSubjectEmployee?.id, effectiveEvalPeriodKey, isSupervisorEvalDeadlineLocked])
   const submitSupervisorEvalForMember = useCallback(
-    (employeeId) => {
+    (employeeId, periodKeyOverride) => {
       const empId = String(employeeId ?? '').trim()
-      if (!empId || !effectiveEvalPeriodKey) return
-      const confirmed = window.confirm(`1次評価(上司)（${effectiveEvalPeriodKey}）を提出しますか？提出後はこの期を編集できません。`)
+      const periodKey = String(periodKeyOverride ?? effectiveEvalPeriodKey ?? '').trim()
+      if (!empId || !periodKey) return
+      if (isSupervisorEvalDeadlineLocked) return
+      const confirmed = window.confirm(`1次評価(上司)（${periodKey}）を提出しますか？提出後はこの期を編集できません。`)
       if (!confirmed) return
       const now = new Date().toISOString()
       setSupervisorEvalHistoryByEmployee((prev) => {
-        const current = prev?.[empId]?.[effectiveEvalPeriodKey] ?? {}
+        const current = prev?.[empId]?.[periodKey] ?? {}
         return {
           ...(prev ?? {}),
           [empId]: {
             ...((prev ?? {})[empId] ?? {}),
-            [effectiveEvalPeriodKey]: {
+            [periodKey]: {
               ...current,
               submittedAt: now,
             },
           },
         }
       })
-      const gap = selfBossGapForPeriod(empId, effectiveEvalPeriodKey)
+      const gap = selfBossGapForPeriod(empId, periodKey)
       if (Number.isFinite(gap) && gap >= SELF_BOSS_GAP_ALERT_THRESHOLD) {
         setSelfEvalHistoryByEmployee((prev) => {
-          const current = prev?.[empId]?.[effectiveEvalPeriodKey]
+          const current = prev?.[empId]?.[periodKey]
           if (!current) return prev
           return {
             ...(prev ?? {}),
             [empId]: {
               ...((prev ?? {})[empId] ?? {}),
-              [effectiveEvalPeriodKey]: {
+              [periodKey]: {
                 ...current,
                 submittedAt: '',
                 resubmitRequestedAt: now,
@@ -2731,10 +2803,11 @@ function App() {
         window.alert(`自己/1次評価の乖離が${gap.toFixed(1)}点です。自己評価の再提出を依頼しました。`)
       }
     },
-    [effectiveEvalPeriodKey, selfBossGapForPeriod],
+    [effectiveEvalPeriodKey, selfBossGapForPeriod, isSupervisorEvalDeadlineLocked],
   )
   const submitExecutiveEvalForActivePeriod = useCallback(() => {
     if (!evalSubjectEmployee?.id || !effectiveEvalPeriodKey) return
+    if (isExecutiveEvalDeadlineLocked) return
     const confirmed = window.confirm(`2次評価(経営層)（${effectiveEvalPeriodKey}）を提出しますか？提出後はこの期を編集できません。`)
     if (!confirmed) return
     const now = new Date().toISOString()
@@ -2752,21 +2825,23 @@ function App() {
         },
       }
     })
-  }, [evalSubjectEmployee?.id, effectiveEvalPeriodKey])
+  }, [evalSubjectEmployee?.id, effectiveEvalPeriodKey, isExecutiveEvalDeadlineLocked])
   const submitExecutiveEvalForMember = useCallback(
-    (employeeId) => {
+    (employeeId, periodKeyOverride) => {
       const empId = String(employeeId ?? '').trim()
-      if (!empId || !effectiveEvalPeriodKey) return
-      const confirmed = window.confirm(`2次評価(経営層)（${effectiveEvalPeriodKey}）を提出しますか？提出後はこの期を編集できません。`)
+      const periodKey = String(periodKeyOverride ?? effectiveEvalPeriodKey ?? '').trim()
+      if (!empId || !periodKey) return
+      if (isExecutiveEvalDeadlineLocked) return
+      const confirmed = window.confirm(`2次評価(経営層)（${periodKey}）を提出しますか？提出後はこの期を編集できません。`)
       if (!confirmed) return
       const now = new Date().toISOString()
       setExecutiveEvalHistoryByEmployee((prev) => {
-        const current = prev?.[empId]?.[effectiveEvalPeriodKey] ?? {}
+        const current = prev?.[empId]?.[periodKey] ?? {}
         return {
           ...(prev ?? {}),
           [empId]: {
             ...((prev ?? {})[empId] ?? {}),
-            [effectiveEvalPeriodKey]: {
+            [periodKey]: {
               ...current,
               submittedAt: now,
             },
@@ -2774,7 +2849,7 @@ function App() {
         }
       })
     },
-    [effectiveEvalPeriodKey],
+    [effectiveEvalPeriodKey, isExecutiveEvalDeadlineLocked],
   )
 
   const cleanupEvalPeriodHistory = useCallback(() => {
@@ -2828,12 +2903,15 @@ function App() {
   }, [])
 
   useEffect(() => {
+    // 管理者の評価者用画面では、メンバーごとの評価期候補を使うため、
+    // ここで共通候補による強制補正をかけると期キーが往復してしまう。
+    if (workspaceView === 'admin') return
     const valid = new Set(evalPeriodSelectOptions.map((o) => o.value))
     if (!activeEvalPeriodKey || !valid.size) return
     if (!valid.has(activeEvalPeriodKey)) {
       setActiveEvalPeriodKey(evalPeriodSelectOptions[0].value)
     }
-  }, [activeEvalPeriodKey, evalPeriodSelectOptions])
+  }, [activeEvalPeriodKey, evalPeriodSelectOptions, workspaceView])
 
   const updateSelfEvalForSubject = useCallback(
     (updater) => {
@@ -2879,7 +2957,8 @@ function App() {
     [evalSubjectEmployee],
   )
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    let timer = null
     const fromHistory = (hist, normalizer) => {
       const perEmp = {}
       for (const [empId, periods] of Object.entries(hist ?? {})) {
@@ -2903,12 +2982,34 @@ function App() {
       }
       return merged
     })
-  }, [effectiveEvalPeriodKey, selfEvalHistoryByEmployee, supervisorEvalHistoryByEmployee])
+    const periodKey = String(effectiveEvalPeriodKey ?? '').trim()
+    selfEvalStatePeriodRef.current = periodKey
+    supervisorEvalStatePeriodRef.current = periodKey
+    executiveEvalStatePeriodRef.current = periodKey
+    if (isEvalPeriodSwitching) {
+      const elapsed = Date.now() - Number(evalPeriodSwitchStartedAtRef.current || 0)
+      const waitMs = Math.max(0, 220 - elapsed)
+      if (waitMs <= 0) {
+        setIsEvalPeriodSwitching(false)
+      } else {
+        timer = window.setTimeout(() => setIsEvalPeriodSwitching(false), waitMs)
+      }
+    }
+    return () => {
+      if (timer) window.clearTimeout(timer)
+    }
+  }, [effectiveEvalPeriodKey, selfEvalHistoryByEmployee, supervisorEvalHistoryByEmployee, isEvalPeriodSwitching])
 
   useEffect(() => {
+    if (workspaceView === 'admin') return
     const now = new Date().toISOString()
     const periodKey = String(effectiveEvalPeriodKey ?? '').trim()
     if (!periodKey) return
+    if (lastSelfEvalSyncPeriodRef.current !== periodKey) {
+      lastSelfEvalSyncPeriodRef.current = periodKey
+      return
+    }
+    if (selfEvalStatePeriodRef.current !== periodKey) return
     setSelfEvalHistoryByEmployee((prev) => {
       const base = prev ?? {}
       let next = base
@@ -2940,12 +3041,18 @@ function App() {
       }
       return changed ? next : prev
     })
-  }, [selfEvalByEmployee, evalGradeByEmployeeId, effectiveEvalPeriodKey])
+  }, [selfEvalByEmployee, evalGradeByEmployeeId, effectiveEvalPeriodKey, workspaceView])
 
   useEffect(() => {
+    if (workspaceView === 'admin') return
     const now = new Date().toISOString()
     const periodKey = String(effectiveEvalPeriodKey ?? '').trim()
     if (!periodKey) return
+    if (lastSupervisorEvalSyncPeriodRef.current !== periodKey) {
+      lastSupervisorEvalSyncPeriodRef.current = periodKey
+      return
+    }
+    if (supervisorEvalStatePeriodRef.current !== periodKey) return
     setSupervisorEvalHistoryByEmployee((prev) => {
       const base = prev ?? {}
       let next = base
@@ -2977,22 +3084,39 @@ function App() {
       }
       return changed ? next : prev
     })
-  }, [supervisorEvalByEmployee, evalGradeByEmployeeId, effectiveEvalPeriodKey])
+  }, [supervisorEvalByEmployee, evalGradeByEmployeeId, effectiveEvalPeriodKey, workspaceView])
 
   useEffect(() => {
+    if (workspaceView === 'admin') return
     const now = new Date().toISOString()
+    const periodKey = String(effectiveEvalPeriodKey ?? '').trim()
+    if (periodKey && lastExecutiveEvalSyncPeriodRef.current !== periodKey) {
+      lastExecutiveEvalSyncPeriodRef.current = periodKey
+      return
+    }
+    if (periodKey && executiveEvalStatePeriodRef.current !== periodKey) return
     setExecutiveEvalHistoryByEmployee((prev) => {
       const next = { ...(prev ?? {}) }
       for (const [empId, state] of Object.entries(executiveEvalByEmployee ?? {})) {
+        const prevEmp = next[empId] ?? {}
+        const prevSlot = periodKey ? prevEmp?.[periodKey] : null
         next[empId] = {
-          ...(next[empId] ?? {}),
+          ...prevEmp,
           cumulative: { ...state, savedAt: now },
-          ...(effectiveEvalPeriodKey ? { [effectiveEvalPeriodKey]: { ...state, savedAt: now } } : {}),
+          ...(periodKey
+            ? {
+                [periodKey]: {
+                  ...state,
+                  savedAt: now,
+                  ...(prevSlot?.submittedAt ? { submittedAt: prevSlot.submittedAt } : {}),
+                },
+              }
+            : {}),
         }
       }
       return next
     })
-  }, [executiveEvalByEmployee, effectiveEvalPeriodKey])
+  }, [executiveEvalByEmployee, effectiveEvalPeriodKey, workspaceView])
 
   const renameEmployeeIdInAppState = useCallback((oldId, newId) => {
     const o = String(oldId ?? '').trim()
@@ -3215,8 +3339,9 @@ function App() {
     event.preventDefault()
 
     const normalizedLoginId = email.trim().toLowerCase()
+    const normalizedPassword = String(password ?? '').trim()
     if (loginMode === 'admin') {
-      if (normalizedLoginId === 'admin@example.com' && password === adminPassword) {
+      if (normalizedLoginId === 'admin@example.com' && normalizedPassword === String(adminPassword ?? '').trim()) {
         setIsLoggedIn(true)
         setLoggedInEmployeeId(null)
         setLoginError('')
@@ -3230,7 +3355,7 @@ function App() {
       (row) =>
         String(row.id ?? '')
           .trim()
-          .toLowerCase() === normalizedLoginId && String(row.password ?? '') === password,
+          .toLowerCase() === normalizedLoginId && String(row.password ?? '').trim() === normalizedPassword,
     )
     if (matchedEmployee) {
       setIsLoggedIn(true)
@@ -3241,51 +3366,61 @@ function App() {
     setLoginError('社員Noまたはパスワードが違います。')
   }
 
+  const closeResetModal = () => {
+    setResetModalOpen(false)
+    setResetFeedback('')
+    setResetFeedbackType('error')
+  }
+
   const handlePasswordReset = (event) => {
     event.preventDefault()
     const id = resetId.trim().toLowerCase()
-    if (!id || !resetPrevPassword || !resetNextPassword) {
-      window.alert('すべての項目を入力してください。')
+    const normalizedPrevPassword = String(resetPrevPassword ?? '').trim()
+    const normalizedNextPassword = String(resetNextPassword ?? '').trim()
+    if (!id || !normalizedPrevPassword || !normalizedNextPassword) {
+      setResetFeedbackType('error')
+      setResetFeedback('すべての項目を入力してください。')
       return
     }
     if (id === 'admin@example.com') {
-      if (resetPrevPassword !== adminPassword) {
-        window.alert('IDまたは以前のパスワードが違います。')
+      if (normalizedPrevPassword !== String(adminPassword ?? '').trim()) {
+        setResetFeedbackType('error')
+        setResetFeedback('以前のパスワードが違います。')
         return
       }
-      setAdminPassword(resetNextPassword)
-      window.alert('管理者パスワードを更新しました。')
+      setAdminPassword(normalizedNextPassword)
+      setResetFeedbackType('success')
+      setResetFeedback('パスワードを変更しました。')
       setPassword('')
       setEmail('admin@example.com')
       setLoginMode('admin')
-      setResetModalOpen(false)
       setResetId('')
       setResetPrevPassword('')
       setResetNextPassword('')
       return
     }
 
-    let updated = false
-    setEmployeeDirectoryRows((prev) =>
-      prev.map((row) => {
-        const idMatch =
-          String(row.id ?? '')
-            .trim()
-            .toLowerCase() === id
-        const passMatch = String(row.password ?? '') === resetPrevPassword
-        if (idMatch && passMatch) {
-          updated = true
-          return { ...row, password: resetNextPassword }
-        }
-        return row
-      }),
-    )
-    if (!updated) {
-      window.alert('IDまたは以前のパスワードが違います。')
+    const target = employeeDirectoryRows.find((row) => {
+      const idMatch =
+        String(row.id ?? '')
+          .trim()
+          .toLowerCase() === id
+      const emailMatch =
+        String(row.email ?? '')
+          .trim()
+          .toLowerCase() === id
+      return idMatch || emailMatch
+    })
+    if (!target || String(target.password ?? '').trim() !== normalizedPrevPassword) {
+      setResetFeedbackType('error')
+      setResetFeedback('以前のパスワードが違います。')
       return
     }
-    window.alert('パスワードを更新しました。')
-    setResetModalOpen(false)
+    setEmployeeDirectoryRows((prev) =>
+      prev.map((row) => (String(row.id ?? '').trim() === String(target.id ?? '').trim() ? { ...row, password: normalizedNextPassword } : row)),
+    )
+    setResetFeedbackType('success')
+    setResetFeedback('パスワードを変更しました。')
     setResetId('')
     setResetPrevPassword('')
     setResetNextPassword('')
@@ -3735,7 +3870,7 @@ function App() {
   useEffect(() => {
     if (typeof window === 'undefined') return
     const timer = window.setTimeout(() => {
-      const serialized = JSON.stringify(buildPersistPayload(false))
+      const serialized = JSON.stringify(buildPersistPayload(true))
       if (serialized === lastLocalPersistRef.current) return
       lastLocalPersistRef.current = serialized
       window.localStorage.setItem(STORAGE_KEY, serialized)
@@ -3903,6 +4038,8 @@ function App() {
                     className="linkButton"
                     onClick={() => {
                       setResetId(email || (loginMode === 'admin' ? 'admin@example.com' : ''))
+                      setResetFeedback('')
+                      setResetFeedbackType('error')
                       setResetModalOpen(true)
                     }}
                   >
@@ -3970,9 +4107,9 @@ function App() {
             </section>
 
             {resetModalOpen ? (
-              <div className="employeeModalOverlay" onClick={() => setResetModalOpen(false)}>
+              <div className="employeeModalOverlay" onClick={closeResetModal}>
                 <div className="employeeModal loginResetModal" onClick={(event) => event.stopPropagation()}>
-                  <button className="modalClose" type="button" onClick={() => setResetModalOpen(false)}>
+                  <button className="modalClose" type="button" onClick={closeResetModal}>
                     ×
                   </button>
                   <h3>パスワードの再設定</h3>
@@ -4011,6 +4148,11 @@ function App() {
                     <button type="submit" className="primaryButton loginResetSubmit">
                       確認
                     </button>
+                    {resetFeedback ? (
+                      <p className={`loginResetFeedback ${resetFeedbackType === 'success' ? 'isSuccess' : 'isError'}`}>
+                        {resetFeedback}
+                      </p>
+                    ) : null}
                   </form>
                 </div>
               </div>
@@ -4706,7 +4848,9 @@ function App() {
                 setExecutiveEvalByEmployee={setExecutiveEvalByEmployee}
                 selfEvalHistoryByEmployee={selfEvalHistoryByEmployee}
                 supervisorEvalHistoryByEmployee={supervisorEvalHistoryByEmployee}
+                setSupervisorEvalHistoryByEmployee={setSupervisorEvalHistoryByEmployee}
                 executiveEvalHistoryByEmployee={executiveEvalHistoryByEmployee}
+                setExecutiveEvalHistoryByEmployee={setExecutiveEvalHistoryByEmployee}
                 goalsByEmployeePeriod={goalsByEmployeePeriod}
                 goalDirectionByEmployeePeriod={goalDirectionByEmployeePeriod}
                 goalFocusMajorByEmployeePeriod={goalFocusMajorByEmployeePeriod}
@@ -4723,7 +4867,7 @@ function App() {
                 onApprovePromotionRequest={approvePromotionRequest}
                 onRejectPromotionRequest={rejectPromotionRequest}
                 activeEvalPeriodKey={activeEvalPeriodKey}
-                setActiveEvalPeriodKey={setActiveEvalPeriodKey}
+                setActiveEvalPeriodKey={requestEvalPeriodChange}
                 evalPeriodDefinitions={evalPeriodDefinitions}
                 evalPeriodFallbackKey={evalPeriodFallbackKey}
                 onSubmitSupervisorEvaluation={submitSupervisorEvalForMember}
@@ -4847,18 +4991,20 @@ function App() {
             ) : null}
             {workspaceView === 'selfeval' ? (
               <SelfEvaluationPage
+                key={`selfeval-${String(evalSubjectEmployee?.id ?? '')}-${String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '')}`}
                 employees={evalSubjectEmployee ? [evalSubjectEmployee] : []}
                 evalState={evalSubjectEmployee ? selfEvalByEmployee[evalSubjectEmployee.id] : undefined}
                 setEvalState={updateSelfEvalForSubject}
                 evaluationCriteria={evaluationCriteria}
                 activeEvalPeriodKey={activeEvalPeriodKey}
-                setActiveEvalPeriodKey={setActiveEvalPeriodKey}
+                setActiveEvalPeriodKey={requestEvalPeriodChange}
                 selfEvalHistoryByEmployee={selfEvalHistoryByEmployee}
                 evalPeriodSelectOptions={evalPeriodSelectOptions}
                 evalPeriodFallbackKey={evalPeriodFallbackKey}
                 isSubmittedForPeriod={selfEvalSubmittedForActive}
                 onSubmitEvaluation={submitSelfEvalForActivePeriod}
                 focusMajorKey={evalFocusMajorKeyForActive}
+                isPeriodSwitching={isEvalPeriodSwitching}
               />
             ) : null}
             {workspaceView === 'goals' ? (
@@ -4874,41 +5020,42 @@ function App() {
                 radarGradeLabel={goalMgmtActiveEvalGrade}
                 radarHeadlineScore={goalMgmtWeightedTotal100}
                 activeEvalPeriodKey={activeEvalPeriodKey}
-                setActiveEvalPeriodKey={setActiveEvalPeriodKey}
+                setActiveEvalPeriodKey={requestEvalPeriodChange}
                 evalPeriodSelectOptions={evalPeriodSelectOptions}
                 evalPeriodFallbackKey={evalPeriodFallbackKey}
-                isSubmittedForPeriod={goalMgmtSubmittedForActive}
-                onSubmitPeriod={submitGoalMgmtForActivePeriod}
               />
             ) : null}
             
             {workspaceView === 'bossEval' ? (
               <SupervisorEvaluationPage
+                key={`bosseval-${String(evalSubjectEmployee?.id ?? '')}-${String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '')}`}
                 employees={evalSubjectEmployee ? [evalSubjectEmployee] : []}
                 evalState={evalSubjectEmployee ? supervisorEvalByEmployee[evalSubjectEmployee.id] : undefined}
                 setEvalState={updateSupervisorEvalForSubject}
                 peerSelfEval={evalSubjectEmployee ? selfEvalByEmployee[evalSubjectEmployee.id] : undefined}
                 evaluationCriteria={evaluationCriteria}
                 activeEvalPeriodKey={activeEvalPeriodKey}
-                setActiveEvalPeriodKey={setActiveEvalPeriodKey}
+                setActiveEvalPeriodKey={requestEvalPeriodChange}
                 evalPeriodSelectOptions={evalPeriodSelectOptions}
                 evalPeriodFallbackKey={evalPeriodFallbackKey}
                 supervisorEvalHistoryByEmployee={supervisorEvalHistoryByEmployee}
                 isSubmittedForPeriod={supervisorEvalSubmittedForActive}
                 onSubmitEvaluation={submitSupervisorEvalForActivePeriod}
-                canEvaluate={selfEvalSubmittedForActive}
+                canEvaluate
                 blockedReason="自己評価の提出後に1次評価(上司)を入力できます。"
                 focusMajorKey={evalFocusMajorKeyForActive}
+                isPeriodSwitching={isEvalPeriodSwitching}
               />
             ) : null}
             {workspaceView === 'execEval' ? (
               <ExecutiveEvaluationPage
+                key={`execeval-${String(evalSubjectEmployee?.id ?? '')}-${String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '')}`}
                 employee={evalSubjectEmployee}
                 evalState={evalSubjectEmployee ? executiveEvalByEmployee[evalSubjectEmployee.id] : undefined}
                 setEvalState={updateExecutiveEvalForSubject}
                 evaluationCriteria={evaluationCriteria}
                 activeEvalPeriodKey={activeEvalPeriodKey}
-                setActiveEvalPeriodKey={setActiveEvalPeriodKey}
+                setActiveEvalPeriodKey={requestEvalPeriodChange}
                 evalPeriodSelectOptions={evalPeriodSelectOptions}
                 evalPeriodFallbackKey={evalPeriodFallbackKey}
                 executiveEvalHistoryByEmployee={executiveEvalHistoryByEmployee}
@@ -4916,9 +5063,10 @@ function App() {
                 onSubmitEvaluation={submitExecutiveEvalForActivePeriod}
                 peerSelfEval={evalSubjectEmployee ? selfEvalByEmployee[evalSubjectEmployee.id] : undefined}
                 peerSupervisorEval={evalSubjectEmployee ? supervisorEvalByEmployee[evalSubjectEmployee.id] : undefined}
-                canEvaluate={selfEvalSubmittedForActive && supervisorEvalSubmittedForActive}
+                canEvaluate
                 blockedReason="自己評価と1次評価(上司)の提出後に2次評価(経営層)を入力できます。"
                 focusMajorKey={evalFocusMajorKeyForActive}
+                isPeriodSwitching={isEvalPeriodSwitching}
               />
             ) : null}
           </>
@@ -5356,6 +5504,9 @@ function EvalPeriodSettingsPage({ definitions, setDefinitions, onSelectActivePer
   const [draftMonth, setDraftMonth] = useState('03')
   const [draftLabel, setDraftLabel] = useState('')
   const [draftOnlyForIds, setDraftOnlyForIds] = useState('')
+  const [draftSelfEvalDeadlineAt, setDraftSelfEvalDeadlineAt] = useState('')
+  const [draftSupervisorEvalDeadlineAt, setDraftSupervisorEvalDeadlineAt] = useState('')
+  const [draftExecutiveEvalDeadlineAt, setDraftExecutiveEvalDeadlineAt] = useState('')
   const [draggingPeriodKey, setDraggingPeriodKey] = useState('')
   const [dragOverPeriodKey, setDragOverPeriodKey] = useState('')
   const rowRefs = useRef({})
@@ -5406,8 +5557,13 @@ function EvalPeriodSettingsPage({ definitions, setDefinitions, onSelectActivePer
     const onlyForEmployeeIds = parseCommaSeparatedEmployeeIds(draftOnlyForIds)
     const defaultLabel = `${year}年${Number(month)}月期`
     const label = draftLabel.trim() || defaultLabel
-    const row =
-      onlyForEmployeeIds.length > 0 ? { key, label, onlyForEmployeeIds } : { key, label }
+    const selfEvalDeadlineAt = normalizeDeadlineDate(draftSelfEvalDeadlineAt)
+    const supervisorEvalDeadlineAt = normalizeDeadlineDate(draftSupervisorEvalDeadlineAt)
+    const executiveEvalDeadlineAt = normalizeDeadlineDate(draftExecutiveEvalDeadlineAt)
+    const row = onlyForEmployeeIds.length > 0 ? { key, label, onlyForEmployeeIds } : { key, label }
+    if (selfEvalDeadlineAt) row.selfEvalDeadlineAt = selfEvalDeadlineAt
+    if (supervisorEvalDeadlineAt) row.supervisorEvalDeadlineAt = supervisorEvalDeadlineAt
+    if (executiveEvalDeadlineAt) row.executiveEvalDeadlineAt = executiveEvalDeadlineAt
     setDefinitions((prev) => {
       if (prev.some((d) => d.key === key)) return prev
       return [row, ...prev]
@@ -5417,6 +5573,9 @@ function EvalPeriodSettingsPage({ definitions, setDefinitions, onSelectActivePer
     setDraftMonth('03')
     setDraftLabel('')
     setDraftOnlyForIds('')
+    setDraftSelfEvalDeadlineAt('')
+    setDraftSupervisorEvalDeadlineAt('')
+    setDraftExecutiveEvalDeadlineAt('')
   }
 
   const removeRow = (key) => {
@@ -5508,6 +5667,10 @@ function EvalPeriodSettingsPage({ definitions, setDefinitions, onSelectActivePer
                   ? `指定社員: ${row.onlyForEmployeeIds.join(', ')}`
                   : '全員'}
               </span>
+              <span className="evalPeriodSettingsScope">
+                自己締切: {row.selfEvalDeadlineAt || '未設定'} / 上司締切: {row.supervisorEvalDeadlineAt || '未設定'} / 経営層締切:{' '}
+                {row.executiveEvalDeadlineAt || '未設定'}
+              </span>
             </div>
             <div className="evalPeriodSettingsRowActions">
               <button type="button" className="evalPeriodSettingsRemove" onClick={() => removeRow(row.key)}>
@@ -5553,6 +5716,26 @@ function EvalPeriodSettingsPage({ definitions, setDefinitions, onSelectActivePer
               value={draftOnlyForIds}
               onChange={(e) => setDraftOnlyForIds(e.target.value)}
               placeholder="例: e1, 0001（カンマ・スペース区切り）"
+            />
+          </label>
+          <label className="evalPeriodSettingsAddField evalPeriodSettingsAddField--wide">
+            自己評価締切（任意）
+            <input type="date" value={draftSelfEvalDeadlineAt} onChange={(e) => setDraftSelfEvalDeadlineAt(e.target.value)} />
+          </label>
+          <label className="evalPeriodSettingsAddField evalPeriodSettingsAddField--wide">
+            上司評価締切（任意）
+            <input
+              type="date"
+              value={draftSupervisorEvalDeadlineAt}
+              onChange={(e) => setDraftSupervisorEvalDeadlineAt(e.target.value)}
+            />
+          </label>
+          <label className="evalPeriodSettingsAddField evalPeriodSettingsAddField--wide">
+            経営層評価締切（任意）
+            <input
+              type="date"
+              value={draftExecutiveEvalDeadlineAt}
+              onChange={(e) => setDraftExecutiveEvalDeadlineAt(e.target.value)}
             />
           </label>
       </div>
@@ -6948,6 +7131,7 @@ function EvalQuestionnairePage({
   canEvaluate = true,
   blockedReason = '',
   focusMajorKey = '',
+  isPeriodSwitching = false,
 }) {
   const isBoss = variant === 'boss'
   const isExec = variant === 'exec'
@@ -6961,10 +7145,14 @@ function EvalQuestionnairePage({
 
   const patchScore = (itemId, value) => {
     if (!canEvaluate) return
-    setEvalState((prev) => ({
-      scores: { ...(prev.scores ?? {}), [itemId]: value },
-      comments: { ...(prev.comments ?? {}) },
-    }))
+    setEvalState((prev) => {
+      const currentValue = String(prev?.scores?.[itemId] ?? '')
+      if (currentValue === String(value ?? '')) return prev
+      return {
+        scores: { ...(prev.scores ?? {}), [itemId]: value },
+        comments: { ...(prev.comments ?? {}) },
+      }
+    })
   }
 
   const patchComment = (itemId, value) => {
@@ -7081,26 +7269,6 @@ function EvalQuestionnairePage({
     bulkCopyTargetLabel,
     setEvalState,
   ])
-  const previousPeriodScoresByItem = useMemo(() => {
-    const empId = String(employee?.id ?? '').trim()
-    const activeKey = String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '').trim()
-    if (!empId || !activeKey) return {}
-    const periods = evalHistoryByEmployee?.[empId]
-    if (!periods || typeof periods !== 'object' || Array.isArray(periods)) return {}
-    const keys = Object.keys(periods).sort(compareEvalPeriodDesc)
-    const idx = keys.indexOf(activeKey)
-    if (idx < 0 || idx + 1 >= keys.length) return {}
-    const prevKey = keys[idx + 1]
-    const prevState = periods[prevKey]
-    if (!prevState || typeof prevState !== 'object') return {}
-    const activeState = periods[activeKey]
-    const prevGrade = String(prevState?.evalGrade ?? '').trim()
-    const activeGrade = String(activeState?.evalGrade ?? employee?.grade ?? '').trim()
-    if (prevGrade && activeGrade && prevGrade !== activeGrade) return {}
-    const prevScores = prevState?.scores
-    if (!prevScores || typeof prevScores !== 'object' || Array.isArray(prevScores)) return {}
-    return prevScores
-  }, [employee?.id, employee?.grade, evalHistoryByEmployee, activeEvalPeriodKey, evalPeriodFallbackKey])
 
   const selfEvalPersonalHistoryRows = useMemo(() => {
     if (isBoss || !employee?.id || !selfEvalHistoryByEmployee) return []
@@ -7265,19 +7433,21 @@ function EvalQuestionnairePage({
         </p>
         <label className="selfEvalPeriodField">
           評価期
-          <select
-            value={activeEvalPeriodKey ?? evalPeriodFallbackKey ?? ''}
-            onChange={(event) => setActiveEvalPeriodKey?.(event.target.value)}
-          >
-            {(evalPeriodSelectOptions ?? []).map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
+          <span className="selfEvalPeriodFieldControl">
+            <select
+              value={activeEvalPeriodKey ?? evalPeriodFallbackKey ?? ''}
+              onChange={(event) => setActiveEvalPeriodKey?.(event.target.value)}
+            >
+              {(evalPeriodSelectOptions ?? []).map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+            {isPeriodSwitching ? <span className="evalPeriodSwitchSpinner" aria-label="評価期切替中" /> : null}
+          </span>
         </label>
       </header>
-
       <div className="selfEvalGuide">
         <p className="selfEvalGuideTitle">
           <span className="selfEvalGuideIcon" aria-hidden>
@@ -7303,6 +7473,9 @@ function EvalQuestionnairePage({
           <p className="selfEvalSummaryRatio">
             {evaluatedCount} / {totalCount} 項目
           </p>
+          <p className={`selfEvalSummaryHint ${isSubmittedForPeriod ? 'isDone' : ''}`}>
+            {isSubmittedForPeriod ? '提出済み' : '未提出'}
+          </p>
           <p className={`selfEvalSummaryHint ${allComplete ? 'isDone' : ''}`}>
             {allComplete ? 'すべての項目の評価が完了しています' : 'すべての項目を評価してください'}
           </p>
@@ -7314,9 +7487,8 @@ function EvalQuestionnairePage({
         </p>
       ) : null}
 
-      {typeof onSubmitEvaluation === 'function' ? (
+      {typeof onSubmitEvaluation === 'function' && (isBoss || isExec) ? (
         <div className="selfEvalSubmitBar">
-        {isBoss || isExec ? (
           <button
             type="button"
             className="selfEvalSubmitBtn"
@@ -7325,24 +7497,6 @@ function EvalQuestionnairePage({
           >
             {bulkCopySourceLabel}をこの期に一括コピー
           </button>
-        ) : null}
-        <button
-          type="button"
-            className={`selfEvalSubmitBtn${isSubmittedForPeriod ? ' isLocked' : ''}`}
-            onClick={() => onSubmitEvaluation?.()}
-            disabled={isSubmittedForPeriod || !allComplete || !canEvaluate}
-          >
-            {isExec ? '2次評価(経営層)を提出' : isBoss ? '1次評価(上司)を提出' : '自己評価を提出'}
-          </button>
-          <p className="selfEvalSubmitHint">
-            {!canEvaluate
-              ? blockedReason || '前段の提出が完了するまで評価できません。'
-              : isSubmittedForPeriod
-              ? `提出済みです。この評価期は閲覧のみです。`
-              : allComplete
-                ? '提出すると、この評価期は閲覧のみになり編集できません。'
-                : '全項目の評価を完了すると提出できます。'}
-          </p>
         </div>
       ) : null}
 
@@ -7389,11 +7543,6 @@ function EvalQuestionnairePage({
                         <div className="selfEvalItemCardTop">
                           <h4 className="selfEvalItemTitle">{it.title}</h4>
                         </div>
-                                {String(previousPeriodScoresByItem[it.id] ?? '').trim() ? (
-                                  <p className="selfEvalPrevScoreHint">
-                                    前期: {String(previousPeriodScoresByItem[it.id]).trim()}点
-                                  </p>
-                                ) : null}
                         {isBoss ? (
                           <p className="bossEvalSelfNote">
                             自己評価の点数: {selfPts ? `${selfPts}点` : '（未入力）'}
@@ -7483,6 +7632,28 @@ function EvalQuestionnairePage({
           )
         })}
       </div>
+
+      {typeof onSubmitEvaluation === 'function' ? (
+        <div className="selfEvalSubmitBar">
+          <button
+            type="button"
+            className={`selfEvalSubmitBtn${isSubmittedForPeriod ? ' isLocked' : ''}`}
+            onClick={() => onSubmitEvaluation?.()}
+            disabled={isSubmittedForPeriod || !allComplete || !canEvaluate}
+          >
+            {isExec ? '2次評価(経営層)を提出' : isBoss ? '1次評価(上司)を提出' : '自己評価を提出'}
+          </button>
+          <p className="selfEvalSubmitHint">
+            {!canEvaluate
+              ? blockedReason || '前段の提出が完了するまで評価できません。'
+              : isSubmittedForPeriod
+                ? `提出済みです。この評価期は閲覧のみです。`
+                : allComplete
+                  ? '提出すると、この評価期は閲覧のみになり編集できません。'
+                  : '全項目の評価を完了すると提出できます。'}
+          </p>
+        </div>
+      ) : null}
 
       {selfEvalHistoryDetail ? (
         <div className="employeeModalOverlay" onClick={() => setSelfEvalHistoryDetail(null)}>
@@ -7602,6 +7773,7 @@ function SelfEvaluationPage({
   isSubmittedForPeriod,
   onSubmitEvaluation,
   focusMajorKey = '',
+  isPeriodSwitching = false,
 }) {
   return (
     <EvalQuestionnairePage
@@ -7619,6 +7791,7 @@ function SelfEvaluationPage({
       isSubmittedForPeriod={isSubmittedForPeriod}
       onSubmitEvaluation={onSubmitEvaluation}
       focusMajorKey={focusMajorKey}
+      isPeriodSwitching={isPeriodSwitching}
     />
   )
 }
@@ -7639,6 +7812,7 @@ function SupervisorEvaluationPage({
   canEvaluate,
   blockedReason,
   focusMajorKey = '',
+  isPeriodSwitching = false,
 }) {
   return (
     <EvalQuestionnairePage
@@ -7658,6 +7832,7 @@ function SupervisorEvaluationPage({
       canEvaluate={canEvaluate}
       blockedReason={blockedReason}
       focusMajorKey={focusMajorKey}
+      isPeriodSwitching={isPeriodSwitching}
     />
   )
 }
@@ -7679,6 +7854,7 @@ function ExecutiveEvaluationPage({
   canEvaluate,
   blockedReason,
   focusMajorKey = '',
+  isPeriodSwitching = false,
 }) {
   const normalizedEvalState = {
     scores: evalState?.scores ?? {},
@@ -7717,6 +7893,7 @@ function ExecutiveEvaluationPage({
       canEvaluate={canEvaluate}
       blockedReason={blockedReason}
       focusMajorKey={focusMajorKey}
+      isPeriodSwitching={isPeriodSwitching}
     />
   )
 }
@@ -7736,8 +7913,6 @@ function GoalManagementPage({
   setActiveEvalPeriodKey,
   evalPeriodSelectOptions,
   evalPeriodFallbackKey,
-  isSubmittedForPeriod = false,
-  onSubmitPeriod,
 }) {
   const [addOpen, setAddOpen] = useState(false)
   const [showDraftCadetail, setShowDraftCadetail] = useState(false)
@@ -7793,8 +7968,8 @@ function GoalManagementPage({
   const total = normalizedGoals.length
   const achieved = useMemo(() => normalizedGoals.filter((g) => g.achieved).length, [normalizedGoals])
   const ratePct = total === 0 ? 0 : Math.round((achieved / total) * 100)
-  const currentPeriodKey = String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '').trim()
-  const canSubmit = Boolean(currentPeriodKey && periodDirectionGoal.trim() && normalizedGoals.length > 0)
+  // Manual submit is disabled for now; we'll lock by period deadline later.
+  const isGoalMgmtLocked = false
   const focusMajorOptions = useMemo(() => {
     const latestRows = Array.isArray(radarSeries?.[0]?.rows) ? radarSeries[0].rows : []
     return latestRows
@@ -7806,7 +7981,7 @@ function GoalManagementPage({
   }, [radarSeries])
 
   const openAddModal = () => {
-    if (isSubmittedForPeriod) return
+    if (isGoalMgmtLocked) return
     setShowDraftCadetail(false)
     setDraftPlan('')
     setDraftDo('')
@@ -7825,7 +8000,7 @@ function GoalManagementPage({
   )
 
   const handleCreateGoal = () => {
-    if (isSubmittedForPeriod) return
+    if (isGoalMgmtLocked) return
     const plan = draftPlan.trim()
     const doText = draftDo.trim()
     const checkText = normalizePdcaFreeText(draftCheck.trim())
@@ -7858,7 +8033,7 @@ function GoalManagementPage({
 
   const updateGoalPdcaField = useCallback(
     (id, field, value) => {
-      if (isSubmittedForPeriod) return
+      if (isGoalMgmtLocked) return
       setGoals((prev) =>
         prev.map((g) => {
           if (g.id !== id) return g
@@ -7886,11 +8061,11 @@ function GoalManagementPage({
         }),
       )
     },
-    [setGoals, normalizeGoalPdca, buildPdcaDetailText, normalizePdcaFreeText, isSubmittedForPeriod],
+    [setGoals, normalizeGoalPdca, buildPdcaDetailText, normalizePdcaFreeText, isGoalMgmtLocked],
   )
 
   const removeGoal = (id) => {
-    if (isSubmittedForPeriod) return
+    if (isGoalMgmtLocked) return
     if (!window.confirm('この目標を削除しますか？')) return
     setGoals((prev) => prev.filter((g) => g.id !== id))
   }
@@ -7985,7 +8160,7 @@ function GoalManagementPage({
             <select
               value={String(periodFocusMajorKey ?? '').trim()}
               onChange={(event) => setPeriodFocusMajorKey?.(event.target.value)}
-              disabled={isSubmittedForPeriod}
+              disabled={isGoalMgmtLocked}
             >
               <option value="">選択しない</option>
               {focusMajorOptions.map((opt) => (
@@ -7999,47 +8174,29 @@ function GoalManagementPage({
         <textarea
           value={periodDirectionGoal}
           onChange={(event) => {
-            if (isSubmittedForPeriod) return
+            if (isGoalMgmtLocked) return
             setPeriodDirectionGoal?.(event.target.value)
           }}
           onBlur={(event) => {
-            if (isSubmittedForPeriod) return
+            if (isGoalMgmtLocked) return
             handlePeriodDirectionBlur(event.target.value)
           }}
-          disabled={isSubmittedForPeriod}
+          disabled={isGoalMgmtLocked}
           placeholder="例:自分の持ち場だけでなく、周囲にも目を配り、手助けが必要な場面では積極的にサポートを行う。また、後輩へ適切なアドバイスを行い、チーム全体の生産効率向上に貢献していく。"
           rows={3}
         />
       </section>
-      <div className="selfEvalSubmitBar">
-        <button
-          type="button"
-          className={`selfEvalSubmitBtn${isSubmittedForPeriod ? ' isLocked' : ''}`}
-          onClick={() => onSubmitPeriod?.()}
-          disabled={isSubmittedForPeriod || !canSubmit}
-        >
-          目標管理を提出
-        </button>
-        <p className="selfEvalSubmitHint">
-          {isSubmittedForPeriod
-            ? '提出済みです。この評価期の目標管理は閲覧のみです。'
-            : !currentPeriodKey
-              ? '評価期を選択してください。'
-              : !periodDirectionGoal.trim()
-                ? '今期の方針目標（P）を入力すると提出できます。'
-                : normalizedGoals.length < 1
-                  ? 'PDCA目標を1件以上登録すると提出できます。'
-                  : '提出すると、この評価期の目標管理は編集できなくなります。'}
-        </p>
-      </div>
 
       <div className="goalMgmtToolbar">
-        <button type="button" className="goalMgmtAddBtn" onClick={openAddModal} disabled={isSubmittedForPeriod}>
+        <button type="button" className="goalMgmtAddBtn" onClick={openAddModal} disabled={isGoalMgmtLocked}>
           + 新しい目標を追加
         </button>
       </div>
 
       <div className="goalMgmtMainBox">
+        <p className="goalMgmtListGuide">
+          目標を実行したら、その結果の確認（C）と改善（A）を行いましょう。C/Aをすべて入力すると達成済みになります。
+        </p>
         {total === 0 ? (
           <div className="goalMgmtEmpty">
             <p>目標が設定されていません。</p>
@@ -8059,7 +8216,7 @@ function GoalManagementPage({
                     type="button"
                     className="goalMgmtDeleteBtn"
                     onClick={() => removeGoal(g.id)}
-                    disabled={isSubmittedForPeriod}
+                    disabled={isGoalMgmtLocked}
                   >
                     削除
                   </button>
@@ -8071,7 +8228,7 @@ function GoalManagementPage({
                   <textarea
                     value={g.checkText}
                     onChange={(event) => updateGoalPdcaField(g.id, 'checkText', event.target.value)}
-                    disabled={isSubmittedForPeriod}
+                    disabled={isGoalMgmtLocked}
                     placeholder="結果の確認・評価"
                     rows={2}
                   />
@@ -8081,7 +8238,7 @@ function GoalManagementPage({
                   <textarea
                     value={g.actionText}
                     onChange={(event) => updateGoalPdcaField(g.id, 'actionText', event.target.value)}
-                    disabled={isSubmittedForPeriod}
+                    disabled={isGoalMgmtLocked}
                     placeholder="次の改善アクション"
                     rows={2}
                   />
@@ -8093,40 +8250,27 @@ function GoalManagementPage({
       </div>
 
       {addOpen ? (
-        <div className="employeeModalOverlay" onClick={closeAddModal}>
+        <div className="employeeModalOverlay goalMgmtModalOverlay" onClick={closeAddModal}>
           <div className="employeeModal goalMgmtFormModal" onClick={(event) => event.stopPropagation()}>
             <button type="button" className="modalClose" onClick={closeAddModal}>
               ×
             </button>
             <h3>新しい目標を追加（PDCA）</h3>
             <p className="goalMgmtModalSub">まず P（計画）と D（実行）を決め、C/A は後から追記できます。</p>
-            <div className="goalMgmtPdcaHint">
-              <p className="goalMgmtPdcaHintTitle">PDCAの書き方ヒント</p>
-              <ul>
-                <li>P（計画）: 何を改善したいか、目標と具体的な計画を明確にする</li>
-                <li>D（実行）: まず小さく試し、実行内容と結果を記録する</li>
-                <li>C（評価）: 目標に対して結果がどうだったかを確認する</li>
-                <li>A（改善）: 成功は展開、課題は見直して次の行動につなげる</li>
-              </ul>
-              <p className="goalMgmtPdcaHintExample">
-                例）P: 毎日30分英単語 / D: 1週間実施 / C: テスト結果確認 / A: 学習方法を改善
-              </p>
-            </div>
             <div className="goalMgmtFormFields">
               <label className="goalMgmtFormLabel">
                 P（Plan: 目標） <span className="goalMgmtReq">*</span>
-                <input
-                  type="text"
+                <textarea
                   value={draftPlan}
                   onChange={(event) => setDraftPlan(event.target.value)}
                   placeholder="例:自分の持ち場以外の工程を理解するために、1つ前の工程を覚え、人手が足りない時にサポートできるようにする。"
                   autoComplete="off"
+                  rows={3}
                 />
               </label>
               <label className="goalMgmtFormLabel">
                 D（Do: 実行）
                 <span className="goalMgmtReq">*</span>
-                <span className="goalMgmtFieldHint">何を・どの頻度で実行するかを書きます。</span>
                 <textarea
                   value={draftDo}
                   onChange={(event) => setDraftDo(event.target.value)}
@@ -8928,7 +9072,9 @@ function AdminMockPage({
   setExecutiveEvalByEmployee,
   selfEvalHistoryByEmployee,
   supervisorEvalHistoryByEmployee,
+  setSupervisorEvalHistoryByEmployee,
   executiveEvalHistoryByEmployee,
+  setExecutiveEvalHistoryByEmployee,
   goalsByEmployeePeriod,
   goalDirectionByEmployeePeriod,
   goalFocusMajorByEmployeePeriod,
@@ -8957,6 +9103,7 @@ function AdminMockPage({
   const [adminMemberSearch, setAdminMemberSearch] = useState('')
   const [adminMemberDept, setAdminMemberDept] = useState('')
   const [adminMemberGrade, setAdminMemberGrade] = useState('')
+  const [adminMemberPeriodKey, setAdminMemberPeriodKey] = useState('')
   /** all | active | retired */
   const [adminMemberEmployment, setAdminMemberEmployment] = useState('active')
   /** name | id | grade | retiredFirst */
@@ -9040,6 +9187,10 @@ function AdminMockPage({
       setSelectedMemberId(null)
       return
     }
+    if (!selectedMemberId) {
+      setSelectedMemberId(adminFilteredMemberRows[0].id)
+      return
+    }
     if (selectedMemberId && !adminFilteredMemberRows.some((m) => m.id === selectedMemberId)) {
       setSelectedMemberId(null)
     }
@@ -9060,10 +9211,20 @@ function AdminMockPage({
     }
   }, [forcedSelectedMemberId, adminFilteredMemberRows])
 
-  useEffect(() => {
-    if (!forcedDetailTab) return
-    setDetailTab(forcedDetailTab)
-  }, [forcedDetailTab])
+  // NOTE: Do not force-sync detailTab from parent state here.
+  // Local tab clicks must always win to keep admin tab switching responsive.
+
+  const switchDetailTab = useCallback(
+    (tabId) => {
+      const needsMember = tabId === 'boss' || tabId === 'bossnote' || tabId === 'execcomments' || tabId === 'execnote'
+      if (needsMember && !selectedMemberId && adminFilteredMemberRows.length > 0) {
+        setSelectedMemberId(adminFilteredMemberRows[0].id)
+      }
+      setDetailTab(tabId)
+      onChangeDetailTab?.(tabId)
+    },
+    [onChangeDetailTab, selectedMemberId, adminFilteredMemberRows],
+  )
 
   useEffect(() => {
     if (!hideGradeSelfEvalAndGradeStats) return
@@ -9128,11 +9289,50 @@ function AdminMockPage({
   }, [selectedMember, evaluationCriteria, skills, skillProgress, selfEvalByEmployee, supervisorEvalByEmployee, executiveEvalByEmployee])
   const selectedMemberSelfBossGap = useMemo(() => {
     if (!selectedMember) return Number.NaN
-    const self100 = weightedEvalScore100ForEmployee(selfEvalByEmployee, selectedMember, evaluationCriteria)
-    const boss100 = weightedEvalScore100ForEmployee(supervisorEvalByEmployee, selectedMember, evaluationCriteria)
+    const empId = String(selectedMember.id ?? '').trim()
+    if (!empId) return Number.NaN
+    const full = directoryRows.find((r) => String(r?.id ?? '').trim() === empId)
+    const memberPeriodOptions = buildEvalPeriodSelectOptionList({
+      definitions: evalPeriodDefinitions,
+      selfEvalHistoryByEmployee,
+      supervisorEvalHistoryByEmployee,
+      extraPeriods: normalizeExtraEvalPeriodsForEmployee(full),
+      forEmployeeId: empId,
+    })
+    const activeCandidate = String(activeEvalPeriodKey ?? '').trim()
+    const hasActiveCandidate = memberPeriodOptions.some((opt) => String(opt?.value ?? '').trim() === activeCandidate)
+    const activeKey = hasActiveCandidate ? activeCandidate : String(memberPeriodOptions?.[0]?.value ?? '').trim()
+    if (!activeKey) return Number.NaN
+    const selfHist = selfEvalHistoryByEmployee?.[empId] ?? {}
+    const bossHist = supervisorEvalHistoryByEmployee?.[empId] ?? {}
+    const periodGrade =
+      String(selfHist?.[activeKey]?.evalGrade ?? '').trim() ||
+      String(bossHist?.[activeKey]?.evalGrade ?? '').trim() ||
+      String(selectedMember.grade ?? '').trim()
+    const categories = buildEvalCategoriesForGrade(evaluationCriteria, periodGrade)
+    // 乖離アラートは「選択中の期」のスナップショットを優先して計算し、
+    // 自動保存中の一時状態による値の揺れを抑える。
+    const hasSelfHistForActive = Boolean(selfHist?.[activeKey] && typeof selfHist[activeKey] === 'object')
+    const hasBossHistForActive = Boolean(bossHist?.[activeKey] && typeof bossHist[activeKey] === 'object')
+    // 他期の値を参照しない（選択期の履歴のみで判定）
+    const selfScores = hasSelfHistForActive ? { ...(selfHist?.[activeKey]?.scores ?? {}) } : {}
+    const bossScores = hasBossHistForActive ? { ...(bossHist?.[activeKey]?.scores ?? {}) } : {}
+    const self100 = weightedEvalScore100ByCategories(categories, selfScores)
+    const boss100 = weightedEvalScore100ByCategories(categories, bossScores)
     if (!Number.isFinite(self100) || !Number.isFinite(boss100)) return Number.NaN
     return Math.abs(self100 - boss100)
-  }, [selectedMember, selfEvalByEmployee, supervisorEvalByEmployee, evaluationCriteria])
+  }, [
+    selectedMember,
+    directoryRows,
+    evalPeriodDefinitions,
+    activeEvalPeriodKey,
+    evalPeriodFallbackKey,
+    selfEvalByEmployee,
+    supervisorEvalByEmployee,
+    selfEvalHistoryByEmployee,
+    supervisorEvalHistoryByEmployee,
+    evaluationCriteria,
+  ])
   const selectedMemberSelfBossGapAlert = useMemo(() => {
     if (!Number.isFinite(selectedMemberSelfBossGap)) return null
     if (selectedMemberSelfBossGap < SELF_BOSS_GAP_ALERT_THRESHOLD) return null
@@ -9158,6 +9358,27 @@ function AdminMockPage({
     selfEvalHistoryByEmployee,
     supervisorEvalHistoryByEmployee,
   ])
+  useEffect(() => {
+    const optionValues = (adminMemberEvalPeriodSelectOptions ?? []).map((opt) => String(opt?.value ?? '').trim()).filter(Boolean)
+    if (!optionValues.length) {
+      setAdminMemberPeriodKey('')
+      return
+    }
+    const current = String(adminMemberPeriodKey ?? '').trim()
+    if (current && optionValues.includes(current)) return
+    const activeCandidate = String(activeEvalPeriodKey ?? '').trim()
+    if (activeCandidate && optionValues.includes(activeCandidate)) {
+      setAdminMemberPeriodKey(activeCandidate)
+      return
+    }
+    setAdminMemberPeriodKey(optionValues[0])
+  }, [adminMemberEvalPeriodSelectOptions, adminMemberPeriodKey, activeEvalPeriodKey])
+  const selectedMemberEffectivePeriodKey = useMemo(() => {
+    const active = String(adminMemberPeriodKey ?? '').trim()
+    const optionValues = (adminMemberEvalPeriodSelectOptions ?? []).map((opt) => String(opt?.value ?? '').trim()).filter(Boolean)
+    if (active && optionValues.includes(active)) return active
+    return String(optionValues[0] ?? evalPeriodFallbackKey ?? '').trim()
+  }, [adminMemberPeriodKey, adminMemberEvalPeriodSelectOptions, evalPeriodFallbackKey])
   const scrollMemberDockIntoView = useCallback(() => {
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
@@ -9189,7 +9410,7 @@ function AdminMockPage({
   }, [selectedMember, skills, skillProgress])
   const selectedMemberActiveEvalGrade = useMemo(() => {
     if (!selectedMember) return ''
-    const periodKey = String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '').trim()
+    const periodKey = String(selectedMemberEffectivePeriodKey ?? '').trim()
     const empId = String(selectedMember.id ?? '').trim()
     const selfStored = String(selfEvalHistoryByEmployee?.[empId]?.[periodKey]?.evalGrade ?? '').trim()
     const bossStored = String(supervisorEvalHistoryByEmployee?.[empId]?.[periodKey]?.evalGrade ?? '').trim()
@@ -9207,8 +9428,7 @@ function AdminMockPage({
     return gradeIds[0] ?? preferred ?? current
   }, [
     selectedMember,
-    activeEvalPeriodKey,
-    evalPeriodFallbackKey,
+    selectedMemberEffectivePeriodKey,
     selfEvalHistoryByEmployee,
     supervisorEvalHistoryByEmployee,
     evaluationCriteria,
@@ -9221,7 +9441,7 @@ function AdminMockPage({
     if (!selectedMember) return []
     const empId = String(selectedMember.id ?? '').trim()
     if (!empId) return []
-    const activeKey = String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '').trim()
+    const activeKey = String(selectedMemberEffectivePeriodKey ?? '').trim()
     const selfHist = selfEvalHistoryByEmployee?.[empId] ?? {}
     const bossHist = supervisorEvalHistoryByEmployee?.[empId] ?? {}
     const execHist = executiveEvalHistoryByEmployee?.[empId] ?? {}
@@ -9242,6 +9462,10 @@ function AdminMockPage({
     const palette = ['#2563eb', '#059669', '#7c3aed']
     return periodKeys
       .map((periodKey, idx) => {
+        const selfSubmitted = Boolean(String(selfHist?.[periodKey]?.submittedAt ?? '').trim())
+        const bossSubmitted = Boolean(String(bossHist?.[periodKey]?.submittedAt ?? '').trim())
+        const execSubmitted = Boolean(String(execHist?.[periodKey]?.submittedAt ?? '').trim())
+        if (!selfSubmitted || !bossSubmitted || !execSubmitted) return null
         const periodGrade =
           String(selfHist?.[periodKey]?.evalGrade ?? '').trim() ||
           String(bossHist?.[periodKey]?.evalGrade ?? '').trim() ||
@@ -9263,10 +9487,7 @@ function AdminMockPage({
                 ...(supervisorEvalByEmployee?.[empId]?.scores ?? {}),
               }
             : { ...(bossHist?.[periodKey]?.scores ?? {}) }
-        const periodExecState =
-          periodKey === activeKey
-            ? (executiveEvalByEmployee?.[empId] ?? execHist?.[periodKey] ?? execHist?.cumulative)
-            : (execHist?.[periodKey] ?? null)
+        const periodExecState = execHist?.[periodKey] ?? null
         const execScores =
           periodExecState?.scores &&
           typeof periodExecState.scores === 'object' &&
@@ -9284,8 +9505,8 @@ function AdminMockPage({
             : Number.isFinite(execByMajor?.[major.id])
               ? execByMajor[major.id]
               : Number.NaN
-          const totalParts = [self100, boss100, exec100].filter((v) => Number.isFinite(v))
-          const total100 = totalParts.length ? totalParts.reduce((sum, v) => sum + v, 0) / totalParts.length : Number.NaN
+          const allDone = Number.isFinite(self100) && Number.isFinite(boss100) && Number.isFinite(exec100)
+          const total100 = allDone ? (self100 + boss100 + exec100) / 3 : Number.NaN
           return {
             id: major.id,
             title: major.title,
@@ -9295,10 +9516,8 @@ function AdminMockPage({
             total100,
           }
         })
-        const hasAny = rows.some(
-          (r) => Number.isFinite(r.self100) || Number.isFinite(r.boss100) || Number.isFinite(r.exec100),
-        )
-        if (!hasAny) return null
+        const hasAllEvalCompleted = rows.some((r) => Number.isFinite(r.total100))
+        if (!hasAllEvalCompleted) return null
         return {
           periodKey,
           label: idx === 0 ? `${periodKey}（最新）` : periodKey,
@@ -9309,8 +9528,7 @@ function AdminMockPage({
       .filter(Boolean)
   }, [
     selectedMember,
-    activeEvalPeriodKey,
-    evalPeriodFallbackKey,
+    selectedMemberEffectivePeriodKey,
     selfEvalHistoryByEmployee,
     supervisorEvalHistoryByEmployee,
     executiveEvalByEmployee,
@@ -9334,12 +9552,46 @@ function AdminMockPage({
       })
       .filter(Boolean)
   }, [detailTab, selectedMember, selfEvalByEmployee, selectedMemberEvalItems])
-  const selectedMemberSupervisorEvalState = selectedMember
-    ? supervisorEvalByEmployee?.[selectedMember.id] ?? { scores: {}, comments: {} }
-    : { scores: {}, comments: {} }
+  const selectedMemberSupervisorEvalState = useMemo(() => {
+    if (!selectedMember) return { scores: {}, comments: {} }
+    const periodKey = String(selectedMemberEffectivePeriodKey ?? '').trim()
+    const histSlot = periodKey ? supervisorEvalHistoryByEmployee?.[selectedMember.id]?.[periodKey] : null
+    if (histSlot && typeof histSlot === 'object') {
+      return {
+        scores: { ...(histSlot?.scores ?? {}) },
+        comments: { ...(histSlot?.comments ?? {}) },
+      }
+    }
+    return supervisorEvalByEmployee?.[selectedMember.id] ?? { scores: {}, comments: {} }
+  }, [
+    selectedMember,
+    selectedMemberEffectivePeriodKey,
+    supervisorEvalHistoryByEmployee,
+    supervisorEvalByEmployee,
+  ])
   const setSelectedMemberSupervisorEvalState = useCallback(
     (updater) => {
       if (!selectedMember || !setSupervisorEvalByEmployee) return
+      const periodKey = String(selectedMemberEffectivePeriodKey ?? '').trim()
+      if (periodKey && setSupervisorEvalHistoryByEmployee) {
+        setSupervisorEvalHistoryByEmployee((prev) => {
+          const currentRaw = prev?.[selectedMember.id]?.[periodKey] ?? { scores: {}, comments: {} }
+          const current = { scores: currentRaw.scores ?? {}, comments: currentRaw.comments ?? {} }
+          const nextState = typeof updater === 'function' ? updater(current) : updater
+          return {
+            ...(prev ?? {}),
+            [selectedMember.id]: {
+              ...((prev ?? {})[selectedMember.id] ?? {}),
+              [periodKey]: {
+                ...currentRaw,
+                scores: { ...(nextState?.scores ?? {}) },
+                comments: { ...(nextState?.comments ?? {}) },
+                savedAt: new Date().toISOString(),
+              },
+            },
+          }
+        })
+      }
       setSupervisorEvalByEmployee((prev) => {
         const currentRaw = prev?.[selectedMember.id] ?? { scores: {}, comments: {}, commentHistory: [] }
         const current = { scores: currentRaw.scores ?? {}, comments: currentRaw.comments ?? {} }
@@ -9354,17 +9606,54 @@ function AdminMockPage({
         }
       })
     },
-    [selectedMember, setSupervisorEvalByEmployee],
+    [selectedMember, selectedMemberEffectivePeriodKey, setSupervisorEvalByEmployee, setSupervisorEvalHistoryByEmployee],
   )
-  const selectedMemberExecutiveEvalState = selectedMember
-    ? {
-        scores: executiveEvalByEmployee?.[selectedMember.id]?.scores ?? {},
-        comments: executiveEvalByEmployee?.[selectedMember.id]?.comments ?? {},
+  const selectedMemberExecutiveEvalState = useMemo(() => {
+    if (!selectedMember) return { scores: {}, comments: {} }
+    const periodKey = String(selectedMemberEffectivePeriodKey ?? '').trim()
+    const histSlot = periodKey ? executiveEvalHistoryByEmployee?.[selectedMember.id]?.[periodKey] : null
+    if (histSlot && typeof histSlot === 'object') {
+      return {
+        scores: { ...(histSlot?.scores ?? {}) },
+        comments: { ...(histSlot?.comments ?? {}) },
       }
-    : { scores: {}, comments: {} }
+    }
+    return {
+      scores: executiveEvalByEmployee?.[selectedMember.id]?.scores ?? {},
+      comments: executiveEvalByEmployee?.[selectedMember.id]?.comments ?? {},
+    }
+  }, [
+    selectedMember,
+    selectedMemberEffectivePeriodKey,
+    executiveEvalHistoryByEmployee,
+    executiveEvalByEmployee,
+  ])
   const setSelectedMemberExecutiveEvalState = useCallback(
     (updater) => {
       if (!selectedMember || !setExecutiveEvalByEmployee) return
+      const periodKey = String(selectedMemberEffectivePeriodKey ?? '').trim()
+      if (periodKey && setExecutiveEvalHistoryByEmployee) {
+        setExecutiveEvalHistoryByEmployee((prev) => {
+          const currentRaw = prev?.[selectedMember.id]?.[periodKey] ?? { scores: {}, comments: {} }
+          const current = {
+            scores: currentRaw.scores ?? {},
+            comments: currentRaw.comments ?? {},
+          }
+          const nextState = typeof updater === 'function' ? updater(current) : updater
+          return {
+            ...(prev ?? {}),
+            [selectedMember.id]: {
+              ...((prev ?? {})[selectedMember.id] ?? {}),
+              [periodKey]: {
+                ...currentRaw,
+                scores: { ...(nextState?.scores ?? {}) },
+                comments: { ...(nextState?.comments ?? {}) },
+                savedAt: new Date().toISOString(),
+              },
+            },
+          }
+        })
+      }
       setExecutiveEvalByEmployee((prev) => {
         const currentRaw = prev?.[selectedMember.id] ?? { baseScore: 0, baseByMajor: {}, commentHistory: [], scores: {}, comments: {} }
         const current = {
@@ -9382,7 +9671,7 @@ function AdminMockPage({
         }
       })
     },
-    [selectedMember, setExecutiveEvalByEmployee],
+    [selectedMember, selectedMemberEffectivePeriodKey, setExecutiveEvalByEmployee, setExecutiveEvalHistoryByEmployee],
   )
   const execCommentMajorOptions = useMemo(() => {
     const majors = Array.isArray(evaluationCriteria?.sharedMajors) ? evaluationCriteria.sharedMajors : []
@@ -9531,40 +9820,72 @@ function AdminMockPage({
   )
   const selectedMemberSelfSubmittedForActive = useMemo(() => {
     if (!selectedMember) return false
-    const periodKey = activeEvalPeriodKey ?? evalPeriodFallbackKey ?? ''
+    const periodKey = selectedMemberEffectivePeriodKey
     if (!periodKey) return false
     return Boolean(selfEvalHistoryByEmployee?.[selectedMember.id]?.[periodKey]?.submittedAt)
-  }, [selectedMember, activeEvalPeriodKey, evalPeriodFallbackKey, selfEvalHistoryByEmployee])
+  }, [selectedMember, selectedMemberEffectivePeriodKey, selfEvalHistoryByEmployee])
+  const selectedMemberPeerSelfEvalForActive = useMemo(() => {
+    if (!selectedMember) return { scores: {}, comments: {} }
+    const periodKey = String(selectedMemberEffectivePeriodKey ?? '').trim()
+    const empId = String(selectedMember.id ?? '').trim()
+    if (!empId) return { scores: {}, comments: {} }
+    const histSlot = periodKey ? selfEvalHistoryByEmployee?.[empId]?.[periodKey] : null
+    if (histSlot && typeof histSlot === 'object') {
+      return {
+        scores: { ...(histSlot?.scores ?? {}) },
+        comments: { ...(histSlot?.comments ?? {}) },
+      }
+    }
+    return { scores: {}, comments: {} }
+  }, [selectedMember, selectedMemberEffectivePeriodKey, selfEvalHistoryByEmployee])
   const selectedMemberSupervisorSubmittedForActive = useMemo(() => {
     if (!selectedMember) return false
-    const periodKey = activeEvalPeriodKey ?? evalPeriodFallbackKey ?? ''
+    const periodKey = selectedMemberEffectivePeriodKey
     if (!periodKey) return false
     return Boolean(supervisorEvalHistoryByEmployee?.[selectedMember.id]?.[periodKey]?.submittedAt)
-  }, [selectedMember, activeEvalPeriodKey, evalPeriodFallbackKey, supervisorEvalHistoryByEmployee])
+  }, [selectedMember, selectedMemberEffectivePeriodKey, supervisorEvalHistoryByEmployee])
+  const selectedMemberPeerSupervisorEvalForActive = useMemo(() => {
+    if (!selectedMember) return { scores: {}, comments: {} }
+    const periodKey = String(selectedMemberEffectivePeriodKey ?? '').trim()
+    const empId = String(selectedMember.id ?? '').trim()
+    if (!empId) return { scores: {}, comments: {} }
+    const histSlot = periodKey ? supervisorEvalHistoryByEmployee?.[empId]?.[periodKey] : null
+    if (histSlot && typeof histSlot === 'object') {
+      return {
+        scores: { ...(histSlot?.scores ?? {}) },
+        comments: { ...(histSlot?.comments ?? {}) },
+      }
+    }
+    return { scores: {}, comments: {} }
+  }, [
+    selectedMember,
+    selectedMemberEffectivePeriodKey,
+    supervisorEvalHistoryByEmployee,
+  ])
   const selectedMemberExecutiveSubmittedForActive = useMemo(() => {
     if (!selectedMember) return false
-    const periodKey = activeEvalPeriodKey ?? evalPeriodFallbackKey ?? ''
+    const periodKey = selectedMemberEffectivePeriodKey
     if (!periodKey) return false
     return Boolean(executiveEvalHistoryByEmployee?.[selectedMember.id]?.[periodKey]?.submittedAt)
-  }, [selectedMember, activeEvalPeriodKey, evalPeriodFallbackKey, executiveEvalHistoryByEmployee])
+  }, [selectedMember, selectedMemberEffectivePeriodKey, executiveEvalHistoryByEmployee])
   const selectedMemberGoals = useMemo(() => {
     if (!selectedMember) return []
-    const periodKey = String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '').trim()
+    const periodKey = String(selectedMemberEffectivePeriodKey ?? '').trim()
     if (!periodKey) return []
     return goalsByEmployeePeriod?.[selectedMember.id]?.[periodKey] ?? []
-  }, [selectedMember, activeEvalPeriodKey, evalPeriodFallbackKey, goalsByEmployeePeriod])
+  }, [selectedMember, selectedMemberEffectivePeriodKey, goalsByEmployeePeriod])
   const selectedMemberGoalDirection = useMemo(() => {
     if (!selectedMember) return ''
-    const periodKey = String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '').trim()
+    const periodKey = String(selectedMemberEffectivePeriodKey ?? '').trim()
     if (!periodKey) return ''
     return String(goalDirectionByEmployeePeriod?.[selectedMember.id]?.[periodKey] ?? '').trim()
-  }, [selectedMember, activeEvalPeriodKey, evalPeriodFallbackKey, goalDirectionByEmployeePeriod])
+  }, [selectedMember, selectedMemberEffectivePeriodKey, goalDirectionByEmployeePeriod])
   const selectedMemberGoalFocusMajorKey = useMemo(() => {
     if (!selectedMember) return ''
-    const periodKey = String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '').trim()
+    const periodKey = String(selectedMemberEffectivePeriodKey ?? '').trim()
     if (!periodKey) return ''
     return String(goalFocusMajorByEmployeePeriod?.[selectedMember.id]?.[periodKey] ?? '').trim()
-  }, [selectedMember, activeEvalPeriodKey, evalPeriodFallbackKey, goalFocusMajorByEmployeePeriod])
+  }, [selectedMember, selectedMemberEffectivePeriodKey, goalFocusMajorByEmployeePeriod])
   const selectedMemberGoalCount = selectedMemberGoals.length
   const selectedMemberEvalHistoryRows = useMemo(() => {
     if (detailTab !== 'history') return []
@@ -9820,7 +10141,7 @@ function AdminMockPage({
                         compact
                         gradeLabel={selectedMemberActiveEvalGrade}
                         headlineScore={selectedMemberWeightedTotal100}
-                        activePeriodKey={activeEvalPeriodKey ?? evalPeriodFallbackKey ?? ''}
+                        activePeriodKey={selectedMemberEffectivePeriodKey}
                         highlightMajorKey={selectedMemberGoalFocusMajorKey}
                       />
                 </div>
@@ -9858,10 +10179,7 @@ function AdminMockPage({
                 <button
                   type="button"
                   className={detailTab === 'skill' ? 'isActive' : ''}
-                  onClick={() => {
-                    setDetailTab('skill')
-                    onChangeDetailTab?.('skill')
-                  }}
+                  onClick={() => switchDetailTab('skill')}
                 >
                   スキル習得状況
                 </button>
@@ -9869,10 +10187,7 @@ function AdminMockPage({
                 <button
                   type="button"
                   className={detailTab === 'self' ? 'isActive' : ''}
-                  onClick={() => {
-                    setDetailTab('self')
-                    onChangeDetailTab?.('self')
-                  }}
+                  onClick={() => switchDetailTab('self')}
                 >
                   自己評価
                 </button>
@@ -9880,40 +10195,28 @@ function AdminMockPage({
                 <button
                   type="button"
                   className={detailTab === 'boss' ? 'isActive' : ''}
-                  onClick={() => {
-                    setDetailTab('boss')
-                    onChangeDetailTab?.('boss')
-                  }}
+                  onClick={() => switchDetailTab('boss')}
                 >
                   1次評価(上司)
                 </button>
                 <button
                   type="button"
                   className={detailTab === 'bossnote' ? 'isActive' : ''}
-                  onClick={() => {
-                    setDetailTab('bossnote')
-                    onChangeDetailTab?.('bossnote')
-                  }}
+                  onClick={() => switchDetailTab('bossnote')}
                 >
                   1次評価コメント
                 </button>
                 <button
                   type="button"
                   className={detailTab === 'goal' ? 'isActive' : ''}
-                  onClick={() => {
-                    setDetailTab('goal')
-                    onChangeDetailTab?.('goal')
-                  }}
+                  onClick={() => switchDetailTab('goal')}
                 >
                   目標管理
                 </button>
                 <button
                   type="button"
                   className={detailTab === 'history' ? 'isActive' : ''}
-                  onClick={() => {
-                    setDetailTab('history')
-                    onChangeDetailTab?.('history')
-                  }}
+                  onClick={() => switchDetailTab('history')}
                 >
                   評価履歴
                 </button>
@@ -9921,10 +10224,7 @@ function AdminMockPage({
                   <button
                     type="button"
                     className={detailTab === 'execcomments' ? 'isActive' : ''}
-                    onClick={() => {
-                      setDetailTab('execcomments')
-                      onChangeDetailTab?.('execcomments')
-                    }}
+                    onClick={() => switchDetailTab('execcomments')}
                   >
                     2次評価(経営層)
                   </button>
@@ -9933,10 +10233,7 @@ function AdminMockPage({
                   <button
                     type="button"
                     className={detailTab === 'execnote' ? 'isActive' : ''}
-                    onClick={() => {
-                      setDetailTab('execnote')
-                      onChangeDetailTab?.('execnote')
-                    }}
+                    onClick={() => switchDetailTab('execnote')}
                   >
                     経営層コメント
                   </button>
@@ -9945,14 +10242,16 @@ function AdminMockPage({
 
               <div className="memberDetailTabPanel">
                 {Array.isArray(adminMemberEvalPeriodSelectOptions) &&
-                adminMemberEvalPeriodSelectOptions.length > 0 &&
-                typeof setActiveEvalPeriodKey === 'function' ? (
+                adminMemberEvalPeriodSelectOptions.length > 0 ? (
                   <div className="memberDetailEvalPeriodBar">
                     <label className="memberDetailEvalPeriodField">
-                      <span>評価期（アプリ共通）</span>
+                      <span>評価期</span>
                       <select
-                        value={activeEvalPeriodKey ?? evalPeriodFallbackKey ?? ''}
-                        onChange={(event) => setActiveEvalPeriodKey(event.target.value)}
+                        value={selectedMemberEffectivePeriodKey}
+                        onChange={(event) => {
+                          const next = String(event.target.value ?? '').trim()
+                          setAdminMemberPeriodKey(next)
+                        }}
                         aria-label="表示する評価期"
                       >
                         {adminMemberEvalPeriodSelectOptions.map((opt) => (
@@ -10022,19 +10321,22 @@ function AdminMockPage({
                 ) : null}
                 {detailTab === 'boss' ? (
                   <SupervisorEvaluationPage
+                    key={`admin-boss-${String(selectedMember?.id ?? '')}-${String(selectedMemberEffectivePeriodKey ?? '')}`}
                     employees={selectedMember ? [selectedMember] : []}
                     evalState={selectedMemberSupervisorEvalState}
                     setEvalState={setSelectedMemberSupervisorEvalState}
-                    peerSelfEval={selectedMember ? selfEvalByEmployee?.[selectedMember.id] : undefined}
+                    peerSelfEval={selectedMemberPeerSelfEvalForActive}
                     evaluationCriteria={evaluationCriteria}
-                    activeEvalPeriodKey={activeEvalPeriodKey}
-                    setActiveEvalPeriodKey={setActiveEvalPeriodKey}
+                    activeEvalPeriodKey={selectedMemberEffectivePeriodKey}
+                    setActiveEvalPeriodKey={setAdminMemberPeriodKey}
                     evalPeriodSelectOptions={adminMemberEvalPeriodSelectOptions}
                     evalPeriodFallbackKey={evalPeriodFallbackKey}
                     supervisorEvalHistoryByEmployee={supervisorEvalHistoryByEmployee}
                     isSubmittedForPeriod={selectedMemberSupervisorSubmittedForActive}
-                    onSubmitEvaluation={() => onSubmitSupervisorEvaluation?.(selectedMember?.id)}
-                    canEvaluate={selectedMemberSelfSubmittedForActive}
+                    onSubmitEvaluation={() =>
+                      onSubmitSupervisorEvaluation?.(selectedMember?.id, selectedMemberEffectivePeriodKey)
+                    }
+                    canEvaluate
                     blockedReason="自己評価の提出後に1次評価(上司)を入力できます。"
                     focusMajorKey={selectedMemberGoalFocusMajorKey}
                   />
@@ -10144,22 +10446,25 @@ function AdminMockPage({
                 ) : null}
                 {canViewExecutiveCommentEval && detailTab === 'execcomments' ? (
                   <EvalQuestionnairePage
+                    key={`admin-exec-${String(selectedMember?.id ?? '')}-${String(selectedMemberEffectivePeriodKey ?? '')}`}
                     variant="exec"
                     employees={selectedMember ? [selectedMember] : []}
                     evalState={selectedMemberExecutiveEvalState}
                     setEvalState={setSelectedMemberExecutiveEvalState}
-                    peerSelfEval={selectedMember ? selfEvalByEmployee?.[selectedMember.id] : undefined}
-                    peerSupervisorEval={selectedMember ? supervisorEvalByEmployee?.[selectedMember.id] : undefined}
+                    peerSelfEval={selectedMemberPeerSelfEvalForActive}
+                    peerSupervisorEval={selectedMemberPeerSupervisorEvalForActive}
                     evaluationCriteria={evaluationCriteria}
-                    activeEvalPeriodKey={activeEvalPeriodKey}
-                    setActiveEvalPeriodKey={setActiveEvalPeriodKey}
+                    activeEvalPeriodKey={selectedMemberEffectivePeriodKey}
+                    setActiveEvalPeriodKey={setAdminMemberPeriodKey}
                     selfEvalHistoryByEmployee={selfEvalHistoryByEmployee}
                     evalHistoryByEmployee={executiveEvalHistoryByEmployee}
                     evalPeriodSelectOptions={adminMemberEvalPeriodSelectOptions}
                     evalPeriodFallbackKey={evalPeriodFallbackKey}
                     isSubmittedForPeriod={selectedMemberExecutiveSubmittedForActive}
-                    onSubmitEvaluation={() => onSubmitExecutiveEvaluation?.(selectedMember?.id)}
-                    canEvaluate={selectedMemberSelfSubmittedForActive && selectedMemberSupervisorSubmittedForActive}
+                    onSubmitEvaluation={() =>
+                      onSubmitExecutiveEvaluation?.(selectedMember?.id, selectedMemberEffectivePeriodKey)
+                    }
+                    canEvaluate
                     blockedReason="自己評価と1次評価(上司)の提出後に2次評価(経営層)を入力できます。"
                     focusMajorKey={selectedMemberGoalFocusMajorKey}
                   />
@@ -10875,7 +11180,7 @@ function EmployeeManagePage({
               <em className="roleTag">{row.role}</em>
             </span>
             <span className="passwordCell">
-                <span className="passwordText">********</span>
+              <span className="passwordText">{row.password || '（未設定）'}</span>
             </span>
             <span className="actions">
               <button type="button" className="actionIcon" onClick={() => handleStartEdit(row)} aria-label="編集">
