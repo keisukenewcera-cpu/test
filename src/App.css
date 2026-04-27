@@ -5557,6 +5557,10 @@ select:focus {
   }
 }
 
+.goalMgmtSubmitBar {
+  margin: 0 0 20px;
+}
+
 .goalMgmtStatCard {
   display: flex;
   align-items: center;

@@ -2347,6 +2347,30 @@ function App() {
         : '',
     [goalMgmtEmployee, goalMgmtPeriodKey, goalFocusMajorByEmployeePeriod],
   )
+  const goalMgmtSubmittedForActive = useMemo(() => {
+    if (!goalMgmtEmployee?.id || !goalMgmtPeriodKey) return false
+    return Boolean(
+      String(goalSubmissionByEmployee?.[goalMgmtEmployee.id]?.[goalMgmtPeriodKey]?.submittedAt ?? '').trim(),
+    )
+  }, [goalMgmtEmployee?.id, goalMgmtPeriodKey, goalSubmissionByEmployee])
+  const submitGoalsForActivePeriod = useCallback(() => {
+    if (!goalMgmtEmployee?.id || !goalMgmtPeriodKey) return
+    if (goalMgmtSubmittedForActive) return
+    const confirmed = window.confirm(
+      `目標管理（${goalMgmtPeriodKey}）を提出しますか？提出後はこの期の目標・方針を編集できません。`,
+    )
+    if (!confirmed) return
+    const now = new Date().toISOString()
+    const empId = goalMgmtEmployee.id
+    const periodKey = goalMgmtPeriodKey
+    setGoalSubmissionByEmployee((prev) => ({
+      ...(prev ?? {}),
+      [empId]: {
+        ...((prev ?? {})[empId] ?? {}),
+        [periodKey]: { submittedAt: now },
+      },
+    }))
+  }, [goalMgmtEmployee?.id, goalMgmtPeriodKey, goalMgmtSubmittedForActive])
   const goalMgmtWeightedTotal100 = useMemo(() => {
     return weightedTotal100ForEmployeeAtPeriod(goalMgmtEmployee, goalMgmtPeriodKey)
   }, [
@@ -2485,6 +2509,7 @@ function App() {
   ])
   const setGoalMgmtGoals = useCallback(
     (updater) => {
+      if (goalMgmtSubmittedForActive) return
       setGoalsByEmployeePeriod((prev) => {
         const emp = goalMgmtEmployee
         const periodKey = String(activeEvalPeriodKey ?? getSuggestedEvalPeriodKey(evalPeriodDefinitions) ?? '').trim()
@@ -2500,10 +2525,11 @@ function App() {
         }
       })
     },
-    [goalMgmtEmployee, activeEvalPeriodKey, evalPeriodDefinitions],
+    [goalMgmtEmployee, activeEvalPeriodKey, evalPeriodDefinitions, goalMgmtSubmittedForActive],
   )
   const setGoalMgmtDirection = useCallback(
     (nextValue) => {
+      if (goalMgmtSubmittedForActive) return
       setGoalDirectionByEmployeePeriod((prev) => {
         const emp = goalMgmtEmployee
         const periodKey = String(activeEvalPeriodKey ?? getSuggestedEvalPeriodKey(evalPeriodDefinitions) ?? '').trim()
@@ -2527,10 +2553,11 @@ function App() {
         }
       })
     },
-    [goalMgmtEmployee, activeEvalPeriodKey, evalPeriodDefinitions],
+    [goalMgmtEmployee, activeEvalPeriodKey, evalPeriodDefinitions, goalMgmtSubmittedForActive],
   )
   const setGoalMgmtFocusMajorKey = useCallback(
     (nextValue) => {
+      if (goalMgmtSubmittedForActive) return
       setGoalFocusMajorByEmployeePeriod((prev) => {
         const emp = goalMgmtEmployee
         const periodKey = String(activeEvalPeriodKey ?? getSuggestedEvalPeriodKey(evalPeriodDefinitions) ?? '').trim()
@@ -2554,7 +2581,7 @@ function App() {
         }
       })
     },
-    [goalMgmtEmployee, activeEvalPeriodKey, evalPeriodDefinitions],
+    [goalMgmtEmployee, activeEvalPeriodKey, evalPeriodDefinitions, goalMgmtSubmittedForActive],
   )
   const evalSubjectEmployee = useMemo(() => {
     if (!employeeDirectoryRows.length) return null
@@ -3505,6 +3532,9 @@ function App() {
     return payload
   }
 
+  const buildPersistPayloadRef = useRef(() => ({}))
+  buildPersistPayloadRef.current = () => buildPersistPayload(true)
+
   const applyPersistPayload = (payload) => {
     const cloudRows = Array.isArray(payload.rows) && payload.rows.length > 0 ? payload.rows : null
     if (cloudRows) setRows(cloudRows)
@@ -3867,15 +3897,54 @@ function App() {
   const lastLocalPersistRef = useRef('')
   const lastCloudPersistRef = useRef('')
 
-  useEffect(() => {
+  const flushLocalStorageNow = useCallback(() => {
     if (typeof window === 'undefined') return
-    const timer = window.setTimeout(() => {
-      const serialized = JSON.stringify(buildPersistPayload(true))
+    try {
+      const serialized = JSON.stringify(buildPersistPayloadRef.current())
       if (serialized === lastLocalPersistRef.current) return
       lastLocalPersistRef.current = serialized
       window.localStorage.setItem(STORAGE_KEY, serialized)
+    } catch (e) {
+      console.warn('[WorkVision] localStorage の保存に失敗しました', e)
+    }
+  }, [])
+
+  const flushCloudStateBestEffort = useCallback(() => {
+    if (!supabase) return
+    try {
+      const payload = buildPersistPayloadRef.current()
+      void saveCloudState(payload, { silent: true })
+    } catch (e) {
+      console.warn('[WorkVision] Supabase への退避保存に失敗しました', e)
+    }
+  }, [saveCloudState])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onPageHide = () => {
+      flushLocalStorageNow()
+      flushCloudStateBestEffort()
+    }
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') flushLocalStorageNow()
+    }
+    window.addEventListener('pagehide', onPageHide)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      window.removeEventListener('pagehide', onPageHide)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [flushLocalStorageNow, flushCloudStateBestEffort])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const timer = window.setTimeout(() => {
+      flushLocalStorageNow()
     }, 900)
-    return () => window.clearTimeout(timer)
+    return () => {
+      window.clearTimeout(timer)
+      flushLocalStorageNow()
+    }
   }, [
     rows,
     employeeDirectoryRows,
@@ -5023,6 +5092,8 @@ function App() {
                 setActiveEvalPeriodKey={requestEvalPeriodChange}
                 evalPeriodSelectOptions={evalPeriodSelectOptions}
                 evalPeriodFallbackKey={evalPeriodFallbackKey}
+                isSubmittedForPeriod={goalMgmtSubmittedForActive}
+                onSubmitGoalManagement={submitGoalsForActivePeriod}
               />
             ) : null}
             
@@ -7913,6 +7984,8 @@ function GoalManagementPage({
   setActiveEvalPeriodKey,
   evalPeriodSelectOptions,
   evalPeriodFallbackKey,
+  isSubmittedForPeriod = false,
+  onSubmitGoalManagement,
 }) {
   const [addOpen, setAddOpen] = useState(false)
   const [showDraftCadetail, setShowDraftCadetail] = useState(false)
@@ -7968,8 +8041,7 @@ function GoalManagementPage({
   const total = normalizedGoals.length
   const achieved = useMemo(() => normalizedGoals.filter((g) => g.achieved).length, [normalizedGoals])
   const ratePct = total === 0 ? 0 : Math.round((achieved / total) * 100)
-  // Manual submit is disabled for now; we'll lock by period deadline later.
-  const isGoalMgmtLocked = false
+  const isGoalMgmtLocked = Boolean(isSubmittedForPeriod)
   const focusMajorOptions = useMemo(() => {
     const latestRows = Array.isArray(radarSeries?.[0]?.rows) ? radarSeries[0].rows : []
     return latestRows
@@ -8149,6 +8221,23 @@ function GoalManagementPage({
           </div>
         </article>
       </div>
+      {typeof onSubmitGoalManagement === 'function' ? (
+        <div className="selfEvalSubmitBar goalMgmtSubmitBar">
+          <button
+            type="button"
+            className={`selfEvalSubmitBtn${isGoalMgmtLocked ? ' isLocked' : ''}`}
+            onClick={() => onSubmitGoalManagement?.()}
+            disabled={isGoalMgmtLocked}
+          >
+            目標管理を提出
+          </button>
+          <p className="selfEvalSubmitHint">
+            {isGoalMgmtLocked
+              ? '提出済みです。この評価期の目標・方針は閲覧のみです。'
+              : '提出すると、この評価期の目標・方針は編集できなくなります。'}
+          </p>
+        </div>
+      ) : null}
       <section className="goalMgmtDirectionCard">
         <h3>今期の方針目標を決めましょう！</h3>
         <p className="goalMgmtDirectionHint">
