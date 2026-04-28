@@ -418,8 +418,9 @@ function pruneEvalHistoryMapByAllowedKeys(historyMap, allowedKeySet) {
     if (!periods || typeof periods !== 'object' || Array.isArray(periods)) continue
     const kept = {}
     for (const [periodKey, value] of Object.entries(periods)) {
-      if (allowedKeySet.has(String(periodKey ?? '').trim())) {
-        kept[periodKey] = value
+      const pk = String(periodKey ?? '').trim()
+      if (allowedKeySet.has(pk)) {
+        kept[pk] = value
       } else {
         removed += 1
       }
@@ -1301,7 +1302,8 @@ function normalizeEvalHistoryByEmployeeMap(raw, normalizer) {
     if (!empId || typeof periods !== 'object' || Array.isArray(periods)) continue
     const periodMap = {}
     for (const [periodKey, state] of Object.entries(periods)) {
-      if (typeof periodKey !== 'string' || !periodKey) continue
+      const pk = String(periodKey ?? '').trim()
+      if (!pk) continue
       const normalized = normalizer({ [empId]: state })[empId]
       if (!normalized) continue
       const evalGradeRaw = typeof state?.evalGrade === 'string' ? state.evalGrade.trim() : ''
@@ -1310,7 +1312,7 @@ function normalizeEvalHistoryByEmployeeMap(raw, normalizer) {
         typeof state?.resubmitRequestedAt === 'string' ? state.resubmitRequestedAt.trim() : ''
       const resubmitReasonRaw = typeof state?.resubmitReason === 'string' ? state.resubmitReason.trim() : ''
       const submissionWithdrawalsUsed = clampEvalSubmissionWithdrawalsUsed(state?.submissionWithdrawalsUsed)
-      periodMap[periodKey] = {
+      periodMap[pk] = {
         ...normalized,
         savedAt:
           typeof state?.savedAt === 'string' && state.savedAt.trim()
@@ -1339,6 +1341,58 @@ function normalizeGoalList(rawList, empId = '') {
       achieved: Boolean(g?.achieved),
     }))
     .filter((g) => g.title && g.deadline)
+}
+
+function mergeEvalHistoryMapBySavedAt(currentMap, incomingMap) {
+  const current = currentMap && typeof currentMap === 'object' && !Array.isArray(currentMap) ? currentMap : {}
+  const incoming = incomingMap && typeof incomingMap === 'object' && !Array.isArray(incomingMap) ? incomingMap : {}
+  const merged = { ...current }
+  const toSavedAtMs = (slot) => {
+    const raw = String(slot?.savedAt ?? '').trim()
+    const ms = Date.parse(raw)
+    return Number.isFinite(ms) ? ms : 0
+  }
+  for (const [empId, incomingPeriods] of Object.entries(incoming)) {
+    if (!incomingPeriods || typeof incomingPeriods !== 'object' || Array.isArray(incomingPeriods)) continue
+    const currentPeriods =
+      merged[empId] && typeof merged[empId] === 'object' && !Array.isArray(merged[empId]) ? merged[empId] : {}
+    const nextPeriods = { ...currentPeriods }
+    for (const [periodKey, incomingSlot] of Object.entries(incomingPeriods)) {
+      if (!incomingSlot || typeof incomingSlot !== 'object' || Array.isArray(incomingSlot)) continue
+      const currentSlot = currentPeriods?.[periodKey]
+      if (!currentSlot || typeof currentSlot !== 'object' || Array.isArray(currentSlot)) {
+        nextPeriods[periodKey] = incomingSlot
+        continue
+      }
+      const incomingMs = toSavedAtMs(incomingSlot)
+      const currentMs = toSavedAtMs(currentSlot)
+      if (incomingMs >= currentMs) {
+        nextPeriods[periodKey] = incomingSlot
+      }
+    }
+    merged[empId] = nextPeriods
+  }
+  return merged
+}
+
+function filterCommittedEvalHistoryMap(historyMap) {
+  if (!historyMap || typeof historyMap !== 'object' || Array.isArray(historyMap)) return {}
+  const next = {}
+  for (const [empId, periods] of Object.entries(historyMap)) {
+    if (!periods || typeof periods !== 'object' || Array.isArray(periods)) continue
+    const kept = {}
+    for (const [periodKey, slot] of Object.entries(periods)) {
+      if (!slot || typeof slot !== 'object' || Array.isArray(slot)) continue
+      const hasSubmitted = Boolean(String(slot?.submittedAt ?? '').trim())
+      const hasResubmitRequest = Boolean(String(slot?.resubmitRequestedAt ?? '').trim())
+      const hasWithdrawal = clampEvalSubmissionWithdrawalsUsed(slot?.submissionWithdrawalsUsed) > 0
+      if (hasSubmitted || hasResubmitRequest || hasWithdrawal) {
+        kept[periodKey] = slot
+      }
+    }
+    if (Object.keys(kept).length > 0) next[empId] = kept
+  }
+  return next
 }
 
 function normalizeGoalsByEmployeePeriodMap(raw) {
@@ -2710,6 +2764,23 @@ function App() {
     if (!empId || !periodKey) return ''
     return String(goalFocusMajorByEmployeePeriod?.[empId]?.[periodKey] ?? '').trim()
   }, [evalSubjectEmployee?.id, effectiveEvalPeriodKey, goalFocusMajorByEmployeePeriod])
+  const resolveEvalGradeForPeriod = useCallback(
+    (employeeId, periodKey, fallbackGrade = '') => {
+      const empId = String(employeeId ?? '').trim()
+      const pk = String(periodKey ?? '').trim()
+      if (!empId || !pk) return String(fallbackGrade ?? '').trim()
+      const selfSlot = selfEvalHistoryByEmployee?.[empId]?.[pk]
+      const bossSlot = supervisorEvalHistoryByEmployee?.[empId]?.[pk]
+      const selfSubmitted = Boolean(String(selfSlot?.submittedAt ?? '').trim())
+      const bossSubmitted = Boolean(String(bossSlot?.submittedAt ?? '').trim())
+      const selfGrade = String(selfSlot?.evalGrade ?? '').trim()
+      const bossGrade = String(bossSlot?.evalGrade ?? '').trim()
+      if (selfSubmitted && selfGrade) return selfGrade
+      if (bossSubmitted && bossGrade) return bossGrade
+      return String(evalGradeByEmployeeId?.[empId] ?? fallbackGrade ?? '').trim()
+    },
+    [selfEvalHistoryByEmployee, supervisorEvalHistoryByEmployee, evalGradeByEmployeeId],
+  )
   const selfBossGapForPeriod = useCallback(
     (employeeId, periodKey) => {
       const empId = String(employeeId ?? '').trim()
@@ -2717,9 +2788,7 @@ function App() {
       if (!empId || !pk) return Number.NaN
       const selfState = selfEvalHistoryByEmployee?.[empId]?.[pk] ?? { scores: selfEvalByEmployee?.[empId]?.scores ?? {} }
       const bossState = supervisorEvalByEmployee?.[empId] ?? supervisorEvalHistoryByEmployee?.[empId]?.[pk] ?? { scores: {} }
-      const evalGrade =
-        String(selfState?.evalGrade ?? supervisorEvalHistoryByEmployee?.[empId]?.[pk]?.evalGrade ?? evalGradeByEmployeeId?.[empId] ?? '')
-          .trim()
+      const evalGrade = resolveEvalGradeForPeriod(empId, pk, evalGradeByEmployeeId?.[empId])
       const categories = buildEvalCategoriesForGrade(evaluationCriteria, evalGrade)
       const self100 = weightedEvalScore100ByCategories(categories, selfState?.scores ?? {})
       const boss100 = weightedEvalScore100ByCategories(categories, bossState?.scores ?? {})
@@ -2732,6 +2801,7 @@ function App() {
       supervisorEvalByEmployee,
       supervisorEvalHistoryByEmployee,
       evalGradeByEmployeeId,
+      resolveEvalGradeForPeriod,
       evaluationCriteria,
     ],
   )
@@ -2754,10 +2824,7 @@ function App() {
       const execState = isActive
         ? (executiveEvalByEmployee?.[empId] ?? execHistByEmp?.[pk] ?? execHistByEmp?.cumulative)
         : (execHistByEmp?.[pk] ?? null)
-      const gradeForPeriod =
-        String(selfHistSlot?.evalGrade ?? '').trim() ||
-        String(bossHistSlot?.evalGrade ?? '').trim() ||
-        String(employee?.grade ?? '').trim()
+      const gradeForPeriod = resolveEvalGradeForPeriod(empId, pk, employee?.grade)
       const categories = buildEvalCategoriesForGrade(evaluationCriteria, gradeForPeriod)
       const selfScores = selfState?.scores ?? {}
       const bossScores = bossState?.scores ?? {}
@@ -2779,15 +2846,15 @@ function App() {
   }
   const selfEvalSubmittedRawForActive = Boolean(
     evalSubjectEmployee?.id &&
-      selfEvalHistoryByEmployee?.[evalSubjectEmployee.id]?.[effectiveEvalPeriodKey]?.submittedAt,
+      String(selfEvalHistoryByEmployee?.[evalSubjectEmployee.id]?.[effectiveEvalPeriodKey]?.submittedAt ?? '').trim(),
   )
   const supervisorEvalSubmittedRawForActive = Boolean(
     evalSubjectEmployee?.id &&
-      supervisorEvalHistoryByEmployee?.[evalSubjectEmployee.id]?.[effectiveEvalPeriodKey]?.submittedAt,
+      String(supervisorEvalHistoryByEmployee?.[evalSubjectEmployee.id]?.[effectiveEvalPeriodKey]?.submittedAt ?? '').trim(),
   )
   const executiveEvalSubmittedRawForActive = Boolean(
     evalSubjectEmployee?.id &&
-      executiveEvalHistoryByEmployee?.[evalSubjectEmployee.id]?.[effectiveEvalPeriodKey]?.submittedAt,
+      String(executiveEvalHistoryByEmployee?.[evalSubjectEmployee.id]?.[effectiveEvalPeriodKey]?.submittedAt ?? '').trim(),
   )
   const selfEvalSubmittedForActive = selfEvalSubmittedRawForActive || isSelfEvalDeadlineLocked
   const supervisorEvalSubmittedForActive = supervisorEvalSubmittedRawForActive || isSupervisorEvalDeadlineLocked
@@ -2942,6 +3009,7 @@ function App() {
     })
     const gap = selfBossGapForPeriod(evalSubjectEmployee.id, effectiveEvalPeriodKey)
     if (Number.isFinite(gap) && gap >= SELF_BOSS_GAP_ALERT_THRESHOLD) {
+      const selfLocked = isSelfEvalDeadlineLockedForPeriod(evalPeriodDefinitions, effectiveEvalPeriodKey)
       setSelfEvalHistoryByEmployee((prev) => {
         const empId = evalSubjectEmployee.id
         const current = prev?.[empId]?.[effectiveEvalPeriodKey]
@@ -2952,7 +3020,7 @@ function App() {
             ...((prev ?? {})[empId] ?? {}),
             [effectiveEvalPeriodKey]: {
               ...current,
-              submittedAt: '',
+              ...(selfLocked ? {} : { submittedAt: '' }),
               resubmitRequestedAt: now,
               resubmitReason: `1次評価との乖離が${gap.toFixed(1)}点のため再提出が必要です`,
               submissionWithdrawalsUsed: clampEvalSubmissionWithdrawalsUsed(current?.submissionWithdrawalsUsed),
@@ -2960,15 +3028,19 @@ function App() {
           },
         }
       })
-      window.alert(`自己/1次評価の乖離が${gap.toFixed(1)}点です。自己評価の再提出を依頼しました。`)
+      if (selfLocked) {
+        window.alert(`自己/1次評価の乖離が${gap.toFixed(1)}点です。自己評価締切後のため、提出状態は維持したまま再確認依頼を記録しました。`)
+      } else {
+        window.alert(`自己/1次評価の乖離が${gap.toFixed(1)}点です。自己評価の再提出を依頼しました。`)
+      }
     }
-  }, [evalSubjectEmployee?.id, effectiveEvalPeriodKey, isSupervisorEvalDeadlineLocked])
+  }, [evalSubjectEmployee?.id, effectiveEvalPeriodKey, isSupervisorEvalDeadlineLocked, evalPeriodDefinitions])
   const submitSupervisorEvalForMember = useCallback(
     (employeeId, periodKeyOverride) => {
       const empId = String(employeeId ?? '').trim()
       const periodKey = String(periodKeyOverride ?? effectiveEvalPeriodKey ?? '').trim()
       if (!empId || !periodKey) return
-      if (isSupervisorEvalDeadlineLocked) return
+      if (isSupervisorEvalDeadlineLockedForPeriod(evalPeriodDefinitions, periodKey)) return
       const confirmed = window.confirm(`1次評価(上司)（${periodKey}）を提出しますか？提出後はこの期を編集できません。`)
       if (!confirmed) return
       const now = new Date().toISOString()
@@ -2988,6 +3060,7 @@ function App() {
       })
       const gap = selfBossGapForPeriod(empId, periodKey)
       if (Number.isFinite(gap) && gap >= SELF_BOSS_GAP_ALERT_THRESHOLD) {
+        const selfLocked = isSelfEvalDeadlineLockedForPeriod(evalPeriodDefinitions, periodKey)
         setSelfEvalHistoryByEmployee((prev) => {
           const current = prev?.[empId]?.[periodKey]
           if (!current) return prev
@@ -2997,7 +3070,7 @@ function App() {
               ...((prev ?? {})[empId] ?? {}),
               [periodKey]: {
                 ...current,
-                submittedAt: '',
+                ...(selfLocked ? {} : { submittedAt: '' }),
                 resubmitRequestedAt: now,
                 resubmitReason: `1次評価との乖離が${gap.toFixed(1)}点のため再提出が必要です`,
                 submissionWithdrawalsUsed: clampEvalSubmissionWithdrawalsUsed(current?.submissionWithdrawalsUsed),
@@ -3005,10 +3078,14 @@ function App() {
             },
           }
         })
-        window.alert(`自己/1次評価の乖離が${gap.toFixed(1)}点です。自己評価の再提出を依頼しました。`)
+        if (selfLocked) {
+          window.alert(`自己/1次評価の乖離が${gap.toFixed(1)}点です。自己評価締切後のため、提出状態は維持したまま再確認依頼を記録しました。`)
+        } else {
+          window.alert(`自己/1次評価の乖離が${gap.toFixed(1)}点です。自己評価の再提出を依頼しました。`)
+        }
       }
     },
-    [effectiveEvalPeriodKey, selfBossGapForPeriod, isSupervisorEvalDeadlineLocked],
+    [effectiveEvalPeriodKey, evalPeriodDefinitions, selfBossGapForPeriod],
   )
   const submitExecutiveEvalForActivePeriod = useCallback(() => {
     if (!evalSubjectEmployee?.id || !effectiveEvalPeriodKey) return
@@ -3036,7 +3113,7 @@ function App() {
       const empId = String(employeeId ?? '').trim()
       const periodKey = String(periodKeyOverride ?? effectiveEvalPeriodKey ?? '').trim()
       if (!empId || !periodKey) return
-      if (isExecutiveEvalDeadlineLocked) return
+      if (isExecutiveEvalDeadlineLockedForPeriod(evalPeriodDefinitions, periodKey)) return
       const confirmed = window.confirm(`2次評価(経営層)（${periodKey}）を提出しますか？提出後はこの期を編集できません。`)
       if (!confirmed) return
       const now = new Date().toISOString()
@@ -3054,7 +3131,7 @@ function App() {
         }
       })
     },
-    [effectiveEvalPeriodKey, isExecutiveEvalDeadlineLocked],
+    [effectiveEvalPeriodKey, evalPeriodDefinitions],
   )
 
   const cleanupEvalPeriodHistory = useCallback(() => {
@@ -3107,16 +3184,6 @@ function App() {
     return 1
   }, [])
 
-  useEffect(() => {
-    // 管理者の評価者用画面では、メンバーごとの評価期候補を使うため、
-    // ここで共通候補による強制補正をかけると期キーが往復してしまう。
-    if (workspaceView === 'admin') return
-    const valid = new Set(evalPeriodSelectOptions.map((o) => o.value))
-    if (!activeEvalPeriodKey || !valid.size) return
-    if (!valid.has(activeEvalPeriodKey)) {
-      setActiveEvalPeriodKey(evalPeriodSelectOptions[0].value)
-    }
-  }, [activeEvalPeriodKey, evalPeriodSelectOptions, workspaceView])
 
   const updateSelfEvalForSubject = useCallback(
     (updater) => {
@@ -3263,7 +3330,7 @@ function App() {
             ...state,
             savedAt: now,
             ...(nextEvalGrade ? { evalGrade: nextEvalGrade } : {}),
-            ...(prevSlot?.submittedAt ? { submittedAt: prevSlot.submittedAt } : {}),
+            ...(String(prevSlot?.submittedAt ?? '').trim() ? { submittedAt: prevSlot.submittedAt } : {}),
             ...(prevWithdrawals > 0 ? { submissionWithdrawalsUsed: prevWithdrawals } : {}),
           },
         }
@@ -3308,7 +3375,7 @@ function App() {
             ...state,
             savedAt: now,
             ...(nextEvalGrade ? { evalGrade: nextEvalGrade } : {}),
-            ...(prevSlot?.submittedAt ? { submittedAt: prevSlot.submittedAt } : {}),
+            ...(String(prevSlot?.submittedAt ?? '').trim() ? { submittedAt: prevSlot.submittedAt } : {}),
             ...(prevWithdrawals > 0 ? { submissionWithdrawalsUsed: prevWithdrawals } : {}),
           },
         }
@@ -3339,7 +3406,7 @@ function App() {
                 [periodKey]: {
                   ...state,
                   savedAt: now,
-                  ...(prevSlot?.submittedAt ? { submittedAt: prevSlot.submittedAt } : {}),
+                  ...(String(prevSlot?.submittedAt ?? '').trim() ? { submittedAt: prevSlot.submittedAt } : {}),
                 },
               }
             : {}),
@@ -3543,28 +3610,6 @@ function App() {
     [menuRoleKey, menuVisibilityByRole, extraVisibleMenuKeysForCurrentUser],
   )
 
-  useEffect(() => {
-    if (!isLoggedIn) return
-    // 管理者ダッシュの「上司評価を実施」から遷移した場合は、
-    // メニュー表示設定に関わらず対象者の上司評価画面を優先表示する。
-    if (workspaceView === 'bossEval' && selectedEvalEmployeeId) return
-    if (isWorkspaceMenuVisible(workspaceView)) return
-    const order = [
-      'gyoseki',
-      'count',
-      'honsu',
-      'settings',
-      'admin',
-      'employee',
-      'skillup',
-      'selfeval',
-      'goals',
-      'bossEval',
-      'execEval',
-    ]
-    const next = order.find((k) => isWorkspaceMenuVisible(k)) ?? 'gyoseki'
-    setWorkspaceView(next)
-  }, [isLoggedIn, workspaceView, menuVisibilityByRole, menuRoleKey, isWorkspaceMenuVisible, selectedEvalEmployeeId])
 
   const handleLogin = (event) => {
     event.preventDefault()
@@ -3684,11 +3729,21 @@ function App() {
   }, [])
 
   const handleRetryCloudSync = async () => {
-    const payload = buildPersistPayload()
+    const payload = buildPersistPayload(true, { includeEvalDrafts: false })
     await saveCloudState(payload)
   }
 
-  const buildPersistPayload = (includeSensitive = true) => {
+  const buildPersistPayload = (includeSensitive = true, options = {}) => {
+    const { includeEvalDrafts = true } = options
+    const persistedSelfEvalHistory = includeEvalDrafts
+      ? selfEvalHistoryByEmployee
+      : filterCommittedEvalHistoryMap(selfEvalHistoryByEmployee)
+    const persistedSupervisorEvalHistory = includeEvalDrafts
+      ? supervisorEvalHistoryByEmployee
+      : filterCommittedEvalHistoryMap(supervisorEvalHistoryByEmployee)
+    const persistedExecutiveEvalHistory = includeEvalDrafts
+      ? executiveEvalHistoryByEmployee
+      : filterCommittedEvalHistoryMap(executiveEvalHistoryByEmployee)
     const payload = {
     rows,
       employeeDirectoryRows: includeSensitive ? employeeDirectoryRows : stripSensitiveEmployeeFields(employeeDirectoryRows),
@@ -3706,12 +3761,16 @@ function App() {
     menuVisibilityByRole,
       activeEvalPeriodKey,
       evalPeriodDefinitions,
-    selfEvalByEmployee,
-    supervisorEvalByEmployee,
-    executiveEvalByEmployee,
-      selfEvalHistoryByEmployee,
-      supervisorEvalHistoryByEmployee,
-      executiveEvalHistoryByEmployee,
+    ...(includeEvalDrafts
+      ? {
+          selfEvalByEmployee,
+          supervisorEvalByEmployee,
+          executiveEvalByEmployee,
+        }
+      : {}),
+      selfEvalHistoryByEmployee: persistedSelfEvalHistory,
+      supervisorEvalHistoryByEmployee: persistedSupervisorEvalHistory,
+      executiveEvalHistoryByEmployee: persistedExecutiveEvalHistory,
       countCurrent,
       countHourlyTarget,
       countIsRunning,
@@ -3740,7 +3799,7 @@ function App() {
   buildPersistPayloadRef.current = () => buildPersistPayload(true)
 
   const applyPersistPayload = (payload, options = {}) => {
-    const { includeUiState = true } = options
+    const { includeUiState = true, mergeEvalHistories = false, includeEvalDrafts = true } = options
     const cloudRows = Array.isArray(payload.rows) && payload.rows.length > 0 ? payload.rows : null
     if (cloudRows) setRows(cloudRows)
     if (Array.isArray(payload.employeeDirectoryRows) && payload.employeeDirectoryRows.length > 0) {
@@ -3854,10 +3913,16 @@ function App() {
     if (payload.menuVisibilityByRole && typeof payload.menuVisibilityByRole === 'object' && !Array.isArray(payload.menuVisibilityByRole)) {
       setMenuVisibilityByRole(normalizeMenuVisibilityByRole(payload.menuVisibilityByRole))
     }
-    if (payload.selfEvalByEmployee && typeof payload.selfEvalByEmployee === 'object' && !Array.isArray(payload.selfEvalByEmployee)) {
+    if (
+      includeEvalDrafts &&
+      payload.selfEvalByEmployee &&
+      typeof payload.selfEvalByEmployee === 'object' &&
+      !Array.isArray(payload.selfEvalByEmployee)
+    ) {
       setSelfEvalByEmployee(normalizeEvalByEmployeeMap(payload.selfEvalByEmployee))
     }
     if (
+      includeEvalDrafts &&
       payload.supervisorEvalByEmployee &&
       typeof payload.supervisorEvalByEmployee === 'object' &&
       !Array.isArray(payload.supervisorEvalByEmployee)
@@ -3865,6 +3930,7 @@ function App() {
       setSupervisorEvalByEmployee(normalizeEvalByEmployeeMap(payload.supervisorEvalByEmployee))
     }
     if (
+      includeEvalDrafts &&
       payload.executiveEvalByEmployee &&
       typeof payload.executiveEvalByEmployee === 'object' &&
       !Array.isArray(payload.executiveEvalByEmployee)
@@ -3883,27 +3949,42 @@ function App() {
       typeof payload.selfEvalHistoryByEmployee === 'object' &&
       !Array.isArray(payload.selfEvalHistoryByEmployee)
     ) {
-      setSelfEvalHistoryByEmployee(
-        normalizeEvalHistoryByEmployeeMap(payload.selfEvalHistoryByEmployee, normalizeEvalByEmployeeMap),
-      )
+      let normalized = normalizeEvalHistoryByEmployeeMap(payload.selfEvalHistoryByEmployee, normalizeEvalByEmployeeMap)
+      if (!includeEvalDrafts) normalized = filterCommittedEvalHistoryMap(normalized)
+      if (mergeEvalHistories) {
+        setSelfEvalHistoryByEmployee((prev) => mergeEvalHistoryMapBySavedAt(prev, normalized))
+      } else {
+        setSelfEvalHistoryByEmployee(normalized)
+      }
     }
     if (
       payload.supervisorEvalHistoryByEmployee &&
       typeof payload.supervisorEvalHistoryByEmployee === 'object' &&
       !Array.isArray(payload.supervisorEvalHistoryByEmployee)
     ) {
-      setSupervisorEvalHistoryByEmployee(
-        normalizeEvalHistoryByEmployeeMap(payload.supervisorEvalHistoryByEmployee, normalizeEvalByEmployeeMap),
-      )
+      let normalized = normalizeEvalHistoryByEmployeeMap(payload.supervisorEvalHistoryByEmployee, normalizeEvalByEmployeeMap)
+      if (!includeEvalDrafts) normalized = filterCommittedEvalHistoryMap(normalized)
+      if (mergeEvalHistories) {
+        setSupervisorEvalHistoryByEmployee((prev) => mergeEvalHistoryMapBySavedAt(prev, normalized))
+      } else {
+        setSupervisorEvalHistoryByEmployee(normalized)
+      }
     }
     if (
       payload.executiveEvalHistoryByEmployee &&
       typeof payload.executiveEvalHistoryByEmployee === 'object' &&
       !Array.isArray(payload.executiveEvalHistoryByEmployee)
     ) {
-      setExecutiveEvalHistoryByEmployee(
-        normalizeEvalHistoryByEmployeeMap(payload.executiveEvalHistoryByEmployee, normalizeExecutiveEvalByEmployeeMap),
+      let normalized = normalizeEvalHistoryByEmployeeMap(
+        payload.executiveEvalHistoryByEmployee,
+        normalizeExecutiveEvalByEmployeeMap,
       )
+      if (!includeEvalDrafts) normalized = filterCommittedEvalHistoryMap(normalized)
+      if (mergeEvalHistories) {
+        setExecutiveEvalHistoryByEmployee((prev) => mergeEvalHistoryMapBySavedAt(prev, normalized))
+      } else {
+        setExecutiveEvalHistoryByEmployee(normalized)
+      }
     }
     if (typeof payload.adminPassword === 'string' && payload.adminPassword) {
       setAdminPassword(payload.adminPassword)
@@ -4133,7 +4214,7 @@ function App() {
   const flushCloudStateBestEffort = useCallback(() => {
     if (!supabase) return
     try {
-      const payload = buildPersistPayloadRef.current()
+      const payload = buildPersistPayload(true, { includeEvalDrafts: false })
       void saveCloudState(payload, { silent: true })
     } catch (e) {
       console.warn('[WorkVision] Supabase への退避保存に失敗しました', e)
@@ -4211,7 +4292,26 @@ function App() {
   useEffect(() => {
     if (!supabase || !isCloudReady) return
     const timer = window.setTimeout(async () => {
-      const payload = buildPersistPayload()
+      const payload = buildPersistPayload(true, { includeEvalDrafts: false })
+      const serialized = JSON.stringify(payload)
+      if (serialized === lastCloudPersistRef.current) return
+      const ok = await saveCloudState(payload, { silent: true })
+      if (ok) lastCloudPersistRef.current = serialized
+    }, 350)
+    return () => window.clearTimeout(timer)
+  }, [
+    selfEvalHistoryByEmployee,
+    supervisorEvalHistoryByEmployee,
+    executiveEvalHistoryByEmployee,
+    goalSubmissionByEmployee,
+    isCloudReady,
+    saveCloudState,
+  ])
+
+  useEffect(() => {
+    if (!supabase || !isCloudReady) return
+    const timer = window.setTimeout(async () => {
+      const payload = buildPersistPayload(true, { includeEvalDrafts: false })
       const serialized = JSON.stringify(payload)
       if (serialized === lastCloudPersistRef.current) return
       const ok = await saveCloudState(payload, { silent: true })
@@ -4280,7 +4380,11 @@ function App() {
           try {
             const serialized = JSON.stringify(payload)
             if (!serialized || serialized === lastCloudAppliedRef.current || serialized === lastCloudPersistRef.current) return
-            applyPersistPayload(payload, { includeUiState: false })
+            applyPersistPayload(payload, {
+              includeUiState: false,
+              mergeEvalHistories: true,
+              includeEvalDrafts: false,
+            })
             lastCloudAppliedRef.current = serialized
             lastCloudPersistRef.current = serialized
             setSyncMessage('Supabaseから最新データを反映しました')
@@ -10225,7 +10329,7 @@ function AdminMockPage({
     if (!selectedMember) return false
     const periodKey = selectedMemberEffectivePeriodKey
     if (!periodKey) return false
-    return Boolean(supervisorEvalHistoryByEmployee?.[selectedMember.id]?.[periodKey]?.submittedAt)
+    return Boolean(String(supervisorEvalHistoryByEmployee?.[selectedMember.id]?.[periodKey]?.submittedAt ?? '').trim())
   }, [selectedMember, selectedMemberEffectivePeriodKey, supervisorEvalHistoryByEmployee])
   const selectedMemberSupervisorSubmissionWithdrawalsUsed = useMemo(() => {
     if (!selectedMember) return 0
@@ -10293,7 +10397,7 @@ function AdminMockPage({
     if (!selectedMember) return false
     const periodKey = selectedMemberEffectivePeriodKey
     if (!periodKey) return false
-    return Boolean(executiveEvalHistoryByEmployee?.[selectedMember.id]?.[periodKey]?.submittedAt)
+    return Boolean(String(executiveEvalHistoryByEmployee?.[selectedMember.id]?.[periodKey]?.submittedAt ?? '').trim())
   }, [selectedMember, selectedMemberEffectivePeriodKey, executiveEvalHistoryByEmployee])
   const selectedMemberGoals = useMemo(() => {
     if (!selectedMember) return []
