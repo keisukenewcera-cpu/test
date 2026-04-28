@@ -115,6 +115,7 @@ const GYOSEKI_CSV_COLUMNS = [
 
 const STORAGE_KEY = 'performanceAllowanceAppData'
 const CLOUD_STATE_ID = 'default'
+const FORCE_LOGOUT_ACK_KEY = 'performanceAllowanceForceLogoutAck'
 /** 自己評価・上司評価・目標管理の「提出取り消し」は評価期ごとにこの回数まで */
 const MAX_EVAL_SUBMISSION_WITHDRAWALS = 3
 
@@ -445,6 +446,28 @@ const loadSavedData = () => {
     return JSON.parse(raw)
   } catch {
     return null
+  }
+}
+
+const loadForceLogoutAckTs = () => {
+  if (typeof window === 'undefined') return 0
+  try {
+    const raw = window.localStorage.getItem(FORCE_LOGOUT_ACK_KEY)
+    const ts = Date.parse(String(raw ?? '').trim())
+    return Number.isFinite(ts) ? ts : 0
+  } catch {
+    return 0
+  }
+}
+
+const saveForceLogoutAckTs = (iso) => {
+  if (typeof window === 'undefined') return
+  try {
+    const v = String(iso ?? '').trim()
+    if (!v) return
+    window.localStorage.setItem(FORCE_LOGOUT_ACK_KEY, v)
+  } catch {
+    // ignore storage errors
   }
 }
 
@@ -1635,6 +1658,7 @@ function App() {
   const [password, setPassword] = useState('')
   const [loginMode, setLoginMode] = useState('employee')
   const [loginError, setLoginError] = useState('')
+  const [sessionNotice, setSessionNotice] = useState('')
   const [isLoggedIn, setIsLoggedIn] = useState(false)
   const [loggedInEmployeeId, setLoggedInEmployeeId] = useState(null)
   const [adminPassword, setAdminPassword] = useState(() => (loadSavedData()?.adminPassword ?? 'test'))
@@ -1646,6 +1670,10 @@ function App() {
   const [resetFeedback, setResetFeedback] = useState('')
   const [resetFeedbackType, setResetFeedbackType] = useState('error')
   const savedData = loadSavedData()
+  const [forceLogoutAt, setForceLogoutAt] = useState(() => String(savedData?.forceLogoutAt ?? '').trim())
+  const [forceLogoutMessage, setForceLogoutMessage] = useState(() =>
+    String(savedData?.forceLogoutMessage ?? 'アップデートが入りました。再ログインしてください。').trim(),
+  )
   const __initEvalPeriodState = readInitialEvalPeriodStateFromSavedData(savedData)
   const [rows, setRows] = useState(() => {
     const savedRows = savedData?.rows
@@ -1943,6 +1971,34 @@ function App() {
   const [snapshotPeriod, setSnapshotPeriod] = useState(() => savedData?.snapshotPeriod ?? getCurrentPeriod())
   const [snapshotHistory, setSnapshotHistory] = useState([])
   const [snapshotMessage, setSnapshotMessage] = useState('')
+  const forceLogoutAckRef = useRef(loadForceLogoutAckTs())
+
+  const acknowledgeForceLogout = useCallback((iso) => {
+    const v = String(iso ?? '').trim()
+    if (!v) return
+    const ts = Date.parse(v)
+    if (!Number.isFinite(ts)) return
+    forceLogoutAckRef.current = ts
+    saveForceLogoutAckTs(v)
+  }, [])
+
+  const processForceLogoutSignal = useCallback(
+    (payload) => {
+      const at = String(payload?.forceLogoutAt ?? '').trim()
+      if (!at) return
+      const ts = Date.parse(at)
+      if (!Number.isFinite(ts)) return
+      const message = String(payload?.forceLogoutMessage ?? 'アップデートが入りました。再ログインしてください。').trim()
+      setForceLogoutAt(at)
+      setForceLogoutMessage(message || 'アップデートが入りました。再ログインしてください。')
+      if (ts <= forceLogoutAckRef.current) return
+      setSessionNotice(message || 'アップデートが入りました。再ログインしてください。')
+      setIsLoggedIn(false)
+      setLoggedInEmployeeId(null)
+      acknowledgeForceLogout(at)
+    },
+    [acknowledgeForceLogout],
+  )
   const [syncMessage, setSyncMessage] = useState(
     supabase ? 'Supabase同期を確認中...' : 'Supabase未設定（ローカル保存のみ）',
   )
@@ -3634,6 +3690,7 @@ function App() {
       if (normalizedLoginId === 'admin@example.com' && normalizedPassword === String(adminPassword ?? '').trim()) {
         setIsLoggedIn(true)
         setLoggedInEmployeeId(null)
+        setSessionNotice('')
         setLoginError('')
         return
       }
@@ -3650,6 +3707,7 @@ function App() {
     if (matchedEmployee) {
       setIsLoggedIn(true)
       setLoggedInEmployeeId(matchedEmployee.id)
+      setSessionNotice('')
       setLoginError('')
       return
     }
@@ -3721,6 +3779,18 @@ function App() {
     setLoggedInEmployeeId(null)
   }
 
+  const handleForceLogoutAllUsers = useCallback(() => {
+    if (!window.confirm('全ユーザーを強制ログアウトしますか？')) return
+    const now = new Date().toISOString()
+    const message = 'アップデートが入りました。再ログインしてください。'
+    setForceLogoutAt(now)
+    setForceLogoutMessage(message)
+    setSessionNotice(message)
+    setIsLoggedIn(false)
+    setLoggedInEmployeeId(null)
+    acknowledgeForceLogout(now)
+  }, [acknowledgeForceLogout])
+
   const saveCloudState = useCallback(async (payload, options = {}) => {
     const { silent = false } = options
     if (!supabase) {
@@ -3759,6 +3829,8 @@ function App() {
       ? executiveEvalHistoryByEmployee
       : filterCommittedEvalHistoryMap(executiveEvalHistoryByEmployee)
     const payload = {
+    forceLogoutAt,
+    forceLogoutMessage,
     rows,
       employeeDirectoryRows: includeSensitive ? employeeDirectoryRows : stripSensitiveEmployeeFields(employeeDirectoryRows),
     skillSettings,
@@ -3825,6 +3897,7 @@ function App() {
       includeSettingsData = true,
       forceEmployeeDirectory = false,
     } = options
+    processForceLogoutSignal(payload)
     const cloudRows = Array.isArray(payload.rows) && payload.rows.length > 0 ? payload.rows : null
     if (cloudRows) setRows(cloudRows)
     if (
@@ -4357,6 +4430,8 @@ function App() {
     selfEvalHistoryByEmployee,
     supervisorEvalHistoryByEmployee,
     executiveEvalHistoryByEmployee,
+    forceLogoutAt,
+    forceLogoutMessage,
   ])
 
   useEffect(() => {
@@ -4373,6 +4448,8 @@ function App() {
     selfEvalHistoryByEmployee,
     supervisorEvalHistoryByEmployee,
     executiveEvalHistoryByEmployee,
+    forceLogoutAt,
+    forceLogoutMessage,
     goalSubmissionByEmployee,
     isCloudReady,
     saveCloudState,
@@ -4408,6 +4485,8 @@ function App() {
     selfEvalHistoryByEmployee,
     supervisorEvalHistoryByEmployee,
     executiveEvalHistoryByEmployee,
+    forceLogoutAt,
+    forceLogoutMessage,
     adminPassword,
     departmentSalesDenture,
     departmentSalesCk,
@@ -4536,6 +4615,7 @@ function App() {
                 </div>
 
                 {loginError ? <p className="errorMessage">{loginError}</p> : null}
+                {sessionNotice ? <p className="errorMessage">{sessionNotice}</p> : null}
 
                 <button type="submit" className="primaryButton loginSubmitBtn">
                   {loginMode === 'admin' ? '🛡️ 管理者としてログイン' : 'ログイン'}
@@ -4652,6 +4732,11 @@ function App() {
               <span className="sessionUserChip" title="現在ログイン中のアカウント">
                 {loggedInAccountLabel}
               </span>
+              {loginMode === 'admin' ? (
+                <button type="button" className="secondaryButton logoutTopRight" onClick={handleForceLogoutAllUsers}>
+                  強制ログアウト
+                </button>
+              ) : null}
               <button type="button" className="secondaryButton logoutTopRight" onClick={handleLogout}>
                 ログアウト
               </button>
