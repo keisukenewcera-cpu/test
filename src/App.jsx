@@ -1346,6 +1346,7 @@ function normalizeGoalList(rawList, empId = '') {
 function mergeEvalHistoryMapBySavedAt(currentMap, incomingMap) {
   const current = currentMap && typeof currentMap === 'object' && !Array.isArray(currentMap) ? currentMap : {}
   const incoming = incomingMap && typeof incomingMap === 'object' && !Array.isArray(incomingMap) ? incomingMap : {}
+  let changed = false
   const merged = { ...current }
   const toSavedAtMs = (slot) => {
     const raw = String(slot?.savedAt ?? '').trim()
@@ -1356,23 +1357,29 @@ function mergeEvalHistoryMapBySavedAt(currentMap, incomingMap) {
     if (!incomingPeriods || typeof incomingPeriods !== 'object' || Array.isArray(incomingPeriods)) continue
     const currentPeriods =
       merged[empId] && typeof merged[empId] === 'object' && !Array.isArray(merged[empId]) ? merged[empId] : {}
+    let periodChanged = false
     const nextPeriods = { ...currentPeriods }
     for (const [periodKey, incomingSlot] of Object.entries(incomingPeriods)) {
       if (!incomingSlot || typeof incomingSlot !== 'object' || Array.isArray(incomingSlot)) continue
       const currentSlot = currentPeriods?.[periodKey]
       if (!currentSlot || typeof currentSlot !== 'object' || Array.isArray(currentSlot)) {
         nextPeriods[periodKey] = incomingSlot
+        periodChanged = true
         continue
       }
       const incomingMs = toSavedAtMs(incomingSlot)
       const currentMs = toSavedAtMs(currentSlot)
-      if (incomingMs >= currentMs) {
+      if (incomingMs > currentMs || (incomingMs >= currentMs && currentSlot !== incomingSlot)) {
         nextPeriods[periodKey] = incomingSlot
+        periodChanged = true
       }
     }
-    merged[empId] = nextPeriods
+    if (periodChanged || !Object.prototype.hasOwnProperty.call(current, empId)) {
+      merged[empId] = nextPeriods
+      changed = true
+    }
   }
-  return merged
+  return changed ? merged : current
 }
 
 function filterCommittedEvalHistoryMap(historyMap) {
