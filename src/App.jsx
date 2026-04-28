@@ -2771,23 +2771,26 @@ function App() {
     if (!empId || !periodKey) return ''
     return String(goalFocusMajorByEmployeePeriod?.[empId]?.[periodKey] ?? '').trim()
   }, [evalSubjectEmployee?.id, effectiveEvalPeriodKey, goalFocusMajorByEmployeePeriod])
-  const resolveEvalGradeForPeriod = useCallback(
-    (employeeId, periodKey, fallbackGrade = '') => {
-      const empId = String(employeeId ?? '').trim()
-      const pk = String(periodKey ?? '').trim()
-      if (!empId || !pk) return String(fallbackGrade ?? '').trim()
-      const selfSlot = selfEvalHistoryByEmployee?.[empId]?.[pk]
-      const bossSlot = supervisorEvalHistoryByEmployee?.[empId]?.[pk]
-      const selfSubmitted = Boolean(String(selfSlot?.submittedAt ?? '').trim())
-      const bossSubmitted = Boolean(String(bossSlot?.submittedAt ?? '').trim())
-      const selfGrade = String(selfSlot?.evalGrade ?? '').trim()
-      const bossGrade = String(bossSlot?.evalGrade ?? '').trim()
-      if (selfSubmitted && selfGrade) return selfGrade
-      if (bossSubmitted && bossGrade) return bossGrade
-      return String(evalGradeByEmployeeId?.[empId] ?? fallbackGrade ?? '').trim()
-    },
-    [selfEvalHistoryByEmployee, supervisorEvalHistoryByEmployee, evalGradeByEmployeeId],
-  )
+  function resolveEvalGradeForPeriod(employeeId, periodKey, fallbackGrade = '') {
+    const empId = String(employeeId ?? '').trim()
+    const pk = String(periodKey ?? '').trim()
+    if (!empId || !pk) return String(fallbackGrade ?? '').trim()
+    const selfSlot = selfEvalHistoryByEmployee?.[empId]?.[pk]
+    const bossSlot = supervisorEvalHistoryByEmployee?.[empId]?.[pk]
+    const selfSubmitted = Boolean(String(selfSlot?.submittedAt ?? '').trim())
+    const bossSubmitted = Boolean(String(bossSlot?.submittedAt ?? '').trim())
+    const selfGrade = String(selfSlot?.evalGrade ?? '').trim()
+    const bossGrade = String(bossSlot?.evalGrade ?? '').trim()
+    if (selfSubmitted && selfGrade) return selfGrade
+    if (bossSubmitted && bossGrade) return bossGrade
+    const currentGrade =
+      String(
+        employeeDirectoryRows.find((row) => String(row?.id ?? '').trim() === empId)?.grade ??
+          fallbackGrade ??
+          '',
+      ).trim()
+    return currentGrade
+  }
   const selfBossGapForPeriod = useCallback(
     (employeeId, periodKey) => {
       const empId = String(employeeId ?? '').trim()
@@ -2795,7 +2798,7 @@ function App() {
       if (!empId || !pk) return Number.NaN
       const selfState = selfEvalHistoryByEmployee?.[empId]?.[pk] ?? { scores: selfEvalByEmployee?.[empId]?.scores ?? {} }
       const bossState = supervisorEvalByEmployee?.[empId] ?? supervisorEvalHistoryByEmployee?.[empId]?.[pk] ?? { scores: {} }
-      const evalGrade = resolveEvalGradeForPeriod(empId, pk, evalGradeByEmployeeId?.[empId])
+      const evalGrade = resolveEvalGradeForPeriod(empId, pk, '')
       const categories = buildEvalCategoriesForGrade(evaluationCriteria, evalGrade)
       const self100 = weightedEvalScore100ByCategories(categories, selfState?.scores ?? {})
       const boss100 = weightedEvalScore100ByCategories(categories, bossState?.scores ?? {})
@@ -2807,8 +2810,7 @@ function App() {
       selfEvalByEmployee,
       supervisorEvalByEmployee,
       supervisorEvalHistoryByEmployee,
-      evalGradeByEmployeeId,
-      resolveEvalGradeForPeriod,
+      employeeDirectoryRows,
       evaluationCriteria,
     ],
   )
@@ -4154,8 +4156,13 @@ function App() {
       setSnapshotMessage('履歴読込に失敗しました')
       return
     }
-    applyPersistPayload(data.payload)
-    setSnapshotMessage(`${period} の履歴を読み込みました`)
+    try {
+      applyPersistPayload(data.payload)
+      setSnapshotMessage(`${period} の履歴を読み込みました`)
+    } catch (e) {
+      console.warn('[WorkVision] スナップショット適用に失敗しました', e)
+      setSnapshotMessage('履歴読込データの適用に失敗しました')
+    }
   }
 
   useEffect(() => {
@@ -4184,10 +4191,15 @@ function App() {
       const payload = data?.payload
       if (payload && typeof payload === 'object') {
         const serialized = JSON.stringify(payload)
-        applyPersistPayload(payload)
-        lastCloudPersistRef.current = serialized
-        lastCloudAppliedRef.current = serialized
-        setSyncMessage('Supabaseから復元済み')
+        try {
+          applyPersistPayload(payload)
+          lastCloudPersistRef.current = serialized
+          lastCloudAppliedRef.current = serialized
+          setSyncMessage('Supabaseから復元済み')
+        } catch (e) {
+          console.warn('[WorkVision] Supabase復元データの適用に失敗しました', e)
+          setSyncMessage('Supabase復元データ適用失敗（ローカル表示を継続）')
+        }
       } else {
         setSyncMessage('Supabase同期待機中（初回保存で作成）')
       }
