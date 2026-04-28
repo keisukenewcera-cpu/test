@@ -3779,7 +3779,7 @@ function App() {
     setLoggedInEmployeeId(null)
   }
 
-  const handleForceLogoutAllUsers = useCallback(() => {
+  const handleForceLogoutAllUsers = useCallback(async () => {
     if (!window.confirm('全ユーザーを強制ログアウトしますか？')) return
     const now = new Date().toISOString()
     const message = 'アップデートが入りました。再ログインしてください。'
@@ -3789,7 +3789,16 @@ function App() {
     setIsLoggedIn(false)
     setLoggedInEmployeeId(null)
     acknowledgeForceLogout(now)
-  }, [acknowledgeForceLogout])
+    const payload = {
+      ...buildPersistPayload(true, { includeEvalDrafts: false, includeUiState: false }),
+      forceLogoutAt: now,
+      forceLogoutMessage: message,
+    }
+    const ok = await saveCloudState(payload)
+    if (ok) {
+      lastCloudPersistRef.current = JSON.stringify(payload)
+    }
+  }, [acknowledgeForceLogout, saveCloudState])
 
   const saveCloudState = useCallback(async (payload, options = {}) => {
     const { silent = false } = options
