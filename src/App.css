@@ -1895,17 +1895,6 @@ select:focus {
   font-size: 18px;
 }
 
-.memberDetailActions {
-  margin-top: 10px;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-
-.memberDetailActions--three {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
 .memberPromoteBtn {
   flex-shrink: 0;
   padding: 3px 9px;
@@ -1924,26 +1913,6 @@ select:focus {
 }
 
 .memberPromoteBtn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.memberDetailPromoteBtn {
-  border-radius: 8px;
-  border: 1px solid #2563eb;
-  background: #eff6ff;
-  color: #1d4ed8;
-  font-size: 12px;
-  font-weight: 800;
-  cursor: pointer;
-  font-family: inherit;
-}
-
-.memberDetailPromoteBtn:hover:not(:disabled) {
-  background: #dbeafe;
-}
-
-.memberDetailPromoteBtn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
@@ -2060,16 +2029,6 @@ select:focus {
 
 .promotionRejectBtn:hover {
   background: #f1f5f9;
-}
-
-.memberDetailActions button {
-  border-radius: 8px;
-  border: 1px solid #d1d5db;
-  background: #f8fafc;
-  padding: 8px 10px;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
 }
 
 .memberDetailTabs {
@@ -4680,6 +4639,27 @@ select:focus {
 
 .selfEvalSubmitBtn.isLocked {
   background: #475569;
+}
+
+.selfEvalWithdrawBtn {
+  padding: 9px 14px;
+  border-radius: 10px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.selfEvalWithdrawBtn:hover {
+  background: #f8fafc;
+  border-color: #94a3b8;
+}
+
+.selfEvalWithdrawHint {
+  flex-basis: 100%;
 }
 
 .selfEvalSubmitHint {

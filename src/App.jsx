@@ -115,6 +115,15 @@ const GYOSEKI_CSV_COLUMNS = [
 
 const STORAGE_KEY = 'performanceAllowanceAppData'
 const CLOUD_STATE_ID = 'default'
+/** 自己評価・上司評価・目標管理の「提出取り消し」は評価期ごとにこの回数まで */
+const MAX_EVAL_SUBMISSION_WITHDRAWALS = 3
+
+function clampEvalSubmissionWithdrawalsUsed(raw) {
+  const n = Math.trunc(Number(raw))
+  if (!Number.isFinite(n) || n < 0) return 0
+  return Math.min(MAX_EVAL_SUBMISSION_WITHDRAWALS, n)
+}
+
 const getCurrentPeriod = () => new Date().toISOString().slice(0, 7)
 function evalPeriodAnchorMs(key) {
   const s = String(key ?? '').trim()
@@ -201,6 +210,22 @@ function deadlineStartMs(value) {
   const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/)
   if (!m) return Number.NaN
   return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0).getTime()
+}
+
+function isSelfEvalDeadlineLockedForPeriod(evalPeriodDefinitions, periodKey) {
+  const pk = String(periodKey ?? '').trim()
+  if (!pk) return false
+  const row = (evalPeriodDefinitions ?? []).find((d) => String(d?.key ?? '').trim() === pk)
+  const at = normalizeDeadlineDate(row?.selfEvalDeadlineAt)
+  return Number.isFinite(deadlineStartMs(at)) ? Date.now() >= deadlineStartMs(at) : false
+}
+
+function isSupervisorEvalDeadlineLockedForPeriod(evalPeriodDefinitions, periodKey) {
+  const pk = String(periodKey ?? '').trim()
+  if (!pk) return false
+  const row = (evalPeriodDefinitions ?? []).find((d) => String(d?.key ?? '').trim() === pk)
+  const at = normalizeDeadlineDate(row?.supervisorEvalDeadlineAt)
+  return Number.isFinite(deadlineStartMs(at)) ? Date.now() >= deadlineStartMs(at) : false
 }
 
 function normalizeEvalPeriodDefinitionRow(row) {
@@ -1284,6 +1309,7 @@ function normalizeEvalHistoryByEmployeeMap(raw, normalizer) {
       const resubmitRequestedAtRaw =
         typeof state?.resubmitRequestedAt === 'string' ? state.resubmitRequestedAt.trim() : ''
       const resubmitReasonRaw = typeof state?.resubmitReason === 'string' ? state.resubmitReason.trim() : ''
+      const submissionWithdrawalsUsed = clampEvalSubmissionWithdrawalsUsed(state?.submissionWithdrawalsUsed)
       periodMap[periodKey] = {
         ...normalized,
         savedAt:
@@ -1294,6 +1320,7 @@ function normalizeEvalHistoryByEmployeeMap(raw, normalizer) {
         ...(submittedAtRaw ? { submittedAt: submittedAtRaw } : {}),
         ...(resubmitRequestedAtRaw ? { resubmitRequestedAt: resubmitRequestedAtRaw } : {}),
         ...(resubmitReasonRaw ? { resubmitReason: resubmitReasonRaw } : {}),
+        ...(submissionWithdrawalsUsed > 0 ? { submissionWithdrawalsUsed } : {}),
       }
     }
     if (Object.keys(periodMap).length) out[empId] = periodMap
@@ -1392,6 +1419,12 @@ function areEvalStateMapsEqual(a, b) {
     if (!areShallowStringMapEqual(ae.comments, be.comments)) return false
   }
   return true
+}
+
+function areExecutiveEvalStateMapsEqual(a, b) {
+  const na = normalizeExecutiveEvalByEmployeeMap(a && typeof a === 'object' && !Array.isArray(a) ? a : {})
+  const nb = normalizeExecutiveEvalByEmployeeMap(b && typeof b === 'object' && !Array.isArray(b) ? b : {})
+  return JSON.stringify(na) === JSON.stringify(nb)
 }
 
 function resizeLevelCriteriaArray(prev, newLen) {
@@ -1749,9 +1782,15 @@ function App() {
       if (!empId || !periods || typeof periods !== 'object' || Array.isArray(periods)) continue
       const periodMap = {}
       for (const [periodKey, state] of Object.entries(periods)) {
+        if (!periodKey) continue
         const submittedAt = typeof state?.submittedAt === 'string' ? state.submittedAt.trim() : ''
-        if (!periodKey || !submittedAt) continue
-        periodMap[periodKey] = { submittedAt }
+        const submissionWithdrawalsUsed = clampEvalSubmissionWithdrawalsUsed(state?.submissionWithdrawalsUsed)
+        if (submittedAt) {
+          periodMap[periodKey] =
+            submissionWithdrawalsUsed > 0 ? { submittedAt, submissionWithdrawalsUsed } : { submittedAt }
+        } else if (submissionWithdrawalsUsed > 0) {
+          periodMap[periodKey] = { submissionWithdrawalsUsed }
+        }
       }
       if (Object.keys(periodMap).length) out[empId] = periodMap
     }
@@ -2363,14 +2402,47 @@ function App() {
     const now = new Date().toISOString()
     const empId = goalMgmtEmployee.id
     const periodKey = goalMgmtPeriodKey
+    setGoalSubmissionByEmployee((prev) => {
+      const prevSlot = prev?.[empId]?.[periodKey]
+      const w = clampEvalSubmissionWithdrawalsUsed(prevSlot?.submissionWithdrawalsUsed)
+      return {
+        ...(prev ?? {}),
+        [empId]: {
+          ...((prev ?? {})[empId] ?? {}),
+          [periodKey]: { submittedAt: now, ...(w > 0 ? { submissionWithdrawalsUsed: w } : {}) },
+        },
+      }
+    })
+  }, [goalMgmtEmployee?.id, goalMgmtPeriodKey, goalMgmtSubmittedForActive])
+  const withdrawGoalsSubmissionForMember = useCallback((employeeId, periodKeyOverride) => {
+    const empId = String(employeeId ?? '').trim()
+    const periodKey = String(periodKeyOverride ?? '').trim()
+    if (!empId || !periodKey) return
+    const slot = goalSubmissionByEmployee?.[empId]?.[periodKey]
+    if (!String(slot?.submittedAt ?? '').trim()) return
+    const used = clampEvalSubmissionWithdrawalsUsed(slot?.submissionWithdrawalsUsed)
+    if (used >= MAX_EVAL_SUBMISSION_WITHDRAWALS) {
+      window.alert(`この評価期での提出取り消しは${MAX_EVAL_SUBMISSION_WITHDRAWALS}回までです。`)
+      return
+    }
+    const nextUsed = used + 1
+    const remaining = MAX_EVAL_SUBMISSION_WITHDRAWALS - nextUsed
+    const empLabel =
+      String(employeeDirectoryRows.find((r) => String(r?.id ?? '').trim() === empId)?.name ?? '').trim() || empId
+    if (
+      !window.confirm(
+        `${empLabel} の目標管理（${periodKey}）の提出を取り消しますか？\n\n被評価者が再編集できます。取り消しはこの評価期であと${remaining}回行えます（今回で${nextUsed}回目）。`,
+      )
+    )
+      return
     setGoalSubmissionByEmployee((prev) => ({
       ...(prev ?? {}),
       [empId]: {
         ...((prev ?? {})[empId] ?? {}),
-        [periodKey]: { submittedAt: now },
+        [periodKey]: nextUsed > 0 ? { submissionWithdrawalsUsed: nextUsed } : {},
       },
     }))
-  }, [goalMgmtEmployee?.id, goalMgmtPeriodKey, goalMgmtSubmittedForActive])
+  }, [goalSubmissionByEmployee, employeeDirectoryRows])
   const goalMgmtWeightedTotal100 = useMemo(() => {
     return weightedTotal100ForEmployeeAtPeriod(goalMgmtEmployee, goalMgmtPeriodKey)
   }, [
@@ -2721,6 +2793,107 @@ function App() {
   const supervisorEvalSubmittedForActive = supervisorEvalSubmittedRawForActive || isSupervisorEvalDeadlineLocked
   const executiveEvalSubmittedForActive = executiveEvalSubmittedRawForActive || isExecutiveEvalDeadlineLocked
 
+  const supervisorSubmissionWithdrawalsUsed = useMemo(
+    () =>
+      evalSubjectEmployee?.id && effectiveEvalPeriodKey
+        ? clampEvalSubmissionWithdrawalsUsed(
+            supervisorEvalHistoryByEmployee?.[evalSubjectEmployee.id]?.[effectiveEvalPeriodKey]
+              ?.submissionWithdrawalsUsed,
+          )
+        : 0,
+    [evalSubjectEmployee?.id, effectiveEvalPeriodKey, supervisorEvalHistoryByEmployee],
+  )
+
+  const withdrawSelfEvalForMember = useCallback(
+    (employeeId, periodKeyOverride) => {
+      const empId = String(employeeId ?? '').trim()
+      const periodKey = String(periodKeyOverride ?? effectiveEvalPeriodKey ?? '').trim()
+      if (!empId || !periodKey) return
+      if (isSelfEvalDeadlineLockedForPeriod(evalPeriodDefinitions, periodKey)) {
+        window.alert('この評価期の自己評価は締切後のため、提出の取り消しはできません。')
+        return
+      }
+      const slot = selfEvalHistoryByEmployee?.[empId]?.[periodKey]
+      if (!String(slot?.submittedAt ?? '').trim()) return
+      const used = clampEvalSubmissionWithdrawalsUsed(slot?.submissionWithdrawalsUsed)
+      if (used >= MAX_EVAL_SUBMISSION_WITHDRAWALS) {
+        window.alert(`この評価期での提出取り消しは${MAX_EVAL_SUBMISSION_WITHDRAWALS}回までです。`)
+        return
+      }
+      const nextUsed = used + 1
+      const remaining = MAX_EVAL_SUBMISSION_WITHDRAWALS - nextUsed
+      const empLabel =
+        String(employeeDirectoryRows.find((r) => String(r?.id ?? '').trim() === empId)?.name ?? '').trim() || empId
+      if (
+        !window.confirm(
+          `${empLabel} の自己評価（${periodKey}）の提出を取り消しますか？\n\n被評価者が再編集できます。取り消しはこの評価期であと${remaining}回行えます（今回で${nextUsed}回目）。`,
+        )
+      )
+        return
+      setSelfEvalHistoryByEmployee((prev) => {
+        const current = prev?.[empId]?.[periodKey] ?? {}
+        return {
+          ...(prev ?? {}),
+          [empId]: {
+            ...((prev ?? {})[empId] ?? {}),
+            [periodKey]: {
+              ...current,
+              submittedAt: '',
+              submissionWithdrawalsUsed: nextUsed,
+              resubmitRequestedAt: '',
+              resubmitReason: '',
+            },
+          },
+        }
+      })
+    },
+    [effectiveEvalPeriodKey, evalPeriodDefinitions, selfEvalHistoryByEmployee, employeeDirectoryRows],
+  )
+
+  const withdrawSupervisorEvalForMember = useCallback(
+    (employeeId, periodKeyOverride) => {
+      const empId = String(employeeId ?? '').trim()
+      const periodKey = String(periodKeyOverride ?? effectiveEvalPeriodKey ?? '').trim()
+      if (!empId || !periodKey) return
+      if (isSupervisorEvalDeadlineLockedForPeriod(evalPeriodDefinitions, periodKey)) {
+        window.alert('この評価期の1次評価(上司)は締切後のため、提出の取り消しはできません。')
+        return
+      }
+      const slot = supervisorEvalHistoryByEmployee?.[empId]?.[periodKey]
+      if (!String(slot?.submittedAt ?? '').trim()) return
+      const used = clampEvalSubmissionWithdrawalsUsed(slot?.submissionWithdrawalsUsed)
+      if (used >= MAX_EVAL_SUBMISSION_WITHDRAWALS) {
+        window.alert(`この評価期での提出取り消しは${MAX_EVAL_SUBMISSION_WITHDRAWALS}回までです。`)
+        return
+      }
+      const nextUsed = used + 1
+      const remaining = MAX_EVAL_SUBMISSION_WITHDRAWALS - nextUsed
+      const empLabel =
+        String(employeeDirectoryRows.find((r) => String(r?.id ?? '').trim() === empId)?.name ?? '').trim() || empId
+      if (
+        !window.confirm(
+          `${empLabel} の1次評価(上司)（${periodKey}）の提出を取り消しますか？\n\n再編集できます。取り消しはこの評価期であと${remaining}回行えます（今回で${nextUsed}回目）。`,
+        )
+      )
+        return
+      setSupervisorEvalHistoryByEmployee((prev) => {
+        const current = prev?.[empId]?.[periodKey] ?? {}
+        return {
+          ...(prev ?? {}),
+          [empId]: {
+            ...((prev ?? {})[empId] ?? {}),
+            [periodKey]: {
+              ...current,
+              submittedAt: '',
+              submissionWithdrawalsUsed: nextUsed,
+            },
+          },
+        }
+      })
+    },
+    [effectiveEvalPeriodKey, evalPeriodDefinitions, supervisorEvalHistoryByEmployee, employeeDirectoryRows],
+  )
+
   const submitSelfEvalForActivePeriod = useCallback(() => {
     if (!evalSubjectEmployee?.id || !effectiveEvalPeriodKey) return
     if (isSelfEvalDeadlineLocked) return
@@ -2739,6 +2912,7 @@ function App() {
             submittedAt: now,
             resubmitRequestedAt: '',
             resubmitReason: '',
+            submissionWithdrawalsUsed: clampEvalSubmissionWithdrawalsUsed(current.submissionWithdrawalsUsed),
           },
         },
       }
@@ -2761,6 +2935,7 @@ function App() {
           [effectiveEvalPeriodKey]: {
             ...current,
             submittedAt: now,
+            submissionWithdrawalsUsed: clampEvalSubmissionWithdrawalsUsed(current.submissionWithdrawalsUsed),
           },
         },
       }
@@ -2780,6 +2955,7 @@ function App() {
               submittedAt: '',
               resubmitRequestedAt: now,
               resubmitReason: `1次評価との乖離が${gap.toFixed(1)}点のため再提出が必要です`,
+              submissionWithdrawalsUsed: clampEvalSubmissionWithdrawalsUsed(current?.submissionWithdrawalsUsed),
             },
           },
         }
@@ -2805,6 +2981,7 @@ function App() {
             [periodKey]: {
               ...current,
               submittedAt: now,
+              submissionWithdrawalsUsed: clampEvalSubmissionWithdrawalsUsed(current.submissionWithdrawalsUsed),
             },
           },
         }
@@ -2823,6 +3000,7 @@ function App() {
                 submittedAt: '',
                 resubmitRequestedAt: now,
                 resubmitReason: `1次評価との乖離が${gap.toFixed(1)}点のため再提出が必要です`,
+                submissionWithdrawalsUsed: clampEvalSubmissionWithdrawalsUsed(current?.submissionWithdrawalsUsed),
               },
             },
           }
@@ -2997,6 +3175,19 @@ function App() {
     }
     const nextSelf = fromHistory(selfEvalHistoryByEmployee, normalizeEvalByEmployeeMap)
     const nextSupervisor = fromHistory(supervisorEvalHistoryByEmployee, normalizeEvalByEmployeeMap)
+    const fromExecutiveHistory = (hist) => {
+      const perEmp = {}
+      for (const [empId, periods] of Object.entries(hist ?? {})) {
+        if (!empId || !periods || typeof periods !== 'object' || Array.isArray(periods)) continue
+        if (!effectiveEvalPeriodKey) continue
+        const slot = periods[effectiveEvalPeriodKey]
+        if (!slot || typeof slot !== 'object' || Array.isArray(slot)) continue
+        const normalized = normalizeExecutiveEvalByEmployeeMap({ [empId]: slot })[empId]
+        if (normalized) perEmp[empId] = normalized
+      }
+      return perEmp
+    }
+    const nextExecutive = fromExecutiveHistory(executiveEvalHistoryByEmployee)
     setSelfEvalByEmployee((prev) => (areEvalStateMapsEqual(prev, nextSelf) ? prev : nextSelf))
     setSupervisorEvalByEmployee((prev) => {
       if (areEvalStateMapsEqual(prev, nextSupervisor)) return prev
@@ -3009,6 +3200,9 @@ function App() {
       }
       return merged
     })
+    setExecutiveEvalByEmployee((prev) =>
+      areExecutiveEvalStateMapsEqual(prev, nextExecutive) ? prev : nextExecutive,
+    )
     const periodKey = String(effectiveEvalPeriodKey ?? '').trim()
     selfEvalStatePeriodRef.current = periodKey
     supervisorEvalStatePeriodRef.current = periodKey
@@ -3025,7 +3219,13 @@ function App() {
     return () => {
       if (timer) window.clearTimeout(timer)
     }
-  }, [effectiveEvalPeriodKey, selfEvalHistoryByEmployee, supervisorEvalHistoryByEmployee, isEvalPeriodSwitching])
+  }, [
+    effectiveEvalPeriodKey,
+    selfEvalHistoryByEmployee,
+    supervisorEvalHistoryByEmployee,
+    executiveEvalHistoryByEmployee,
+    isEvalPeriodSwitching,
+  ])
 
   useEffect(() => {
     if (workspaceView === 'admin') return
@@ -3056,6 +3256,7 @@ function App() {
           next = { ...base }
           changed = true
         }
+        const prevWithdrawals = clampEvalSubmissionWithdrawalsUsed(prevSlot?.submissionWithdrawalsUsed)
         next[empId] = {
           ...prevEmp,
           [periodKey]: {
@@ -3063,6 +3264,7 @@ function App() {
             savedAt: now,
             ...(nextEvalGrade ? { evalGrade: nextEvalGrade } : {}),
             ...(prevSlot?.submittedAt ? { submittedAt: prevSlot.submittedAt } : {}),
+            ...(prevWithdrawals > 0 ? { submissionWithdrawalsUsed: prevWithdrawals } : {}),
           },
         }
       }
@@ -3099,6 +3301,7 @@ function App() {
           next = { ...base }
           changed = true
         }
+        const prevWithdrawals = clampEvalSubmissionWithdrawalsUsed(prevSlot?.submissionWithdrawalsUsed)
         next[empId] = {
           ...prevEmp,
           [periodKey]: {
@@ -3106,6 +3309,7 @@ function App() {
             savedAt: now,
             ...(nextEvalGrade ? { evalGrade: nextEvalGrade } : {}),
             ...(prevSlot?.submittedAt ? { submittedAt: prevSlot.submittedAt } : {}),
+            ...(prevWithdrawals > 0 ? { submissionWithdrawalsUsed: prevWithdrawals } : {}),
           },
         }
       }
@@ -3625,9 +3829,15 @@ function App() {
         if (!empId || !periods || typeof periods !== 'object' || Array.isArray(periods)) continue
         const periodMap = {}
         for (const [periodKey, state] of Object.entries(periods)) {
+          if (!periodKey) continue
           const submittedAt = typeof state?.submittedAt === 'string' ? state.submittedAt.trim() : ''
-          if (!periodKey || !submittedAt) continue
-          periodMap[periodKey] = { submittedAt }
+          const submissionWithdrawalsUsed = clampEvalSubmissionWithdrawalsUsed(state?.submissionWithdrawalsUsed)
+          if (submittedAt) {
+            periodMap[periodKey] =
+              submissionWithdrawalsUsed > 0 ? { submittedAt, submissionWithdrawalsUsed } : { submittedAt }
+          } else if (submissionWithdrawalsUsed > 0) {
+            periodMap[periodKey] = { submissionWithdrawalsUsed }
+          }
         }
         if (Object.keys(periodMap).length) out[empId] = periodMap
       }
@@ -3878,7 +4088,10 @@ function App() {
 
       const payload = data?.payload
       if (payload && typeof payload === 'object') {
+        const serialized = JSON.stringify(payload)
         applyPersistPayload(payload)
+        lastCloudPersistRef.current = serialized
+        lastCloudAppliedRef.current = serialized
         setSyncMessage('Supabaseから復元済み')
       } else {
         setSyncMessage('Supabase同期待機中（初回保存で作成）')
@@ -3896,6 +4109,7 @@ function App() {
 
   const lastLocalPersistRef = useRef('')
   const lastCloudPersistRef = useRef('')
+  const lastCloudAppliedRef = useRef('')
 
   const flushLocalStorageNow = useCallback(() => {
     if (typeof window === 'undefined') return
@@ -4040,6 +4254,40 @@ function App() {
     isCloudReady,
     saveCloudState,
   ])
+
+  useEffect(() => {
+    if (!supabase || !isCloudReady) return
+    const channel = supabase
+      .channel(`app_state_sync_${CLOUD_STATE_ID}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'app_state',
+          filter: `id=eq.${CLOUD_STATE_ID}`,
+        },
+        (event) => {
+          const payload = event?.new?.payload
+          if (!payload || typeof payload !== 'object') return
+          try {
+            const serialized = JSON.stringify(payload)
+            if (!serialized || serialized === lastCloudAppliedRef.current || serialized === lastCloudPersistRef.current) return
+            applyPersistPayload(payload)
+            lastCloudAppliedRef.current = serialized
+            lastCloudPersistRef.current = serialized
+            setSyncMessage('Supabaseから最新データを反映しました')
+            setSyncError('')
+          } catch (e) {
+            console.warn('[WorkVision] Supabase 受信データの反映に失敗しました', e)
+          }
+        },
+      )
+      .subscribe()
+    return () => {
+      void supabase.removeChannel(channel)
+    }
+  }, [isCloudReady])
 
   useEffect(() => {
     setEmployeeDeptOptions((prev) => {
@@ -4932,7 +5180,6 @@ function App() {
                 onChangeDetailTab={(tabId) => setAdminDetailTab(tabId)}
                 promotionRequests={promotionRequests}
                 canApprovePromotions={menuRoleKey === MENU_ROLE_ADMIN}
-                onSubmitPromotionRequest={submitPromotionRequest}
                 onApprovePromotionRequest={approvePromotionRequest}
                 onRejectPromotionRequest={rejectPromotionRequest}
                 activeEvalPeriodKey={activeEvalPeriodKey}
@@ -4940,6 +5187,10 @@ function App() {
                 evalPeriodDefinitions={evalPeriodDefinitions}
                 evalPeriodFallbackKey={evalPeriodFallbackKey}
                 onSubmitSupervisorEvaluation={submitSupervisorEvalForMember}
+                onWithdrawSupervisorEvaluation={withdrawSupervisorEvalForMember}
+                onWithdrawSelfEvaluation={withdrawSelfEvalForMember}
+                onWithdrawGoalSubmissionForMember={withdrawGoalsSubmissionForMember}
+                goalSubmissionByEmployee={goalSubmissionByEmployee}
                 onSubmitExecutiveEvaluation={submitExecutiveEvalForMember}
               />
             ) : null}
@@ -5112,6 +5363,14 @@ function App() {
                 supervisorEvalHistoryByEmployee={supervisorEvalHistoryByEmployee}
                 isSubmittedForPeriod={supervisorEvalSubmittedForActive}
                 onSubmitEvaluation={submitSupervisorEvalForActivePeriod}
+                submissionWithdrawalsUsed={supervisorSubmissionWithdrawalsUsed}
+                onWithdrawSubmission={() =>
+                  withdrawSupervisorEvalForMember(evalSubjectEmployee?.id, effectiveEvalPeriodKey)
+                }
+                withdrawBlockedByDeadline={isSupervisorEvalDeadlineLockedForPeriod(
+                  evalPeriodDefinitions,
+                  effectiveEvalPeriodKey,
+                )}
                 canEvaluate
                 blockedReason="自己評価の提出後に1次評価(上司)を入力できます。"
                 focusMajorKey={evalFocusMajorKeyForActive}
@@ -7203,6 +7462,9 @@ function EvalQuestionnairePage({
   blockedReason = '',
   focusMajorKey = '',
   isPeriodSwitching = false,
+  submissionWithdrawalsUsed = 0,
+  onWithdrawSubmission,
+  withdrawBlockedByDeadline = false,
 }) {
   const isBoss = variant === 'boss'
   const isExec = variant === 'exec'
@@ -7723,6 +7985,22 @@ function EvalQuestionnairePage({
                   ? '提出すると、この評価期は閲覧のみになり編集できません。'
                   : '全項目の評価を完了すると提出できます。'}
           </p>
+          {typeof onWithdrawSubmission === 'function' && !isExec && isSubmittedForPeriod && !withdrawBlockedByDeadline && submissionWithdrawalsUsed < MAX_EVAL_SUBMISSION_WITHDRAWALS ? (
+            <>
+              <button type="button" className="selfEvalWithdrawBtn" onClick={() => onWithdrawSubmission?.()}>
+                提出を取り消す（あと{MAX_EVAL_SUBMISSION_WITHDRAWALS - submissionWithdrawalsUsed}回）
+              </button>
+              <p className="selfEvalSubmitHint selfEvalWithdrawHint">
+                入力ミスなどに備え、提出の取り消しはこの評価期で最大{MAX_EVAL_SUBMISSION_WITHDRAWALS}回まで行えます。
+              </p>
+            </>
+          ) : null}
+          {typeof onWithdrawSubmission === 'function' && !isExec && isSubmittedForPeriod && submissionWithdrawalsUsed >= MAX_EVAL_SUBMISSION_WITHDRAWALS ? (
+            <p className="selfEvalSubmitHint">この評価期での提出取り消しは上限（{MAX_EVAL_SUBMISSION_WITHDRAWALS}回）に達しています。</p>
+          ) : null}
+          {typeof onWithdrawSubmission === 'function' && !isExec && isSubmittedForPeriod && withdrawBlockedByDeadline ? (
+            <p className="selfEvalSubmitHint">締切後のため提出の取り消しはできません。</p>
+          ) : null}
         </div>
       ) : null}
 
@@ -7880,6 +8158,9 @@ function SupervisorEvaluationPage({
   supervisorEvalHistoryByEmployee,
   isSubmittedForPeriod,
   onSubmitEvaluation,
+  submissionWithdrawalsUsed = 0,
+  onWithdrawSubmission,
+  withdrawBlockedByDeadline = false,
   canEvaluate,
   blockedReason,
   focusMajorKey = '',
@@ -7900,6 +8181,9 @@ function SupervisorEvaluationPage({
       evalPeriodFallbackKey={evalPeriodFallbackKey}
       isSubmittedForPeriod={isSubmittedForPeriod}
       onSubmitEvaluation={onSubmitEvaluation}
+      submissionWithdrawalsUsed={submissionWithdrawalsUsed}
+      onWithdrawSubmission={onWithdrawSubmission}
+      withdrawBlockedByDeadline={withdrawBlockedByDeadline}
       canEvaluate={canEvaluate}
       blockedReason={blockedReason}
       focusMajorKey={focusMajorKey}
@@ -8233,7 +8517,7 @@ function GoalManagementPage({
           </button>
           <p className="selfEvalSubmitHint">
             {isGoalMgmtLocked
-              ? '提出済みです。この評価期の目標・方針は閲覧のみです。'
+              ? '提出済みです。この評価期の目標・方針は閲覧のみです。評価責任者が管理画面から提出の取り消しを行うと、再編集できるようになります。'
               : '提出すると、この評価期の目標・方針は編集できなくなります。'}
           </p>
         </div>
@@ -9176,7 +9460,6 @@ function AdminMockPage({
   onChangeDetailTab,
   promotionRequests,
   canApprovePromotions,
-  onSubmitPromotionRequest,
   onApprovePromotionRequest,
   onRejectPromotionRequest,
   activeEvalPeriodKey,
@@ -9184,6 +9467,10 @@ function AdminMockPage({
   evalPeriodDefinitions,
   evalPeriodFallbackKey,
   onSubmitSupervisorEvaluation,
+  onWithdrawSupervisorEvaluation,
+  onWithdrawSelfEvaluation,
+  onWithdrawGoalSubmissionForMember,
+  goalSubmissionByEmployee,
   onSubmitExecutiveEvaluation,
 }) {
   const SELF_BOSS_GAP_ALERT_THRESHOLD = 20
@@ -9475,17 +9762,6 @@ function AdminMockPage({
       })
     })
   }, [])
-  const selectedMemberPromotionTarget = useMemo(
-    () => (selectedMember ? nextPromotionGrade(selectedMember.grade) : null),
-    [selectedMember],
-  )
-  const selectedMemberHasPendingPromotion = useMemo(
-    () =>
-      selectedMember
-        ? pendingPromotionRequests.some((r) => String(r.employeeId) === String(selectedMember.id))
-        : false,
-    [pendingPromotionRequests, selectedMember],
-  )
   const selectedMemberSkills = useMemo(() => {
     if (!selectedMember) return []
     const rawProgress = skillProgress?.[selectedMember.id] ?? {}
@@ -9631,7 +9907,9 @@ function AdminMockPage({
   const selectedMemberSelfEvalRows = useMemo(() => {
     if (detailTab !== 'self') return []
     if (!selectedMember) return []
-    const evalState = selfEvalByEmployee?.[selectedMember.id]
+    const periodKey = String(selectedMemberEffectivePeriodKey ?? '').trim()
+    const histSlot = periodKey ? selfEvalHistoryByEmployee?.[selectedMember.id]?.[periodKey] : null
+    const evalState = histSlot && typeof histSlot === 'object' ? histSlot : selfEvalByEmployee?.[selectedMember.id]
     const scores = evalState?.scores ?? {}
     return selectedMemberEvalItems
       .map((item) => {
@@ -9640,7 +9918,14 @@ function AdminMockPage({
         return { id: item.id, title: item.title, score }
       })
       .filter(Boolean)
-  }, [detailTab, selectedMember, selfEvalByEmployee, selectedMemberEvalItems])
+  }, [
+    detailTab,
+    selectedMember,
+    selectedMemberEffectivePeriodKey,
+    selfEvalHistoryByEmployee,
+    selfEvalByEmployee,
+    selectedMemberEvalItems,
+  ])
   const selectedMemberSupervisorEvalState = useMemo(() => {
     if (!selectedMember) return { scores: {}, comments: {} }
     const periodKey = String(selectedMemberEffectivePeriodKey ?? '').trim()
@@ -9933,6 +10218,50 @@ function AdminMockPage({
     if (!periodKey) return false
     return Boolean(supervisorEvalHistoryByEmployee?.[selectedMember.id]?.[periodKey]?.submittedAt)
   }, [selectedMember, selectedMemberEffectivePeriodKey, supervisorEvalHistoryByEmployee])
+  const selectedMemberSupervisorSubmissionWithdrawalsUsed = useMemo(() => {
+    if (!selectedMember) return 0
+    const periodKey = String(selectedMemberEffectivePeriodKey ?? '').trim()
+    if (!periodKey) return 0
+    return clampEvalSubmissionWithdrawalsUsed(
+      supervisorEvalHistoryByEmployee?.[selectedMember.id]?.[periodKey]?.submissionWithdrawalsUsed,
+    )
+  }, [selectedMember, selectedMemberEffectivePeriodKey, supervisorEvalHistoryByEmployee])
+  const selectedMemberSupervisorDeadlineLocked = useMemo(
+    () => isSupervisorEvalDeadlineLockedForPeriod(evalPeriodDefinitions, selectedMemberEffectivePeriodKey),
+    [evalPeriodDefinitions, selectedMemberEffectivePeriodKey],
+  )
+  const selectedMemberSelfEvalSubmittedRaw = useMemo(() => {
+    if (!selectedMember) return false
+    const pk = String(selectedMemberEffectivePeriodKey ?? '').trim()
+    if (!pk) return false
+    return Boolean(String(selfEvalHistoryByEmployee?.[selectedMember.id]?.[pk]?.submittedAt ?? '').trim())
+  }, [selectedMember, selectedMemberEffectivePeriodKey, selfEvalHistoryByEmployee])
+  const selectedMemberSelfSubmissionWithdrawalsUsed = useMemo(() => {
+    if (!selectedMember) return 0
+    const pk = String(selectedMemberEffectivePeriodKey ?? '').trim()
+    if (!pk) return 0
+    return clampEvalSubmissionWithdrawalsUsed(
+      selfEvalHistoryByEmployee?.[selectedMember.id]?.[pk]?.submissionWithdrawalsUsed,
+    )
+  }, [selectedMember, selectedMemberEffectivePeriodKey, selfEvalHistoryByEmployee])
+  const selectedMemberSelfDeadlineLockedForPeriod = useMemo(
+    () => isSelfEvalDeadlineLockedForPeriod(evalPeriodDefinitions, selectedMemberEffectivePeriodKey),
+    [evalPeriodDefinitions, selectedMemberEffectivePeriodKey],
+  )
+  const selectedMemberGoalSubmittedRaw = useMemo(() => {
+    if (!selectedMember) return false
+    const pk = String(selectedMemberEffectivePeriodKey ?? '').trim()
+    if (!pk) return false
+    return Boolean(String(goalSubmissionByEmployee?.[selectedMember.id]?.[pk]?.submittedAt ?? '').trim())
+  }, [selectedMember, selectedMemberEffectivePeriodKey, goalSubmissionByEmployee])
+  const selectedMemberGoalSubmissionWithdrawalsUsed = useMemo(() => {
+    if (!selectedMember) return 0
+    const pk = String(selectedMemberEffectivePeriodKey ?? '').trim()
+    if (!pk) return 0
+    return clampEvalSubmissionWithdrawalsUsed(
+      goalSubmissionByEmployee?.[selectedMember.id]?.[pk]?.submissionWithdrawalsUsed,
+    )
+  }, [selectedMember, selectedMemberEffectivePeriodKey, goalSubmissionByEmployee])
   const selectedMemberPeerSupervisorEvalForActive = useMemo(() => {
     if (!selectedMember) return { scores: {}, comments: {} }
     const periodKey = String(selectedMemberEffectivePeriodKey ?? '').trim()
@@ -10236,32 +10565,6 @@ function AdminMockPage({
                 </div>
                   ) : null}
                 </div>
-                <div
-                  className={`memberDetailActions${hideGradeSelfEvalAndGradeStats ? ' memberDetailActions--three' : ''}`}
-                >
-                  {hideGradeSelfEvalAndGradeStats ? (
-                  <button
-                    type="button"
-                      className="memberDetailPromoteBtn"
-                      disabled={
-                        !selectedMember ||
-                        selectedMember.retired ||
-                        !selectedMemberPromotionTarget ||
-                        selectedMemberHasPendingPromotion
-                      }
-                    onClick={() => {
-                        if (!selectedMember || !selectedMemberPromotionTarget) return
-                        onSubmitPromotionRequest?.(
-                          selectedMember.id,
-                          selectedMember.name,
-                          selectedMember.grade,
-                        )
-                      }}
-                    >
-                      📋 昇級申請
-                  </button>
-                  ) : null}
-                </div>
               </header>
 
               <div className="memberDetailTabs">
@@ -10406,7 +10709,40 @@ function AdminMockPage({
                   )
                 ) : null}
                 {!hideGradeSelfEvalAndGradeStats && detailTab === 'self' ? (
-                  <MemberSelfEvalTab rows={selectedMemberSelfEvalRows} />
+                  <>
+                    <MemberSelfEvalTab rows={selectedMemberSelfEvalRows} />
+                    {typeof onWithdrawSelfEvaluation === 'function' && selectedMember && selectedMemberSelfEvalSubmittedRaw ? (
+                      <div className="selfEvalSubmitBar evaluatorWithdrawBarForMember">
+                        {!selectedMemberSelfDeadlineLockedForPeriod &&
+                        selectedMemberSelfSubmissionWithdrawalsUsed < MAX_EVAL_SUBMISSION_WITHDRAWALS ? (
+                          <>
+                            <button
+                              type="button"
+                              className="selfEvalWithdrawBtn"
+                              onClick={() =>
+                                onWithdrawSelfEvaluation?.(selectedMember.id, selectedMemberEffectivePeriodKey)
+                              }
+                            >
+                              被評価者の自己評価の提出を取り消す（あと
+                              {MAX_EVAL_SUBMISSION_WITHDRAWALS - selectedMemberSelfSubmissionWithdrawalsUsed}回）
+                            </button>
+                            <p className="selfEvalSubmitHint selfEvalWithdrawHint">
+                              評価責任者として、被評価者が提出した自己評価のロックを外し再編集できるようにします。取り消しはこの評価期で最大
+                              {MAX_EVAL_SUBMISSION_WITHDRAWALS}回までです。
+                            </p>
+                          </>
+                        ) : null}
+                        {selectedMemberSelfSubmissionWithdrawalsUsed >= MAX_EVAL_SUBMISSION_WITHDRAWALS ? (
+                          <p className="selfEvalSubmitHint">
+                            この評価期での提出取り消しは上限（{MAX_EVAL_SUBMISSION_WITHDRAWALS}回）に達しています。
+                          </p>
+                        ) : null}
+                        {selectedMemberSelfDeadlineLockedForPeriod ? (
+                          <p className="selfEvalSubmitHint">この評価期の自己評価は締切後のため、提出の取り消しはできません。</p>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </>
                 ) : null}
                 {detailTab === 'boss' ? (
                   <SupervisorEvaluationPage
@@ -10425,13 +10761,46 @@ function AdminMockPage({
                     onSubmitEvaluation={() =>
                       onSubmitSupervisorEvaluation?.(selectedMember?.id, selectedMemberEffectivePeriodKey)
                     }
+                    submissionWithdrawalsUsed={selectedMemberSupervisorSubmissionWithdrawalsUsed}
+                    onWithdrawSubmission={() =>
+                      onWithdrawSupervisorEvaluation?.(selectedMember?.id, selectedMemberEffectivePeriodKey)
+                    }
+                    withdrawBlockedByDeadline={selectedMemberSupervisorDeadlineLocked}
                     canEvaluate
                     blockedReason="自己評価の提出後に1次評価(上司)を入力できます。"
                     focusMajorKey={selectedMemberGoalFocusMajorKey}
                   />
                 ) : null}
                 {detailTab === 'goal' ? (
-                  selectedMemberGoalCount > 0 ? (
+                  <>
+                    {typeof onWithdrawGoalSubmissionForMember === 'function' && selectedMember && selectedMemberGoalSubmittedRaw ? (
+                      <div className="selfEvalSubmitBar evaluatorWithdrawBarForMember">
+                        {selectedMemberGoalSubmissionWithdrawalsUsed < MAX_EVAL_SUBMISSION_WITHDRAWALS ? (
+                          <>
+                            <button
+                              type="button"
+                              className="selfEvalWithdrawBtn"
+                              onClick={() =>
+                                onWithdrawGoalSubmissionForMember?.(selectedMember.id, selectedMemberEffectivePeriodKey)
+                              }
+                            >
+                              被評価者の目標管理の提出を取り消す（あと
+                              {MAX_EVAL_SUBMISSION_WITHDRAWALS - selectedMemberGoalSubmissionWithdrawalsUsed}回）
+                            </button>
+                            <p className="selfEvalSubmitHint selfEvalWithdrawHint">
+                              評価責任者として、被評価者が提出した目標管理のロックを外し再編集できるようにします。取り消しはこの評価期で最大
+                              {MAX_EVAL_SUBMISSION_WITHDRAWALS}回までです。
+                            </p>
+                          </>
+                        ) : null}
+                        {selectedMemberGoalSubmissionWithdrawalsUsed >= MAX_EVAL_SUBMISSION_WITHDRAWALS ? (
+                          <p className="selfEvalSubmitHint">
+                            この評価期での提出取り消しは上限（{MAX_EVAL_SUBMISSION_WITHDRAWALS}回）に達しています。
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {selectedMemberGoalCount > 0 ? (
                     <>
                       {selectedMemberGoalDirection ? (
                         <section className="goalMgmtDirectionCard">
@@ -10466,8 +10835,9 @@ function AdminMockPage({
                     ) : (
                       <p className="memberDetailEmpty">この期の目標管理データはまだありません。</p>
                     )
-                  )
-          ) : null}
+                  )}
+                  </>
+                ) : null}
                 {detailTab === 'bossnote' ? (
                   <div className="memberDetailExecComments">
                     <article className="execEvalSection">
