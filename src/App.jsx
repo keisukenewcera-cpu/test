@@ -115,7 +115,7 @@ const GYOSEKI_CSV_COLUMNS = [
 
 const STORAGE_KEY = 'performanceAllowanceAppData'
 const CLOUD_STATE_ID = 'default'
-const FORCE_LOGOUT_ACK_KEY = 'performanceAllowanceForceLogoutAck'
+const RELOAD_TOKEN_ACK_KEY = 'performanceAllowanceReloadTokenAck'
 /** 自己評価・上司評価・目標管理の「提出取り消し」は評価期ごとにこの回数まで */
 const MAX_EVAL_SUBMISSION_WITHDRAWALS = 3
 
@@ -449,23 +449,21 @@ const loadSavedData = () => {
   }
 }
 
-const loadForceLogoutAckTs = () => {
-  if (typeof window === 'undefined') return 0
+const loadReloadTokenAck = () => {
+  if (typeof window === 'undefined') return ''
   try {
-    const raw = window.localStorage.getItem(FORCE_LOGOUT_ACK_KEY)
-    const ts = Date.parse(String(raw ?? '').trim())
-    return Number.isFinite(ts) ? ts : 0
+    return String(window.sessionStorage.getItem(RELOAD_TOKEN_ACK_KEY) ?? '').trim()
   } catch {
-    return 0
+    return ''
   }
 }
 
-const saveForceLogoutAckTs = (iso) => {
+const saveReloadTokenAck = (token) => {
   if (typeof window === 'undefined') return
   try {
-    const v = String(iso ?? '').trim()
+    const v = String(token ?? '').trim()
     if (!v) return
-    window.localStorage.setItem(FORCE_LOGOUT_ACK_KEY, v)
+    window.sessionStorage.setItem(RELOAD_TOKEN_ACK_KEY, v)
   } catch {
     // ignore storage errors
   }
@@ -1658,7 +1656,6 @@ function App() {
   const [password, setPassword] = useState('')
   const [loginMode, setLoginMode] = useState('employee')
   const [loginError, setLoginError] = useState('')
-  const [sessionNotice, setSessionNotice] = useState('')
   const [isLoggedIn, setIsLoggedIn] = useState(false)
   const [loggedInEmployeeId, setLoggedInEmployeeId] = useState(null)
   const [adminPassword, setAdminPassword] = useState(() => (loadSavedData()?.adminPassword ?? 'test'))
@@ -1670,10 +1667,7 @@ function App() {
   const [resetFeedback, setResetFeedback] = useState('')
   const [resetFeedbackType, setResetFeedbackType] = useState('error')
   const savedData = loadSavedData()
-  const [forceLogoutAt, setForceLogoutAt] = useState(() => String(savedData?.forceLogoutAt ?? '').trim())
-  const [forceLogoutMessage, setForceLogoutMessage] = useState(() =>
-    String(savedData?.forceLogoutMessage ?? 'アップデートが入りました。再ログインしてください。').trim(),
-  )
+  const [reloadToken, setReloadToken] = useState(() => String(savedData?.reloadToken ?? '').trim())
   const __initEvalPeriodState = readInitialEvalPeriodStateFromSavedData(savedData)
   const [rows, setRows] = useState(() => {
     const savedRows = savedData?.rows
@@ -1971,40 +1965,14 @@ function App() {
   const [snapshotPeriod, setSnapshotPeriod] = useState(() => savedData?.snapshotPeriod ?? getCurrentPeriod())
   const [snapshotHistory, setSnapshotHistory] = useState([])
   const [snapshotMessage, setSnapshotMessage] = useState('')
-  const forceLogoutAckRef = useRef(loadForceLogoutAckTs())
-
-  const acknowledgeForceLogout = useCallback((iso) => {
-    const v = String(iso ?? '').trim()
-    if (!v) return
-    const ts = Date.parse(v)
-    if (!Number.isFinite(ts)) return
-    forceLogoutAckRef.current = ts
-    saveForceLogoutAckTs(v)
-  }, [])
-
-  const processForceLogoutSignal = useCallback(
-    (payload) => {
-      const at = String(payload?.forceLogoutAt ?? '').trim()
-      if (!at) return
-      const ts = Date.parse(at)
-      if (!Number.isFinite(ts)) return
-      const message = String(payload?.forceLogoutMessage ?? 'アップデートが入りました。再ログインしてください。').trim()
-      setForceLogoutAt(at)
-      setForceLogoutMessage(message || 'アップデートが入りました。再ログインしてください。')
-      if (ts <= forceLogoutAckRef.current) return
-      setSessionNotice(message || 'アップデートが入りました。再ログインしてください。')
-      setIsLoggedIn(false)
-      setLoggedInEmployeeId(null)
-      acknowledgeForceLogout(at)
-    },
-    [acknowledgeForceLogout],
-  )
   const [syncMessage, setSyncMessage] = useState(
     supabase ? 'Supabase同期を確認中...' : 'Supabase未設定（ローカル保存のみ）',
   )
   const [syncError, setSyncError] = useState('')
   const [isEvalPeriodSwitching, setIsEvalPeriodSwitching] = useState(false)
   const evalPeriodSwitchStartedAtRef = useRef(0)
+  const appBootedAtRef = useRef(Date.now())
+  const reloadTokenAckRef = useRef(loadReloadTokenAck())
 
   useEffect(() => {
     setEvaluationCriteria((prev) => {
@@ -3690,7 +3658,6 @@ function App() {
       if (normalizedLoginId === 'admin@example.com' && normalizedPassword === String(adminPassword ?? '').trim()) {
         setIsLoggedIn(true)
         setLoggedInEmployeeId(null)
-        setSessionNotice('')
         setLoginError('')
         return
       }
@@ -3707,7 +3674,6 @@ function App() {
     if (matchedEmployee) {
       setIsLoggedIn(true)
       setLoggedInEmployeeId(matchedEmployee.id)
-      setSessionNotice('')
       setLoginError('')
       return
     }
@@ -3779,27 +3745,6 @@ function App() {
     setLoggedInEmployeeId(null)
   }
 
-  async function handleForceLogoutAllUsers() {
-    if (!window.confirm('全ユーザーを強制ログアウトしますか？')) return
-    const now = new Date().toISOString()
-    const message = 'アップデートが入りました。再ログインしてください。'
-    setForceLogoutAt(now)
-    setForceLogoutMessage(message)
-    setSessionNotice(message)
-    setIsLoggedIn(false)
-    setLoggedInEmployeeId(null)
-    acknowledgeForceLogout(now)
-    const payload = {
-      ...buildPersistPayload(true, { includeEvalDrafts: false, includeUiState: false }),
-      forceLogoutAt: now,
-      forceLogoutMessage: message,
-    }
-    const ok = await saveCloudState(payload)
-    if (ok) {
-      lastCloudPersistRef.current = JSON.stringify(payload)
-    }
-  }
-
   const saveCloudState = useCallback(async (payload, options = {}) => {
     const { silent = false } = options
     if (!supabase) {
@@ -3821,10 +3766,44 @@ function App() {
     return true
   }, [])
 
+  const shouldForceReloadFromPayload = useCallback((payload, allowPrime = false) => {
+    const token = String(payload?.reloadToken ?? '').trim()
+    if (!token) return false
+    setReloadToken(token)
+    if (token === reloadTokenAckRef.current) return false
+    if (allowPrime && !reloadTokenAckRef.current) {
+      reloadTokenAckRef.current = token
+      saveReloadTokenAck(token)
+      return false
+    }
+    const tokenMs = Date.parse(token)
+    if (!Number.isFinite(tokenMs) || tokenMs <= appBootedAtRef.current) return false
+    reloadTokenAckRef.current = token
+    saveReloadTokenAck(token)
+    return true
+  }, [])
+
   const handleRetryCloudSync = async () => {
     const payload = buildPersistPayload(true, { includeEvalDrafts: false })
     await saveCloudState(payload)
   }
+
+  const handleBroadcastReload = useCallback(async () => {
+    if (!window.confirm('全端末を再読み込みしますか？\n\n未保存の入力は失われる可能性があります。')) return
+    const token = new Date().toISOString()
+    setReloadToken(token)
+    const payload = {
+      ...buildPersistPayload(true, { includeEvalDrafts: false, includeUiState: false }),
+      reloadToken: token,
+    }
+    const ok = await saveCloudState(payload)
+    if (!ok) return
+    const serialized = JSON.stringify(payload)
+    lastCloudPersistRef.current = serialized
+    reloadTokenAckRef.current = token
+    saveReloadTokenAck(token)
+    window.location.reload()
+  }, [saveCloudState])
 
   const buildPersistPayload = (includeSensitive = true, options = {}) => {
     const { includeEvalDrafts = true, includeUiState = true } = options
@@ -3838,8 +3817,7 @@ function App() {
       ? executiveEvalHistoryByEmployee
       : filterCommittedEvalHistoryMap(executiveEvalHistoryByEmployee)
     const payload = {
-    forceLogoutAt,
-    forceLogoutMessage,
+    reloadToken,
     rows,
       employeeDirectoryRows: includeSensitive ? employeeDirectoryRows : stripSensitiveEmployeeFields(employeeDirectoryRows),
     skillSettings,
@@ -3906,7 +3884,6 @@ function App() {
       includeSettingsData = true,
       forceEmployeeDirectory = false,
     } = options
-    processForceLogoutSignal(payload)
     const cloudRows = Array.isArray(payload.rows) && payload.rows.length > 0 ? payload.rows : null
     if (cloudRows) setRows(cloudRows)
     if (
@@ -4289,6 +4266,10 @@ function App() {
       setSnapshotMessage('履歴読込に失敗しました')
       return
     }
+    if (shouldForceReloadFromPayload(data.payload, true)) {
+      window.location.reload()
+      return
+    }
     try {
     applyPersistPayload(data.payload, { forceEmployeeDirectory: true })
       setSnapshotMessage(`${period} の履歴を読み込みました`)
@@ -4325,6 +4306,10 @@ function App() {
       if (payload && typeof payload === 'object') {
         const serialized = JSON.stringify(payload)
         try {
+          if (shouldForceReloadFromPayload(payload, true)) {
+            window.location.reload()
+            return
+          }
           applyPersistPayload(payload)
           lastCloudPersistRef.current = serialized
           lastCloudAppliedRef.current = serialized
@@ -4345,7 +4330,7 @@ function App() {
     return () => {
       isActive = false
     }
-  }, [])
+  }, [shouldForceReloadFromPayload])
 
   const lastLocalPersistRef = useRef('')
   const lastCloudPersistRef = useRef('')
@@ -4439,8 +4424,7 @@ function App() {
     selfEvalHistoryByEmployee,
     supervisorEvalHistoryByEmployee,
     executiveEvalHistoryByEmployee,
-    forceLogoutAt,
-    forceLogoutMessage,
+    reloadToken,
   ])
 
   useEffect(() => {
@@ -4457,8 +4441,6 @@ function App() {
     selfEvalHistoryByEmployee,
     supervisorEvalHistoryByEmployee,
     executiveEvalHistoryByEmployee,
-    forceLogoutAt,
-    forceLogoutMessage,
     goalSubmissionByEmployee,
     isCloudReady,
     saveCloudState,
@@ -4494,8 +4476,6 @@ function App() {
     selfEvalHistoryByEmployee,
     supervisorEvalHistoryByEmployee,
     executiveEvalHistoryByEmployee,
-    forceLogoutAt,
-    forceLogoutMessage,
     adminPassword,
     departmentSalesDenture,
     departmentSalesCk,
@@ -4524,6 +4504,10 @@ function App() {
           const payload = event?.new?.payload
           if (!payload || typeof payload !== 'object') return
           try {
+            if (shouldForceReloadFromPayload(payload)) {
+              window.location.reload()
+              return
+            }
             const serialized = JSON.stringify(payload)
             if (!serialized || serialized === lastCloudAppliedRef.current || serialized === lastCloudPersistRef.current) return
             applyPersistPayload(payload, {
@@ -4546,7 +4530,7 @@ function App() {
     return () => {
       void supabase.removeChannel(channel)
     }
-  }, [isCloudReady])
+  }, [isCloudReady, shouldForceReloadFromPayload])
 
   useEffect(() => {
     setEmployeeDeptOptions((prev) => {
@@ -4624,7 +4608,6 @@ function App() {
                 </div>
 
                 {loginError ? <p className="errorMessage">{loginError}</p> : null}
-                {sessionNotice ? <p className="errorMessage">{sessionNotice}</p> : null}
 
                 <button type="submit" className="primaryButton loginSubmitBtn">
                   {loginMode === 'admin' ? '🛡️ 管理者としてログイン' : 'ログイン'}
@@ -4742,8 +4725,8 @@ function App() {
                 {loggedInAccountLabel}
               </span>
               {loginMode === 'admin' ? (
-                <button type="button" className="secondaryButton logoutTopRight" onClick={handleForceLogoutAllUsers}>
-                  強制ログアウト
+                <button type="button" className="secondaryButton logoutTopRight" onClick={handleBroadcastReload}>
+                  全端末再読み込み
                 </button>
               ) : null}
               <button type="button" className="secondaryButton logoutTopRight" onClick={handleLogout}>
