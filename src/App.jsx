@@ -3739,7 +3739,8 @@ function App() {
   const buildPersistPayloadRef = useRef(() => ({}))
   buildPersistPayloadRef.current = () => buildPersistPayload(true)
 
-  const applyPersistPayload = (payload) => {
+  const applyPersistPayload = (payload, options = {}) => {
+    const { includeUiState = true } = options
     const cloudRows = Array.isArray(payload.rows) && payload.rows.length > 0 ? payload.rows : null
     if (cloudRows) setRows(cloudRows)
     if (Array.isArray(payload.employeeDirectoryRows) && payload.employeeDirectoryRows.length > 0) {
@@ -3870,7 +3871,7 @@ function App() {
     ) {
       setExecutiveEvalByEmployee(normalizeExecutiveEvalByEmployeeMap(payload.executiveEvalByEmployee))
     }
-    if (typeof payload.activeEvalPeriodKey === 'string' && payload.activeEvalPeriodKey.trim()) {
+    if (includeUiState && typeof payload.activeEvalPeriodKey === 'string' && payload.activeEvalPeriodKey.trim()) {
       setActiveEvalPeriodKey(payload.activeEvalPeriodKey.trim())
     }
     if (Array.isArray(payload.evalPeriodDefinitions) && payload.evalPeriodDefinitions.length > 0) {
@@ -3962,20 +3963,23 @@ function App() {
       setGyosekiRowView(payload.gyosekiRowView)
     }
     if (
-      payload.workspaceView === 'gyoseki' ||
-      payload.workspaceView === 'count' ||
-      payload.workspaceView === 'honsu' ||
-      payload.workspaceView === 'admin' ||
-      payload.workspaceView === 'employee' ||
-      payload.workspaceView === 'skill' ||
-      payload.workspaceView === 'settings' ||
-      payload.workspaceView === 'skillup' ||
-      payload.workspaceView === 'selfeval' ||
-      payload.workspaceView === 'goals' ||
-      payload.workspaceView === 'evalcriteria' ||
-      payload.workspaceView === 'menusettings' ||
-      payload.workspaceView === 'bossEval' ||
-      payload.workspaceView === 'execEval'
+      includeUiState &&
+      (
+        payload.workspaceView === 'gyoseki' ||
+        payload.workspaceView === 'count' ||
+        payload.workspaceView === 'honsu' ||
+        payload.workspaceView === 'admin' ||
+        payload.workspaceView === 'employee' ||
+        payload.workspaceView === 'skill' ||
+        payload.workspaceView === 'settings' ||
+        payload.workspaceView === 'skillup' ||
+        payload.workspaceView === 'selfeval' ||
+        payload.workspaceView === 'goals' ||
+        payload.workspaceView === 'evalcriteria' ||
+        payload.workspaceView === 'menusettings' ||
+        payload.workspaceView === 'bossEval' ||
+        payload.workspaceView === 'execEval'
+      )
     ) {
       if (
         payload.workspaceView === 'skill' ||
@@ -3988,15 +3992,18 @@ function App() {
       }
     }
     if (
-      payload.settingsTab === 'skill' ||
-      payload.settingsTab === 'evalcriteria' ||
-      payload.settingsTab === 'evalperiod' ||
-      payload.settingsTab === 'menusettings' ||
-      payload.settingsTab === 'departments'
+      includeUiState &&
+      (
+        payload.settingsTab === 'skill' ||
+        payload.settingsTab === 'evalcriteria' ||
+        payload.settingsTab === 'evalperiod' ||
+        payload.settingsTab === 'menusettings' ||
+        payload.settingsTab === 'departments'
+      )
     ) {
       setSettingsTab(payload.settingsTab)
     }
-    if (payload.activePage === 'input' || payload.activePage === 'calc') setActivePage(payload.activePage)
+    if (includeUiState && (payload.activePage === 'input' || payload.activePage === 'calc')) setActivePage(payload.activePage)
     if (Number.isFinite(Number(payload.countCurrent))) setCountCurrent(Math.max(0, Math.trunc(Number(payload.countCurrent))))
     if (Number.isFinite(Number(payload.countHourlyTarget))) {
       setCountHourlyTarget(Math.max(1, Math.trunc(Number(payload.countHourlyTarget))))
@@ -4273,7 +4280,7 @@ function App() {
           try {
             const serialized = JSON.stringify(payload)
             if (!serialized || serialized === lastCloudAppliedRef.current || serialized === lastCloudPersistRef.current) return
-            applyPersistPayload(payload)
+            applyPersistPayload(payload, { includeUiState: false })
             lastCloudAppliedRef.current = serialized
             lastCloudPersistRef.current = serialized
             setSyncMessage('Supabaseから最新データを反映しました')
