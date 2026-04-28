@@ -1692,6 +1692,11 @@ function App() {
     const base = Array.isArray(saved) && saved.length > 0 ? saved : defaultEmployeeDirectoryRows
     return normalizeEmployeeDirectoryRows(base)
   })
+  const employeeDirectoryDirtyRef = useRef(false)
+  const updateEmployeeDirectoryRowsLocal = useCallback((updater) => {
+    employeeDirectoryDirtyRef.current = true
+    setEmployeeDirectoryRows(updater)
+  }, [])
   const employeeGradeByNo = useMemo(() => {
     const out = new Map()
     for (const row of employeeDirectoryRows ?? []) {
@@ -3181,7 +3186,7 @@ function App() {
     setSelfEvalHistoryByEmployee((prev) => pruneOneKey(prev))
     setSupervisorEvalHistoryByEmployee((prev) => pruneOneKey(prev))
     setExecutiveEvalHistoryByEmployee((prev) => pruneOneKey(prev))
-    setEmployeeDirectoryRows((prev) =>
+    updateEmployeeDirectoryRowsLocal((prev) =>
       (prev ?? []).map((row) => {
         const current = normalizeExtraEvalPeriodsForEmployee(row)
         const next = current.filter((p) => String(p?.key ?? '').trim() !== target)
@@ -3191,7 +3196,7 @@ function App() {
     )
     setActiveEvalPeriodKey((prev) => (String(prev ?? '').trim() === target ? '' : prev))
     return 1
-  }, [])
+  }, [updateEmployeeDirectoryRowsLocal])
 
 
   const updateSelfEvalForSubject = useCallback(
@@ -3564,7 +3569,7 @@ function App() {
       const employeeId = String(req.employeeId ?? '').trim()
       const toGrade = normalizeEmployeeGrade(req.toGrade)
       let matched = false
-      setEmployeeDirectoryRows((rows) =>
+      updateEmployeeDirectoryRowsLocal((rows) =>
         rows.map((row) => {
           if (String(row.id ?? '').trim() !== employeeId) return row
           matched = true
@@ -3584,7 +3589,7 @@ function App() {
         '昇級を許可しました。等級を更新し、スキル進捗・自己評価・上司評価をリセットしました。（役員評価はそのまま残します）',
       )
     },
-    [clearSkillProgressForEmployees, deleteKeyedObjectEntryByTrimmedId, promotionRequests],
+    [clearSkillProgressForEmployees, deleteKeyedObjectEntryByTrimmedId, promotionRequests, updateEmployeeDirectoryRowsLocal],
   )
 
   const rejectPromotionRequest = useCallback((requestId) => {
@@ -3701,7 +3706,7 @@ function App() {
       setResetFeedback('以前のパスワードが違います。')
       return
     }
-    setEmployeeDirectoryRows((prev) =>
+    updateEmployeeDirectoryRowsLocal((prev) =>
       prev.map((row) => (String(row.id ?? '').trim() === String(target.id ?? '').trim() ? { ...row, password: normalizedNextPassword } : row)),
     )
     setResetFeedbackType('success')
@@ -3818,17 +3823,24 @@ function App() {
       includeEvalDrafts = true,
       includeEmployeeDirectory = true,
       includeSettingsData = true,
+      forceEmployeeDirectory = false,
     } = options
     const cloudRows = Array.isArray(payload.rows) && payload.rows.length > 0 ? payload.rows : null
     if (cloudRows) setRows(cloudRows)
     if (
       includeEmployeeDirectory &&
+      (!employeeDirectoryDirtyRef.current || forceEmployeeDirectory) &&
       Array.isArray(payload.employeeDirectoryRows) &&
       payload.employeeDirectoryRows.length > 0
     ) {
       setEmployeeDirectoryRows(normalizeEmployeeDirectoryRows(payload.employeeDirectoryRows))
+      employeeDirectoryDirtyRef.current = false
     }
-    if (includeEmployeeDirectory && Array.isArray(payload.employeeDeptOptions)) {
+    if (
+      includeEmployeeDirectory &&
+      (!employeeDirectoryDirtyRef.current || forceEmployeeDirectory) &&
+      Array.isArray(payload.employeeDeptOptions)
+    ) {
       const rowsForDept =
         Array.isArray(payload.employeeDirectoryRows) && payload.employeeDirectoryRows.length > 0
           ? normalizeEmployeeDirectoryRows(payload.employeeDirectoryRows)
@@ -3836,6 +3848,7 @@ function App() {
       setEmployeeDeptOptions(mergeEmployeeDeptOptionsFromRows(payload.employeeDeptOptions, rowsForDept))
     } else if (
       includeEmployeeDirectory &&
+      (!employeeDirectoryDirtyRef.current || forceEmployeeDirectory) &&
       Array.isArray(payload.employeeDirectoryRows) &&
       payload.employeeDirectoryRows.length > 0
     ) {
@@ -4195,7 +4208,7 @@ function App() {
       return
     }
     try {
-      applyPersistPayload(data.payload)
+    applyPersistPayload(data.payload, { forceEmployeeDirectory: true })
       setSnapshotMessage(`${period} の履歴を読み込みました`)
     } catch (e) {
       console.warn('[WorkVision] スナップショット適用に失敗しました', e)
@@ -5366,9 +5379,9 @@ function App() {
               <HonsuWorkspacePage />
             ) : null}
             {workspaceView === 'employee' ? (
-              <EmployeeManagePage
+      <EmployeeManagePage
                 rows={employeeDirectoryRows}
-                setRows={setEmployeeDirectoryRows}
+                setRows={updateEmployeeDirectoryRowsLocal}
                 deptOptions={employeeDeptOptions}
                 skills={skillSettings}
                 skillProgress={skillEmployeeProgress}
