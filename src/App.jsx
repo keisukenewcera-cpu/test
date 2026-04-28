@@ -7502,7 +7502,8 @@ function EvalQuestionnairePage({
     if (!empId || !activeKey) return String(employee?.grade ?? '').trim()
     const slot = evalHistoryByEmployee?.[empId]?.[activeKey]
     const stored = String(slot?.evalGrade ?? '').trim()
-    return stored || String(employee?.grade ?? '').trim()
+    const isSubmitted = Boolean(String(slot?.submittedAt ?? '').trim())
+    return isSubmitted ? (stored || String(employee?.grade ?? '').trim()) : String(employee?.grade ?? '').trim()
   }, [employee?.id, employee?.grade, evalHistoryByEmployee, activeEvalPeriodKey, evalPeriodFallbackKey])
 
   const resolvedEvalGradeForItems = useMemo(() => {
