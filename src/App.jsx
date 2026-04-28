@@ -115,7 +115,7 @@ const GYOSEKI_CSV_COLUMNS = [
 
 const STORAGE_KEY = 'performanceAllowanceAppData'
 const CLOUD_STATE_ID = 'default'
-const RELOAD_TOKEN_ACK_KEY = 'performanceAllowanceReloadTokenAck'
+const CLOUD_SYNC_INTERVAL_MS = 120000
 /** 自己評価・上司評価・目標管理の「提出取り消し」は評価期ごとにこの回数まで */
 const MAX_EVAL_SUBMISSION_WITHDRAWALS = 3
 
@@ -446,26 +446,6 @@ const loadSavedData = () => {
     return JSON.parse(raw)
   } catch {
     return null
-  }
-}
-
-const loadReloadTokenAck = () => {
-  if (typeof window === 'undefined') return ''
-  try {
-    return String(window.sessionStorage.getItem(RELOAD_TOKEN_ACK_KEY) ?? '').trim()
-  } catch {
-    return ''
-  }
-}
-
-const saveReloadTokenAck = (token) => {
-  if (typeof window === 'undefined') return
-  try {
-    const v = String(token ?? '').trim()
-    if (!v) return
-    window.sessionStorage.setItem(RELOAD_TOKEN_ACK_KEY, v)
-  } catch {
-    // ignore storage errors
   }
 }
 
@@ -1667,7 +1647,6 @@ function App() {
   const [resetFeedback, setResetFeedback] = useState('')
   const [resetFeedbackType, setResetFeedbackType] = useState('error')
   const savedData = loadSavedData()
-  const [reloadToken, setReloadToken] = useState(() => String(savedData?.reloadToken ?? '').trim())
   const __initEvalPeriodState = readInitialEvalPeriodStateFromSavedData(savedData)
   const [rows, setRows] = useState(() => {
     const savedRows = savedData?.rows
@@ -1971,8 +1950,6 @@ function App() {
   const [syncError, setSyncError] = useState('')
   const [isEvalPeriodSwitching, setIsEvalPeriodSwitching] = useState(false)
   const evalPeriodSwitchStartedAtRef = useRef(0)
-  const appBootedAtRef = useRef(Date.now())
-  const reloadTokenAckRef = useRef(loadReloadTokenAck())
 
   useEffect(() => {
     setEvaluationCriteria((prev) => {
@@ -3766,44 +3743,10 @@ function App() {
     return true
   }, [])
 
-  const shouldForceReloadFromPayload = useCallback((payload, allowPrime = false) => {
-    const token = String(payload?.reloadToken ?? '').trim()
-    if (!token) return false
-    setReloadToken(token)
-    if (token === reloadTokenAckRef.current) return false
-    if (allowPrime && !reloadTokenAckRef.current) {
-      reloadTokenAckRef.current = token
-      saveReloadTokenAck(token)
-      return false
-    }
-    const tokenMs = Date.parse(token)
-    if (!Number.isFinite(tokenMs) || tokenMs <= appBootedAtRef.current) return false
-    reloadTokenAckRef.current = token
-    saveReloadTokenAck(token)
-    return true
-  }, [])
-
   const handleRetryCloudSync = async () => {
     const payload = buildPersistPayload(true, { includeEvalDrafts: false })
     await saveCloudState(payload)
   }
-
-  const handleBroadcastReload = useCallback(async () => {
-    if (!window.confirm('全端末を再読み込みしますか？\n\n未保存の入力は失われる可能性があります。')) return
-    const token = new Date().toISOString()
-    setReloadToken(token)
-    const payload = {
-      ...buildPersistPayload(true, { includeEvalDrafts: false, includeUiState: false }),
-      reloadToken: token,
-    }
-    const ok = await saveCloudState(payload)
-    if (!ok) return
-    const serialized = JSON.stringify(payload)
-    lastCloudPersistRef.current = serialized
-    reloadTokenAckRef.current = token
-    saveReloadTokenAck(token)
-    window.location.reload()
-  }, [saveCloudState])
 
   const buildPersistPayload = (includeSensitive = true, options = {}) => {
     const { includeEvalDrafts = true, includeUiState = true } = options
@@ -3817,7 +3760,6 @@ function App() {
       ? executiveEvalHistoryByEmployee
       : filterCommittedEvalHistoryMap(executiveEvalHistoryByEmployee)
     const payload = {
-    reloadToken,
     rows,
       employeeDirectoryRows: includeSensitive ? employeeDirectoryRows : stripSensitiveEmployeeFields(employeeDirectoryRows),
     skillSettings,
@@ -4266,10 +4208,6 @@ function App() {
       setSnapshotMessage('履歴読込に失敗しました')
       return
     }
-    if (shouldForceReloadFromPayload(data.payload, true)) {
-      window.location.reload()
-      return
-    }
     try {
     applyPersistPayload(data.payload, { forceEmployeeDirectory: true })
       setSnapshotMessage(`${period} の履歴を読み込みました`)
@@ -4306,10 +4244,6 @@ function App() {
       if (payload && typeof payload === 'object') {
         const serialized = JSON.stringify(payload)
         try {
-          if (shouldForceReloadFromPayload(payload, true)) {
-            window.location.reload()
-            return
-          }
           applyPersistPayload(payload)
           lastCloudPersistRef.current = serialized
           lastCloudAppliedRef.current = serialized
@@ -4330,7 +4264,7 @@ function App() {
     return () => {
       isActive = false
     }
-  }, [shouldForceReloadFromPayload])
+  }, [])
 
   const lastLocalPersistRef = useRef('')
   const lastCloudPersistRef = useRef('')
@@ -4424,7 +4358,6 @@ function App() {
     selfEvalHistoryByEmployee,
     supervisorEvalHistoryByEmployee,
     executiveEvalHistoryByEmployee,
-    reloadToken,
   ])
 
   useEffect(() => {
@@ -4435,7 +4368,7 @@ function App() {
       if (serialized === lastCloudPersistRef.current) return
       const ok = await saveCloudState(payload, { silent: true })
       if (ok) lastCloudPersistRef.current = serialized
-    }, 350)
+    }, CLOUD_SYNC_INTERVAL_MS)
     return () => window.clearTimeout(timer)
   }, [
     selfEvalHistoryByEmployee,
@@ -4454,7 +4387,7 @@ function App() {
       if (serialized === lastCloudPersistRef.current) return
       const ok = await saveCloudState(payload, { silent: true })
       if (ok) lastCloudPersistRef.current = serialized
-    }, 2500)
+    }, CLOUD_SYNC_INTERVAL_MS)
     return () => window.clearTimeout(timer)
   }, [
     rows,
@@ -4490,47 +4423,36 @@ function App() {
 
   useEffect(() => {
     if (!supabase || !isCloudReady) return
-    const channel = supabase
-      .channel(`app_state_sync_${CLOUD_STATE_ID}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'app_state',
-          filter: `id=eq.${CLOUD_STATE_ID}`,
-        },
-        (event) => {
-          const payload = event?.new?.payload
-          if (!payload || typeof payload !== 'object') return
-          try {
-            if (shouldForceReloadFromPayload(payload)) {
-              window.location.reload()
-              return
-            }
-            const serialized = JSON.stringify(payload)
-            if (!serialized || serialized === lastCloudAppliedRef.current || serialized === lastCloudPersistRef.current) return
-            applyPersistPayload(payload, {
-              includeUiState: false,
-              mergeEvalHistories: true,
-              includeEvalDrafts: false,
-              includeEmployeeDirectory: false,
-              includeSettingsData: false,
-            })
-            lastCloudAppliedRef.current = serialized
-            lastCloudPersistRef.current = serialized
-            setSyncMessage('Supabaseから最新データを反映しました')
-            setSyncError('')
-          } catch (e) {
-            console.warn('[WorkVision] Supabase 受信データの反映に失敗しました', e)
-          }
-        },
-      )
-      .subscribe()
+    const timer = window.setInterval(async () => {
+      try {
+        const { data } = await supabase
+          .from('app_state')
+          .select('payload')
+          .eq('id', CLOUD_STATE_ID)
+          .maybeSingle()
+        const payload = data?.payload
+        if (!payload || typeof payload !== 'object') return
+        const serialized = JSON.stringify(payload)
+        if (!serialized || serialized === lastCloudAppliedRef.current || serialized === lastCloudPersistRef.current) return
+        applyPersistPayload(payload, {
+          includeUiState: false,
+          mergeEvalHistories: true,
+          includeEvalDrafts: false,
+          includeEmployeeDirectory: false,
+          includeSettingsData: false,
+        })
+        lastCloudAppliedRef.current = serialized
+        lastCloudPersistRef.current = serialized
+        setSyncMessage('Supabaseから最新データを反映しました（120秒間隔）')
+        setSyncError('')
+      } catch (e) {
+        console.warn('[WorkVision] Supabase 定期同期データの反映に失敗しました', e)
+      }
+    }, CLOUD_SYNC_INTERVAL_MS)
     return () => {
-      void supabase.removeChannel(channel)
+      window.clearInterval(timer)
     }
-  }, [isCloudReady, shouldForceReloadFromPayload])
+  }, [isCloudReady])
 
   useEffect(() => {
     setEmployeeDeptOptions((prev) => {
@@ -4724,11 +4646,6 @@ function App() {
               <span className="sessionUserChip" title="現在ログイン中のアカウント">
                 {loggedInAccountLabel}
               </span>
-              {loginMode === 'admin' ? (
-                <button type="button" className="secondaryButton logoutTopRight" onClick={handleBroadcastReload}>
-                  全端末再読み込み
-                </button>
-              ) : null}
               <button type="button" className="secondaryButton logoutTopRight" onClick={handleLogout}>
                 ログアウト
               </button>
