@@ -10194,10 +10194,11 @@ function AdminMockPage({
   )
   const selectedMemberSelfSubmittedForActive = useMemo(() => {
     if (!selectedMember) return false
-    const periodKey = selectedMemberEffectivePeriodKey
+    const periodKey = String(selectedMemberEffectivePeriodKey ?? '').trim()
     if (!periodKey) return false
-    return Boolean(selfEvalHistoryByEmployee?.[selectedMember.id]?.[periodKey]?.submittedAt)
-  }, [selectedMember, selectedMemberEffectivePeriodKey, selfEvalHistoryByEmployee])
+    const submittedRaw = Boolean(String(selfEvalHistoryByEmployee?.[selectedMember.id]?.[periodKey]?.submittedAt ?? '').trim())
+    return submittedRaw || isSelfEvalDeadlineLockedForPeriod(evalPeriodDefinitions, periodKey)
+  }, [selectedMember, selectedMemberEffectivePeriodKey, selfEvalHistoryByEmployee, evalPeriodDefinitions])
   const selectedMemberPeerSelfEvalForActive = useMemo(() => {
     if (!selectedMember) return { scores: {}, comments: {} }
     const periodKey = String(selectedMemberEffectivePeriodKey ?? '').trim()
