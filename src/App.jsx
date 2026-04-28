@@ -3743,7 +3743,7 @@ function App() {
   }
 
   const buildPersistPayload = (includeSensitive = true, options = {}) => {
-    const { includeEvalDrafts = true } = options
+    const { includeEvalDrafts = true, includeUiState = true } = options
     const persistedSelfEvalHistory = includeEvalDrafts
       ? selfEvalHistoryByEmployee
       : filterCommittedEvalHistoryMap(selfEvalHistoryByEmployee)
@@ -3768,7 +3768,7 @@ function App() {
       goalSubmissionByEmployee,
     evaluationCriteria,
     menuVisibilityByRole,
-      activeEvalPeriodKey,
+      ...(includeUiState ? { activeEvalPeriodKey } : {}),
       evalPeriodDefinitions,
     ...(includeEvalDrafts
       ? {
@@ -3789,14 +3789,18 @@ function App() {
     performanceRatePercentCk,
     targetSpecialDentureTotal,
     targetSpecialCkTotal,
-    sortKey,
-    sortOrder,
-      gyosekiTeamFilter,
-      gyosekiRowView,
-    workspaceView,
-    settingsTab,
-    activePage,
-    snapshotPeriod,
+    ...(includeUiState
+      ? {
+          sortKey,
+          sortOrder,
+          gyosekiTeamFilter,
+          gyosekiRowView,
+          workspaceView,
+          settingsTab,
+          activePage,
+          snapshotPeriod,
+        }
+      : {}),
       employeeDeptOptions,
       promotionRequests,
     }
@@ -4233,7 +4237,7 @@ function App() {
   const flushCloudStateBestEffort = useCallback(() => {
     if (!supabase) return
     try {
-      const payload = buildPersistPayload(true, { includeEvalDrafts: false })
+    const payload = buildPersistPayload(true, { includeEvalDrafts: false, includeUiState: false })
       void saveCloudState(payload, { silent: true })
     } catch (e) {
       console.warn('[WorkVision] Supabase への退避保存に失敗しました', e)
@@ -4311,7 +4315,7 @@ function App() {
   useEffect(() => {
     if (!supabase || !isCloudReady) return
     const timer = window.setTimeout(async () => {
-      const payload = buildPersistPayload(true, { includeEvalDrafts: false })
+      const payload = buildPersistPayload(true, { includeEvalDrafts: false, includeUiState: false })
       const serialized = JSON.stringify(payload)
       if (serialized === lastCloudPersistRef.current) return
       const ok = await saveCloudState(payload, { silent: true })
@@ -4330,7 +4334,7 @@ function App() {
   useEffect(() => {
     if (!supabase || !isCloudReady) return
     const timer = window.setTimeout(async () => {
-      const payload = buildPersistPayload(true, { includeEvalDrafts: false })
+      const payload = buildPersistPayload(true, { includeEvalDrafts: false, includeUiState: false })
       const serialized = JSON.stringify(payload)
       if (serialized === lastCloudPersistRef.current) return
       const ok = await saveCloudState(payload, { silent: true })
@@ -4354,9 +4358,6 @@ function App() {
     evaluationCriteria,
     menuVisibilityByRole,
     evalPeriodDefinitions,
-    selfEvalByEmployee,
-    supervisorEvalByEmployee,
-    executiveEvalByEmployee,
     selfEvalHistoryByEmployee,
     supervisorEvalHistoryByEmployee,
     executiveEvalHistoryByEmployee,
@@ -4367,15 +4368,6 @@ function App() {
     performanceRatePercentCk,
     targetSpecialDentureTotal,
     targetSpecialCkTotal,
-    sortKey,
-    sortOrder,
-    gyosekiTeamFilter,
-    gyosekiRowView,
-    workspaceView,
-    settingsTab,
-    activePage,
-    snapshotPeriod,
-    activeEvalPeriodKey,
     promotionRequests,
     isCloudReady,
     saveCloudState,
