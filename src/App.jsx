@@ -3812,24 +3812,38 @@ function App() {
   buildPersistPayloadRef.current = () => buildPersistPayload(true)
 
   const applyPersistPayload = (payload, options = {}) => {
-    const { includeUiState = true, mergeEvalHistories = false, includeEvalDrafts = true } = options
+    const {
+      includeUiState = true,
+      mergeEvalHistories = false,
+      includeEvalDrafts = true,
+      includeEmployeeDirectory = true,
+      includeSettingsData = true,
+    } = options
     const cloudRows = Array.isArray(payload.rows) && payload.rows.length > 0 ? payload.rows : null
     if (cloudRows) setRows(cloudRows)
-    if (Array.isArray(payload.employeeDirectoryRows) && payload.employeeDirectoryRows.length > 0) {
+    if (
+      includeEmployeeDirectory &&
+      Array.isArray(payload.employeeDirectoryRows) &&
+      payload.employeeDirectoryRows.length > 0
+    ) {
       setEmployeeDirectoryRows(normalizeEmployeeDirectoryRows(payload.employeeDirectoryRows))
     }
-    if (Array.isArray(payload.employeeDeptOptions)) {
+    if (includeEmployeeDirectory && Array.isArray(payload.employeeDeptOptions)) {
       const rowsForDept =
         Array.isArray(payload.employeeDirectoryRows) && payload.employeeDirectoryRows.length > 0
           ? normalizeEmployeeDirectoryRows(payload.employeeDirectoryRows)
           : undefined
       setEmployeeDeptOptions(mergeEmployeeDeptOptionsFromRows(payload.employeeDeptOptions, rowsForDept))
-    } else if (Array.isArray(payload.employeeDirectoryRows) && payload.employeeDirectoryRows.length > 0) {
+    } else if (
+      includeEmployeeDirectory &&
+      Array.isArray(payload.employeeDirectoryRows) &&
+      payload.employeeDirectoryRows.length > 0
+    ) {
       setEmployeeDeptOptions((prev) =>
         mergeEmployeeDeptOptionsFromRows(prev, normalizeEmployeeDirectoryRows(payload.employeeDirectoryRows)),
       )
     }
-    if (Array.isArray(payload.skillSettings)) {
+    if (includeSettingsData && Array.isArray(payload.skillSettings)) {
       setSkillSettings(
         payload.skillSettings.map((s) => {
           const st = Math.min(20, Math.max(1, Number(s.stages) || 3))
@@ -3843,19 +3857,25 @@ function App() {
         }),
       )
     }
-    if (Array.isArray(payload.skillGrades) && payload.skillGrades.length > 0) {
+    if (includeSettingsData && Array.isArray(payload.skillGrades) && payload.skillGrades.length > 0) {
       const cleaned = payload.skillGrades.filter(
         (g) => g && typeof g.id === 'string' && typeof g.label === 'string',
       )
       if (cleaned.length > 0) setSkillGrades(cleaned)
     }
-    if (typeof payload.skillActiveGradeId === 'string' && payload.skillActiveGradeId) {
+    if (includeSettingsData && typeof payload.skillActiveGradeId === 'string' && payload.skillActiveGradeId) {
       setSkillActiveGradeId(payload.skillActiveGradeId)
     }
-    if (payload.skillEmployeeProgress && typeof payload.skillEmployeeProgress === 'object' && !Array.isArray(payload.skillEmployeeProgress)) {
+    if (
+      includeSettingsData &&
+      payload.skillEmployeeProgress &&
+      typeof payload.skillEmployeeProgress === 'object' &&
+      !Array.isArray(payload.skillEmployeeProgress)
+    ) {
       setSkillEmployeeProgress({ ...defaultSkillEmployeeProgress, ...payload.skillEmployeeProgress })
     }
     if (
+      includeSettingsData &&
       payload.skillProgressUpdatedAtByEmployee &&
       typeof payload.skillProgressUpdatedAtByEmployee === 'object' &&
       !Array.isArray(payload.skillProgressUpdatedAtByEmployee)
@@ -3916,14 +3936,24 @@ function App() {
       }
       setGoalSubmissionByEmployee(out)
     }
-    if (payload.evaluationCriteria && typeof payload.evaluationCriteria === 'object' && !Array.isArray(payload.evaluationCriteria)) {
+    if (
+      includeSettingsData &&
+      payload.evaluationCriteria &&
+      typeof payload.evaluationCriteria === 'object' &&
+      !Array.isArray(payload.evaluationCriteria)
+    ) {
       const gradeList =
         Array.isArray(payload.skillGrades) && payload.skillGrades.length > 0
           ? payload.skillGrades.filter((g) => g && typeof g.id === 'string' && typeof g.label === 'string')
           : defaultSkillGrades
       setEvaluationCriteria(normalizeEvaluationCriteriaStore(payload.evaluationCriteria, gradeList))
     }
-    if (payload.menuVisibilityByRole && typeof payload.menuVisibilityByRole === 'object' && !Array.isArray(payload.menuVisibilityByRole)) {
+    if (
+      includeSettingsData &&
+      payload.menuVisibilityByRole &&
+      typeof payload.menuVisibilityByRole === 'object' &&
+      !Array.isArray(payload.menuVisibilityByRole)
+    ) {
       setMenuVisibilityByRole(normalizeMenuVisibilityByRole(payload.menuVisibilityByRole))
     }
     if (
@@ -3953,7 +3983,11 @@ function App() {
     if (includeUiState && typeof payload.activeEvalPeriodKey === 'string' && payload.activeEvalPeriodKey.trim()) {
       setActiveEvalPeriodKey(payload.activeEvalPeriodKey.trim())
     }
-    if (Array.isArray(payload.evalPeriodDefinitions) && payload.evalPeriodDefinitions.length > 0) {
+    if (
+      includeSettingsData &&
+      Array.isArray(payload.evalPeriodDefinitions) &&
+      payload.evalPeriodDefinitions.length > 0
+    ) {
       // Replace instead of merge so deleted period keys are not resurrected by late cloud/snapshot payloads.
       setEvalPeriodDefinitions(normalizeEvalPeriodDefinitions(payload.evalPeriodDefinitions))
     }
@@ -4005,7 +4039,7 @@ function App() {
     if (Array.isArray(payload.promotionRequests)) {
       setPromotionRequests(normalizePromotionRequests(payload.promotionRequests))
     }
-    if (Array.isArray(payload.skillSections) && payload.skillSections.length > 0) {
+    if (includeSettingsData && Array.isArray(payload.skillSections) && payload.skillSections.length > 0) {
       const cleaned = payload.skillSections.filter(
         (s) => s && typeof s.id === 'string' && typeof s.label === 'string',
       )
@@ -4395,6 +4429,8 @@ function App() {
               includeUiState: false,
               mergeEvalHistories: true,
               includeEvalDrafts: false,
+              includeEmployeeDirectory: false,
+              includeSettingsData: false,
             })
             lastCloudAppliedRef.current = serialized
             lastCloudPersistRef.current = serialized
