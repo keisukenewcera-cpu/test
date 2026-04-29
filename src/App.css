@@ -8055,9 +8055,7 @@ select:focus {
   .mobileBottomNavCard {
     display: block;
     position: fixed !important;
-    left: 0;
-    right: 0;
-    bottom: calc(6px + env(safe-area-inset-bottom, 0px)) !important;
+    inset: auto 0 env(safe-area-inset-bottom, 0px) 0 !important;
     z-index: 60;
     transform: translateZ(0);
     -webkit-transform: translateZ(0);
