@@ -8057,6 +8057,12 @@ select:focus {
     right: 0;
     bottom: 0;
     z-index: 60;
+    transform: translateZ(0);
+    -webkit-transform: translateZ(0);
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+    will-change: transform;
+    pointer-events: none;
   }
 
   .mobileBottomNavCard .pageTabsMain {
@@ -8070,7 +8076,12 @@ select:focus {
     backdrop-filter: blur(10px);
     box-shadow: 0 10px 28px rgba(15, 23, 42, 0.22);
     overflow-x: auto;
+    overflow-y: hidden;
     scrollbar-width: none;
+    white-space: nowrap;
+    pointer-events: auto;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x;
   }
 
   .mobileBottomNavCard .pageTabsMain::-webkit-scrollbar {
@@ -8081,6 +8092,13 @@ select:focus {
     min-width: 96px;
     padding: 8px 12px;
     font-size: 12px;
+  }
+
+  .mobileBottomNavCard .tabButtonMain {
+    flex: 0 0 auto;
+    min-width: 86px;
+    padding: 8px 10px 7px;
+    border-radius: 12px;
   }
 
   .tabButtonMain {
