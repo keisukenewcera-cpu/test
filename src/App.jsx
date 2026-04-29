@@ -4747,7 +4747,7 @@ function App() {
             <div className="cardHeader">
               <div />
             </div>
-            <div className="pageTabs pageTabsMain">
+            <div className="pageTabs pageTabsMain pageTabsMainInline">
               {visibleWorkspaceTabs.map((t) => (
                 <button
                   key={t.key}
@@ -5667,6 +5667,25 @@ function App() {
           </>
         )}
       </section>
+      {isLoggedIn ? (
+        <section className="mobileBottomNavCard" aria-label="メインメニュー">
+          <div className="pageTabs pageTabsMain">
+            {visibleWorkspaceTabs.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                className={`tabButton tabButtonMain ${effectiveWorkspaceView === t.key ? 'isActive' : ''}`}
+                onClick={() => setWorkspaceView(t.key)}
+              >
+                <span className="tabButtonMainIcon" aria-hidden>
+                  {MAIN_WORKSPACE_TAB_ICONS[t.key] ?? '•'}
+                </span>
+                <span className="tabButtonMainLabel">{t.label}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
     </main>
   )
 }
