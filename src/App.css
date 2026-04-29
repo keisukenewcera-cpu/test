@@ -8041,7 +8041,7 @@ select:focus {
     min-height: 0;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
-    padding-top: calc(22px + env(safe-area-inset-top, 0px));
+    padding-top: calc(27px + env(safe-area-inset-top, 0px));
     padding-bottom: 14px;
   }
 
