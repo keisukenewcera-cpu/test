@@ -7961,13 +7961,17 @@ select:focus {
   html,
   body,
   #root {
-    overflow-x: hidden;
+    overflow: hidden;
+    height: 100dvh;
     min-height: 100dvh;
   }
 
   .app {
-    display: block;
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
     min-height: 100dvh;
+    overflow: hidden;
     padding: 0 8px 8px;
   }
 
@@ -7976,6 +7980,11 @@ select:focus {
     max-width: 100%;
     padding: 6px 14px 14px;
     border-radius: 14px;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-top: calc(52px + env(safe-area-inset-top, 0px));
     padding-bottom: calc(108px + env(safe-area-inset-bottom, 0px));
   }
 
@@ -8024,11 +8033,16 @@ select:focus {
   }
 
   .sessionTopRight {
-    position: static;
-    width: 100%;
+    position: fixed;
+    left: 22px;
+    right: 22px;
+    top: max(6px, env(safe-area-inset-top, 0px));
+    width: auto;
     justify-content: flex-end;
-    margin-bottom: 8px;
-    z-index: auto;
+    margin-bottom: 0;
+    z-index: 120;
+    padding: 4px 0;
+    background: transparent;
   }
 
   .sessionUserChip {
