@@ -7980,12 +7980,21 @@ select:focus {
     max-width: 100%;
     padding: 6px 14px 14px;
     border-radius: 14px;
+  }
+
+  .card:not(.cardLogin) {
     flex: 1 1 auto;
     min-height: 0;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
     padding-top: calc(52px + env(safe-area-inset-top, 0px));
     padding-bottom: calc(108px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .card.cardLogin {
+    overflow: visible;
+    padding-top: 14px;
+    padding-bottom: 14px;
   }
 
   .loginScreen {
