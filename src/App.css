@@ -8057,7 +8057,7 @@ select:focus {
     position: fixed !important;
     left: 0;
     right: 0;
-    bottom: max(0px, env(safe-area-inset-bottom, 0px)) !important;
+    bottom: calc(6px + env(safe-area-inset-bottom, 0px)) !important;
     z-index: 60;
     transform: translateZ(0);
     -webkit-transform: translateZ(0);
