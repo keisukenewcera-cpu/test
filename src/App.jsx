@@ -2012,6 +2012,7 @@ function App() {
   const [isEvalPeriodSwitching, setIsEvalPeriodSwitching] = useState(false)
   const evalPeriodSwitchStartedAtRef = useRef(0)
   const mainCardRef = useRef(null)
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false)
 
   useEffect(() => {
     setEvaluationCriteria((prev) => {
@@ -4562,8 +4563,23 @@ function App() {
     fetchSnapshotHistory()
   }, [isCloudReady])
 
+  useEffect(() => {
+    if (!accountMenuOpen) return
+    const onPointerDown = (event) => {
+      if (event.target?.closest?.('.navAccountWrap')) return
+      setAccountMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    document.addEventListener('touchstart', onPointerDown, { passive: true })
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      document.removeEventListener('touchstart', onPointerDown)
+    }
+  }, [accountMenuOpen])
+
   const handleWorkspaceTabSelect = useCallback((nextKey) => {
     setWorkspaceView(nextKey)
+    setAccountMenuOpen(false)
     if (typeof window !== 'undefined') {
       window.scrollTo({ top: 0, behavior: 'auto' })
     }
@@ -4748,14 +4764,6 @@ function App() {
           </div>
         ) : (
           <>
-            <div className="sessionTopRight">
-              <span className="sessionUserChip" title="現在ログイン中のアカウント">
-                {loggedInAccountLabel}
-              </span>
-              <button type="button" className="secondaryButton logoutTopRight" onClick={handleLogout}>
-                ログアウト
-              </button>
-            </div>
             <div className="cardHeader">
               <div />
             </div>
@@ -4773,6 +4781,33 @@ function App() {
                   <span className="tabButtonMainLabel">{t.label}</span>
                 </button>
               ))}
+              <div className={`navAccountWrap ${accountMenuOpen ? 'isOpen' : ''}`}>
+                <button
+                  type="button"
+                  className={`tabButton tabButtonMain navAccountButton ${accountMenuOpen ? 'isActive' : ''}`}
+                  onClick={() => setAccountMenuOpen((prev) => !prev)}
+                >
+                  <span className="tabButtonMainIcon" aria-hidden>
+                    👤
+                  </span>
+                  <span className="tabButtonMainLabel">アカウント</span>
+                </button>
+                {accountMenuOpen ? (
+                  <div className="navAccountMenu" role="menu" aria-label="アカウントメニュー">
+                    <p className="navAccountName">{loggedInAccountLabel}</p>
+                    <button
+                      type="button"
+                      className="navAccountLogoutButton"
+                      onClick={() => {
+                        setAccountMenuOpen(false)
+                        handleLogout()
+                      }}
+                    >
+                      ログアウト
+                    </button>
+                  </div>
+                ) : null}
+              </div>
             </div>
 
             <div style={{ display: effectiveWorkspaceView === 'gyoseki' ? 'block' : 'none' }}>
@@ -5695,6 +5730,33 @@ function App() {
                 <span className="tabButtonMainLabel">{t.label}</span>
               </button>
             ))}
+            <div className={`navAccountWrap ${accountMenuOpen ? 'isOpen' : ''}`}>
+              <button
+                type="button"
+                className={`tabButton tabButtonMain navAccountButton ${accountMenuOpen ? 'isActive' : ''}`}
+                onClick={() => setAccountMenuOpen((prev) => !prev)}
+              >
+                <span className="tabButtonMainIcon" aria-hidden>
+                  👤
+                </span>
+                <span className="tabButtonMainLabel">アカウント</span>
+              </button>
+              {accountMenuOpen ? (
+                <div className="navAccountMenu" role="menu" aria-label="アカウントメニュー">
+                  <p className="navAccountName">{loggedInAccountLabel}</p>
+                  <button
+                    type="button"
+                    className="navAccountLogoutButton"
+                    onClick={() => {
+                      setAccountMenuOpen(false)
+                      handleLogout()
+                    }}
+                  >
+                    ログアウト
+                  </button>
+                </div>
+              ) : null}
+            </div>
           </div>
         </section>
       ) : null}
@@ -8061,7 +8123,7 @@ function EvalQuestionnairePage({
       <header className="selfEvalHeader">
         <h2>{evalTitle}</h2>
         <p className="selfEvalTarget">
-          {isBoss || isExec ? '評価対象' : '対象者'}: {employee.name}（{employee.dept}）
+          {employee.name}（{employee.dept}）
         </p>
         <label className="selfEvalPeriodField">
           評価期

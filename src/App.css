@@ -281,6 +281,49 @@ h1 {
   letter-spacing: 0.01em;
 }
 
+.navAccountWrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.navAccountMenu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 170px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #ffffff;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.2);
+  display: grid;
+  gap: 8px;
+  z-index: 130;
+}
+
+.navAccountName {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.navAccountLogoutButton {
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #f8fafc;
+  color: #334155;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.navAccountLogoutButton:hover {
+  background: #eef2ff;
+}
+
 .mobileBottomNavCard {
   display: none;
 }
@@ -4508,6 +4551,13 @@ select:focus {
   color: #64748b;
 }
 
+@media (max-width: 640px) {
+  .selfEvalTarget {
+    font-size: 12px;
+    margin-bottom: 14px;
+  }
+}
+
 .selfEvalPeriodField {
   display: inline-flex;
   align-items: center;
@@ -8122,6 +8172,12 @@ select:focus {
     min-width: 92px;
     padding: 10px 10px 9px;
     border-radius: 12px;
+  }
+
+  .mobileBottomNavCard .navAccountMenu {
+    top: auto;
+    bottom: calc(100% + 8px);
+    right: 8px;
   }
 
   .mobileBottomNavCard .tabButton {
