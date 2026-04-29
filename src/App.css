@@ -7966,24 +7966,17 @@ select:focus {
   }
 
   .app {
-    display: flex;
-    flex-direction: column;
+    display: block;
     min-height: 100dvh;
-    max-height: 100dvh;
-    overflow: hidden;
     padding: 0 8px 8px;
   }
 
   .card {
     width: 100%;
     max-width: 100%;
-    flex: 1 1 auto;
-    min-height: 0;
     padding: 6px 14px 14px;
     border-radius: 14px;
-    padding-bottom: 14px;
-    overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
+    padding-bottom: calc(108px + env(safe-area-inset-bottom, 0px));
   }
 
   .loginScreen {
@@ -8062,12 +8055,12 @@ select:focus {
 
   .mobileBottomNavCard {
     display: block;
-    position: sticky;
+    position: fixed;
     left: 0;
     right: 0;
     bottom: 0;
     z-index: 100;
-    margin-top: 6px;
+    margin-top: 0;
     pointer-events: auto;
   }
 
