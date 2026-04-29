@@ -3824,6 +3824,7 @@ function App() {
       includeEvalDrafts = true,
       includeEmployeeDirectory = true,
       includeSettingsData = true,
+      includeEvaluationCriteria = false,
       forceEmployeeDirectory = false,
     } = options
     const cloudRows = Array.isArray(payload.rows) && payload.rows.length > 0 ? payload.rows : null
@@ -3951,7 +3952,7 @@ function App() {
       setGoalSubmissionByEmployee(out)
     }
     if (
-      includeSettingsData &&
+      (includeSettingsData || includeEvaluationCriteria) &&
       payload.evaluationCriteria &&
       typeof payload.evaluationCriteria === 'object' &&
       !Array.isArray(payload.evaluationCriteria)
@@ -4440,6 +4441,7 @@ function App() {
           includeEvalDrafts: false,
           includeEmployeeDirectory: false,
           includeSettingsData: false,
+          includeEvaluationCriteria: true,
         })
         lastCloudAppliedRef.current = serialized
         lastCloudPersistRef.current = serialized
