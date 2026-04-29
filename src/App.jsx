@@ -116,6 +116,7 @@ const GYOSEKI_CSV_COLUMNS = [
 const STORAGE_KEY = 'performanceAllowanceAppData'
 const CLOUD_STATE_ID = 'default'
 const CLOUD_SYNC_INTERVAL_MS = 120000
+const EMPLOYEE_DIRECTORY_SYNC_DEBOUNCE_MS = 1500
 /** 自己評価・上司評価・目標管理の「提出取り消し」は評価期ごとにこの回数まで */
 const MAX_EVAL_SUBMISSION_WITHDRAWALS = 3
 
@@ -3625,6 +3626,22 @@ function App() {
     [menuRoleKey, menuVisibilityByRole, extraVisibleMenuKeysForCurrentUser],
   )
 
+  const visibleWorkspaceTabs = useMemo(
+    () => MAIN_WORKSPACE_TAB_ORDER.filter((tab) => isWorkspaceMenuVisible(tab.key)),
+    [isWorkspaceMenuVisible],
+  )
+  const effectiveWorkspaceView = useMemo(() => {
+    if (loginMode === 'admin') return workspaceView
+    if (isWorkspaceMenuVisible(workspaceView)) return workspaceView
+    return visibleWorkspaceTabs[0]?.key ?? 'gyoseki'
+  }, [loginMode, workspaceView, isWorkspaceMenuVisible, visibleWorkspaceTabs])
+
+  useEffect(() => {
+    if (!isLoggedIn || loginMode === 'admin') return
+    if (workspaceView === effectiveWorkspaceView) return
+    setWorkspaceView(effectiveWorkspaceView)
+  }, [isLoggedIn, loginMode, workspaceView, effectiveWorkspaceView])
+
 
   const handleLogin = (event) => {
     event.preventDefault()
@@ -4382,6 +4399,21 @@ function App() {
 
   useEffect(() => {
     if (!supabase || !isCloudReady) return
+    if (!employeeDirectoryDirtyRef.current) return
+    const timer = window.setTimeout(async () => {
+      if (!employeeDirectoryDirtyRef.current) return
+      const payload = buildPersistPayload(true, { includeEvalDrafts: false, includeUiState: false })
+      const serialized = JSON.stringify(payload)
+      const ok = await saveCloudState(payload, { silent: true })
+      if (!ok) return
+      lastCloudPersistRef.current = serialized
+      employeeDirectoryDirtyRef.current = false
+    }, EMPLOYEE_DIRECTORY_SYNC_DEBOUNCE_MS)
+    return () => window.clearTimeout(timer)
+  }, [employeeDirectoryRows, isCloudReady, saveCloudState])
+
+  useEffect(() => {
+    if (!supabase || !isCloudReady) return
     const timer = window.setTimeout(async () => {
       const payload = buildPersistPayload(true, { includeEvalDrafts: false, includeUiState: false })
       const serialized = JSON.stringify(payload)
@@ -4656,11 +4688,11 @@ function App() {
               <div />
             </div>
             <div className="pageTabs pageTabsMain">
-              {MAIN_WORKSPACE_TAB_ORDER.filter((t) => isWorkspaceMenuVisible(t.key)).map((t) => (
+              {visibleWorkspaceTabs.map((t) => (
                 <button
                   key={t.key}
                   type="button"
-                  className={`tabButton tabButtonMain ${workspaceView === t.key ? 'isActive' : ''}`}
+                  className={`tabButton tabButtonMain ${effectiveWorkspaceView === t.key ? 'isActive' : ''}`}
                   onClick={() => setWorkspaceView(t.key)}
                 >
                   <span className="tabButtonMainIcon" aria-hidden>
@@ -4671,7 +4703,7 @@ function App() {
               ))}
             </div>
 
-            <div style={{ display: workspaceView === 'gyoseki' ? 'block' : 'none' }}>
+            <div style={{ display: effectiveWorkspaceView === 'gyoseki' ? 'block' : 'none' }}>
               <div className="pageTabs pageTabsSub">
               <button
                 type="button"
@@ -5318,7 +5350,7 @@ function App() {
               </div>
             )}
             </div>
-            {workspaceView === 'admin' ? (
+            {effectiveWorkspaceView === 'admin' ? (
               <AdminMockPage
                 directoryRows={employeeDirectoryRows}
                 skills={skillSettings}
@@ -5361,7 +5393,7 @@ function App() {
                 onSubmitExecutiveEvaluation={submitExecutiveEvalForMember}
               />
             ) : null}
-            {workspaceView === 'count' ? (
+            {effectiveWorkspaceView === 'count' ? (
               <CountWorkspacePage
                 count={countCurrent}
                 setCount={setCountCurrent}
@@ -5371,10 +5403,10 @@ function App() {
                 setIsRunning={setCountIsRunning}
               />
             ) : null}
-            {workspaceView === 'honsu' ? (
+            {effectiveWorkspaceView === 'honsu' ? (
               <HonsuWorkspacePage />
             ) : null}
-            {workspaceView === 'employee' ? (
+            {effectiveWorkspaceView === 'employee' ? (
       <EmployeeManagePage
                 rows={employeeDirectoryRows}
                 setRows={updateEmployeeDirectoryRowsLocal}
@@ -5390,7 +5422,7 @@ function App() {
                 onClearSkillProgressForEmployees={clearSkillProgressForEmployees}
               />
             ) : null}
-            {workspaceView === 'settings' ? (
+            {effectiveWorkspaceView === 'settings' ? (
               <section className="settingsHub">
                 <nav className="settingsHubTabs" aria-label="設定機能の切り替え">
                   <button
@@ -5468,7 +5500,7 @@ function App() {
                 ) : null}
               </section>
             ) : null}
-            {workspaceView === 'skillup' ? (
+            {effectiveWorkspaceView === 'skillup' ? (
               <SkillUpPage
                 employees={loggedInEmployee ? [loggedInEmployee] : employeeDirectoryRows}
                 skills={skillSettings}
@@ -5476,7 +5508,7 @@ function App() {
                 progress={skillEmployeeProgress}
               />
             ) : null}
-            {workspaceView === 'selfeval' ? (
+            {effectiveWorkspaceView === 'selfeval' ? (
               <SelfEvaluationPage
                 key={`selfeval-${String(evalSubjectEmployee?.id ?? '')}-${String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '')}`}
                 employees={evalSubjectEmployee ? [evalSubjectEmployee] : []}
@@ -5494,7 +5526,7 @@ function App() {
                 isPeriodSwitching={isEvalPeriodSwitching}
               />
             ) : null}
-            {workspaceView === 'goals' ? (
+            {effectiveWorkspaceView === 'goals' ? (
               <GoalManagementPage
                 employee={goalMgmtEmployee}
                 goals={goalMgmtGoals}
@@ -5515,7 +5547,7 @@ function App() {
               />
             ) : null}
             
-            {workspaceView === 'bossEval' ? (
+            {effectiveWorkspaceView === 'bossEval' ? (
               <SupervisorEvaluationPage
                 key={`bosseval-${String(evalSubjectEmployee?.id ?? '')}-${String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '')}`}
                 employees={evalSubjectEmployee ? [evalSubjectEmployee] : []}
@@ -5544,7 +5576,7 @@ function App() {
                 isPeriodSwitching={isEvalPeriodSwitching}
               />
             ) : null}
-            {workspaceView === 'execEval' ? (
+            {effectiveWorkspaceView === 'execEval' ? (
               <ExecutiveEvaluationPage
                 key={`execeval-${String(evalSubjectEmployee?.id ?? '')}-${String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '')}`}
                 employee={evalSubjectEmployee}
@@ -7358,6 +7390,7 @@ function splitRadarCategoryLabel(title, maxFirstLine) {
 const MemberEvalRadarChart = memo(function MemberEvalRadarChart({
   series,
   compact = false,
+  headlineName = '',
   gradeLabel = '',
   headlineScore = Number.NaN,
   activePeriodKey = '',
@@ -7466,6 +7499,7 @@ const MemberEvalRadarChart = memo(function MemberEvalRadarChart({
     <section className={wrapperClass}>
       {compact ? (
         <div className="memberEvalRadarHead">
+          {String(headlineName ?? '').trim() ? <p className="memberEvalRadarMemberName">{String(headlineName).trim()}</p> : null}
           <h4>{modeTitle}</h4>
           <p>
             {Number.isFinite(shownScore) ? `${shownScore.toFixed(1)}点` : '—'}
@@ -10726,6 +10760,7 @@ function AdminMockPage({
                       <MemberEvalRadarChart
                         series={selectedMemberEvalRadarSeries}
                         compact
+                        headlineName={selectedMember.name}
                         gradeLabel={selectedMemberActiveEvalGrade}
                         headlineScore={selectedMemberWeightedTotal100}
                         activePeriodKey={selectedMemberEffectivePeriodKey}

@@ -2101,6 +2101,14 @@ select:focus {
   font-weight: 700;
 }
 
+.memberEvalRadarMemberName {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
 .memberEvalRadarFormula {
   grid-column: 1 / -1;
   margin-top: -6px;
