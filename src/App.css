@@ -7966,13 +7966,14 @@ select:focus {
   }
 
   .app {
-    padding: 8px;
+    display: block;
+    padding: 0 8px 8px;
   }
 
   .card {
     width: 100%;
     max-width: 100%;
-    padding: 6px 14px 14px;
+    padding: -1px 14px 14px;
     border-radius: 14px;
     padding-bottom: calc(108px + env(safe-area-inset-bottom, 0px));
   }
