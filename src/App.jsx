@@ -2011,6 +2011,7 @@ function App() {
   const [syncError, setSyncError] = useState('')
   const [isEvalPeriodSwitching, setIsEvalPeriodSwitching] = useState(false)
   const evalPeriodSwitchStartedAtRef = useRef(0)
+  const mainCardRef = useRef(null)
 
   useEffect(() => {
     setEvaluationCriteria((prev) => {
@@ -4561,9 +4562,20 @@ function App() {
     fetchSnapshotHistory()
   }, [isCloudReady])
 
+  const handleWorkspaceTabSelect = useCallback((nextKey) => {
+    setWorkspaceView(nextKey)
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'auto' })
+    }
+    const cardEl = mainCardRef.current
+    if (cardEl && typeof cardEl.scrollTo === 'function') {
+      cardEl.scrollTo({ top: 0, behavior: 'auto' })
+    }
+  }, [])
+
   return (
     <main className={`app ${!isLoggedIn ? 'appLogin' : ''}`}>
-      <section className={`card ${!isLoggedIn ? 'cardLogin' : ''}`}>
+      <section ref={mainCardRef} className={`card ${!isLoggedIn ? 'cardLogin' : ''}`}>
         {!isLoggedIn ? (
           <div className="loginScreen">
             <section className="loginPanel adminLoginPanel">
@@ -4753,7 +4765,7 @@ function App() {
                   key={t.key}
                   type="button"
                   className={`tabButton tabButtonMain ${effectiveWorkspaceView === t.key ? 'isActive' : ''}`}
-                  onClick={() => setWorkspaceView(t.key)}
+                  onClick={() => handleWorkspaceTabSelect(t.key)}
                 >
                   <span className="tabButtonMainIcon" aria-hidden>
                     {MAIN_WORKSPACE_TAB_ICONS[t.key] ?? '•'}
@@ -5675,7 +5687,7 @@ function App() {
                 key={t.key}
                 type="button"
                 className={`tabButton tabButtonMain ${effectiveWorkspaceView === t.key ? 'isActive' : ''}`}
-                onClick={() => setWorkspaceView(t.key)}
+                onClick={() => handleWorkspaceTabSelect(t.key)}
               >
                 <span className="tabButtonMainIcon" aria-hidden>
                   {MAIN_WORKSPACE_TAB_ICONS[t.key] ?? '•'}

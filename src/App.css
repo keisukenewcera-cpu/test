@@ -8060,11 +8060,7 @@ select:focus {
   }
 
   .mobileBottomNavCard .pageTabsMain {
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 60;
+    position: static;
     margin: 0;
     padding: 7px 10px calc(7px + env(safe-area-inset-bottom, 0px));
     border-radius: 14px 14px 0 0;
