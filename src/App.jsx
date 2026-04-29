@@ -593,6 +593,23 @@ function normalizeEmployeeGrade(value) {
   return 'G1'
 }
 
+function normalizeEmployeeNoLinkKey(value) {
+  const raw = String(value ?? '')
+  if (!raw) return ''
+  const half = raw.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
+  const compact = half.replace(/\s+/g, '').trim()
+  if (!compact) return ''
+  if (/^\d+$/.test(compact)) return String(Number(compact))
+  return compact
+}
+
+function formatLoginLikeCode(value) {
+  const v = String(value ?? '').trim()
+  if (!v) return ''
+  if (/^\d+$/.test(v)) return v.padStart(4, '0')
+  return v
+}
+
 function normalizeEmployeeExtraMenuKeys(value) {
   if (!Array.isArray(value)) return []
   const allowed = new Set(MAIN_WORKSPACE_TAB_ORDER.map((tab) => tab.key))
@@ -1702,7 +1719,7 @@ function App() {
   const employeeGradeByNo = useMemo(() => {
     const out = new Map()
     for (const row of employeeDirectoryRows ?? []) {
-      const empNo = String(row?.id ?? '').trim()
+      const empNo = normalizeEmployeeNoLinkKey(row?.id)
       const grade = String(row?.grade ?? '').trim()
       if (!empNo || !grade) continue
       out.set(empNo, grade)
@@ -1771,7 +1788,7 @@ function App() {
     setRows((prev) => {
       let changed = false
       const next = prev.map((row) => {
-        const empNo = String(row.employeeNo ?? '').trim()
+        const empNo = normalizeEmployeeNoLinkKey(row.employeeNo)
         if (!empNo) return row
         const linkedGrade = employeeGradeByNo.get(empNo)
         if (!linkedGrade) return row
@@ -1940,6 +1957,49 @@ function App() {
   const [adminSelectedMemberId, setAdminSelectedMemberId] = useState(null)
   const [adminDetailTab, setAdminDetailTab] = useState('skill')
   const [promotionRequests, setPromotionRequests] = useState(() => normalizePromotionRequests(savedData?.promotionRequests))
+  const employeeScoreByNo = useMemo(() => {
+    const out = new Map()
+    for (const row of employeeDirectoryRows ?? []) {
+      const empNo = normalizeEmployeeNoLinkKey(row?.id)
+      if (!empNo) continue
+      const total = overallWeightedScore100ForEmployee(row, {
+        skills: skillSettings,
+        skillProgress: skillEmployeeProgress,
+        selfEvalByEmployee,
+        supervisorEvalByEmployee,
+        executiveEvalByEmployee,
+        evaluationCriteria,
+      })
+      if (!Number.isFinite(total)) continue
+      out.set(empNo, total.toFixed(1))
+    }
+    return out
+  }, [
+    employeeDirectoryRows,
+    skillSettings,
+    skillEmployeeProgress,
+    selfEvalByEmployee,
+    supervisorEvalByEmployee,
+    executiveEvalByEmployee,
+    evaluationCriteria,
+  ])
+  /** 業績手当: 社員番号(社員C)が従業員管理に一致する行は、従業員管理の総合得点へ自動同期する */
+  useEffect(() => {
+    if (!rows.length || !employeeScoreByNo.size) return
+    setRows((prev) => {
+      let changed = false
+      const next = prev.map((row) => {
+        const empNo = normalizeEmployeeNoLinkKey(row.employeeNo)
+        if (!empNo) return row
+        const linkedScore = employeeScoreByNo.get(empNo)
+        if (!linkedScore) return row
+        if (String(row.score ?? '').trim() === linkedScore) return row
+        changed = true
+        return { ...row, score: linkedScore }
+      })
+      return changed ? next : prev
+    })
+  }, [rows, employeeScoreByNo])
 
   const [isCloudReady, setIsCloudReady] = useState(false)
   const [snapshotPeriod, setSnapshotPeriod] = useState(() => savedData?.snapshotPeriod ?? getCurrentPeriod())
@@ -5052,9 +5112,9 @@ function App() {
                                   value={row.grade}
                                   onChange={(event) => updateRow(row.id, 'grade', event.target.value)}
                                       aria-label="等級"
-                                      disabled={Boolean(employeeGradeByNo.get(String(row.employeeNo ?? '').trim()))}
+                                      disabled={Boolean(employeeGradeByNo.get(normalizeEmployeeNoLinkKey(row.employeeNo)))}
                                       title={
-                                        employeeGradeByNo.get(String(row.employeeNo ?? '').trim())
+                                        employeeGradeByNo.get(normalizeEmployeeNoLinkKey(row.employeeNo))
                                           ? '従業員管理の等級と自動同期中（社員番号リンク）'
                                           : '等級'
                                       }
@@ -5080,6 +5140,12 @@ function App() {
                                         )
                                       }
                                       aria-label="スコア"
+                                      disabled={Boolean(employeeScoreByNo.get(normalizeEmployeeNoLinkKey(row.employeeNo)))}
+                                      title={
+                                        employeeScoreByNo.get(normalizeEmployeeNoLinkKey(row.employeeNo))
+                                          ? '従業員管理の総合得点と自動同期中（社員番号リンク）'
+                                          : 'スコア'
+                                      }
                                     />
                                   </label>
                                   <label className="employeeFieldName">
@@ -11830,7 +11896,7 @@ function EmployeeManagePage({
           const isExecutive = String(row.role ?? '').trim() === '役員'
           return (
           <div className="row" key={row.id}>
-            <span>{row.id}</span>
+            <span>{formatLoginLikeCode(row.id)}</span>
             <span>{row.name}</span>
             <span>{row.dept}</span>
               {hideGradeAndTotalScore ? null : (
@@ -11843,7 +11909,7 @@ function EmployeeManagePage({
               <em className="roleTag">{row.role}</em>
             </span>
             <span className="passwordCell">
-              <span className="passwordText">{row.password || '（未設定）'}</span>
+              <span className="passwordText">{row.password ? formatLoginLikeCode(row.password) : '（未設定）'}</span>
             </span>
             <span className="actions">
               <button type="button" className="actionIcon" onClick={() => handleStartEdit(row)} aria-label="編集">

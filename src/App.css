@@ -7969,6 +7969,9 @@ select:focus {
     max-width: 100%;
     padding: 14px;
     border-radius: 14px;
+    padding-bottom: 14px;
+    display: flex;
+    flex-direction: column;
   }
 
   .loginScreen {
@@ -8041,6 +8044,28 @@ select:focus {
     max-width: 100%;
   }
 
+  .pageTabsMain {
+    position: sticky;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 20;
+    margin: 10px 0 0;
+    padding: 7px 8px;
+    border-radius: 16px;
+    border: 1px solid rgba(148, 163, 184, 0.38);
+    background: rgba(255, 255, 255, 0.94);
+    backdrop-filter: blur(10px);
+    box-shadow: 0 10px 28px rgba(15, 23, 42, 0.22);
+    overflow-x: auto;
+    scrollbar-width: none;
+    order: 999;
+  }
+
+  .pageTabsMain::-webkit-scrollbar {
+    display: none;
+  }
+
   .tabButton {
     min-width: 96px;
     padding: 8px 12px;
@@ -8048,8 +8073,10 @@ select:focus {
   }
 
   .tabButtonMain {
-    min-width: 48px;
-    padding: 7px 8px 6px;
+    flex: 1 1 0;
+    min-width: 78px;
+    padding: 8px 6px 7px;
+    border-radius: 12px;
   }
 
   .tabButtonMainIcon {
