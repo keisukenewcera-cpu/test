@@ -2013,6 +2013,7 @@ function App() {
   const evalPeriodSwitchStartedAtRef = useRef(0)
   const mainCardRef = useRef(null)
   const [accountMenuOpen, setAccountMenuOpen] = useState(false)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
   useEffect(() => {
     setEvaluationCriteria((prev) => {
@@ -4564,10 +4565,14 @@ function App() {
   }, [isCloudReady])
 
   useEffect(() => {
-    if (!accountMenuOpen) return
+    if (!accountMenuOpen && !mobileMenuOpen) return
     const onPointerDown = (event) => {
-      if (event.target?.closest?.('.navAccountWrap')) return
-      setAccountMenuOpen(false)
+      if (!event.target?.closest?.('.navAccountWrap')) {
+        setAccountMenuOpen(false)
+      }
+      if (!event.target?.closest?.('.mobileMenuWrap')) {
+        setMobileMenuOpen(false)
+      }
     }
     document.addEventListener('mousedown', onPointerDown)
     document.addEventListener('touchstart', onPointerDown, { passive: true })
@@ -4575,11 +4580,12 @@ function App() {
       document.removeEventListener('mousedown', onPointerDown)
       document.removeEventListener('touchstart', onPointerDown)
     }
-  }, [accountMenuOpen])
+  }, [accountMenuOpen, mobileMenuOpen])
 
   const handleWorkspaceTabSelect = useCallback((nextKey) => {
     setWorkspaceView(nextKey)
     setAccountMenuOpen(false)
+    setMobileMenuOpen(false)
     if (typeof window !== 'undefined') {
       window.scrollTo({ top: 0, behavior: 'auto' })
     }
@@ -4764,6 +4770,48 @@ function App() {
           </div>
         ) : (
           <>
+            <div className={`mobileMenuWrap ${mobileMenuOpen ? 'isOpen' : ''}`}>
+              <button
+                type="button"
+                className="mobileMenuToggle"
+                aria-label="メニューを開く"
+                onClick={() => setMobileMenuOpen((prev) => !prev)}
+              >
+                ☰
+              </button>
+              {mobileMenuOpen ? (
+                <div className="mobileMenuPanel" role="menu" aria-label="モバイルメニュー">
+                  <div className="mobileMenuTabList">
+                    {visibleWorkspaceTabs.map((t) => (
+                      <button
+                        key={t.key}
+                        type="button"
+                        className={`mobileMenuItem ${effectiveWorkspaceView === t.key ? 'isActive' : ''}`}
+                        onClick={() => handleWorkspaceTabSelect(t.key)}
+                      >
+                        <span className="mobileMenuItemIcon" aria-hidden>
+                          {MAIN_WORKSPACE_TAB_ICONS[t.key] ?? '•'}
+                        </span>
+                        <span>{t.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mobileMenuAccount">
+                    <p className="mobileMenuAccountName">{loggedInAccountLabel}</p>
+                    <button
+                      type="button"
+                      className="mobileMenuLogout"
+                      onClick={() => {
+                        setMobileMenuOpen(false)
+                        handleLogout()
+                      }}
+                    >
+                      ログアウト
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
             <div className="cardHeader">
               <div />
             </div>
@@ -5714,52 +5762,6 @@ function App() {
           </>
         )}
       </section>
-      {isLoggedIn ? (
-        <section className="mobileBottomNavCard" aria-label="メインメニュー">
-          <div className="pageTabs pageTabsMain">
-            {visibleWorkspaceTabs.map((t) => (
-              <button
-                key={t.key}
-                type="button"
-                className={`tabButton tabButtonMain ${effectiveWorkspaceView === t.key ? 'isActive' : ''}`}
-                onClick={() => handleWorkspaceTabSelect(t.key)}
-              >
-                <span className="tabButtonMainIcon" aria-hidden>
-                  {MAIN_WORKSPACE_TAB_ICONS[t.key] ?? '•'}
-                </span>
-                <span className="tabButtonMainLabel">{t.label}</span>
-              </button>
-            ))}
-            <div className={`navAccountWrap ${accountMenuOpen ? 'isOpen' : ''}`}>
-              <button
-                type="button"
-                className={`tabButton tabButtonMain navAccountButton ${accountMenuOpen ? 'isActive' : ''}`}
-                onClick={() => setAccountMenuOpen((prev) => !prev)}
-              >
-                <span className="tabButtonMainIcon" aria-hidden>
-                  👤
-                </span>
-                <span className="tabButtonMainLabel">アカウント</span>
-              </button>
-              {accountMenuOpen ? (
-                <div className="navAccountMenu" role="menu" aria-label="アカウントメニュー">
-                  <p className="navAccountName">{loggedInAccountLabel}</p>
-                  <button
-                    type="button"
-                    className="navAccountLogoutButton"
-                    onClick={() => {
-                      setAccountMenuOpen(false)
-                      handleLogout()
-                    }}
-                  >
-                    ログアウト
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          </div>
-        </section>
-      ) : null}
     </main>
   )
 }
