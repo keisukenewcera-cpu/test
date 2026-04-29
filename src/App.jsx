@@ -4770,48 +4770,6 @@ function App() {
           </div>
         ) : (
           <>
-            <div className={`mobileMenuWrap ${mobileMenuOpen ? 'isOpen' : ''}`}>
-              <button
-                type="button"
-                className="mobileMenuToggle"
-                aria-label="メニューを開く"
-                onClick={() => setMobileMenuOpen((prev) => !prev)}
-              >
-                ☰
-              </button>
-              {mobileMenuOpen ? (
-                <div className="mobileMenuPanel" role="menu" aria-label="モバイルメニュー">
-                  <div className="mobileMenuTabList">
-                    {visibleWorkspaceTabs.map((t) => (
-                      <button
-                        key={t.key}
-                        type="button"
-                        className={`mobileMenuItem ${effectiveWorkspaceView === t.key ? 'isActive' : ''}`}
-                        onClick={() => handleWorkspaceTabSelect(t.key)}
-                      >
-                        <span className="mobileMenuItemIcon" aria-hidden>
-                          {MAIN_WORKSPACE_TAB_ICONS[t.key] ?? '•'}
-                        </span>
-                        <span>{t.label}</span>
-                      </button>
-                    ))}
-                  </div>
-                  <div className="mobileMenuAccount">
-                    <p className="mobileMenuAccountName">{loggedInAccountLabel}</p>
-                    <button
-                      type="button"
-                      className="mobileMenuLogout"
-                      onClick={() => {
-                        setMobileMenuOpen(false)
-                        handleLogout()
-                      }}
-                    >
-                      ログアウト
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-            </div>
             <div className="cardHeader">
               <div />
             </div>
@@ -5762,6 +5720,50 @@ function App() {
           </>
         )}
       </section>
+      {isLoggedIn ? (
+        <div className={`mobileMenuWrap ${mobileMenuOpen ? 'isOpen' : ''}`}>
+          <button
+            type="button"
+            className="mobileMenuToggle"
+            aria-label="メニューを開く"
+            onClick={() => setMobileMenuOpen((prev) => !prev)}
+          >
+            ☰
+          </button>
+          {mobileMenuOpen ? (
+            <div className="mobileMenuPanel" role="menu" aria-label="モバイルメニュー">
+              <div className="mobileMenuTabList">
+                {visibleWorkspaceTabs.map((t) => (
+                  <button
+                    key={t.key}
+                    type="button"
+                    className={`mobileMenuItem ${effectiveWorkspaceView === t.key ? 'isActive' : ''}`}
+                    onClick={() => handleWorkspaceTabSelect(t.key)}
+                  >
+                    <span className="mobileMenuItemIcon" aria-hidden>
+                      {MAIN_WORKSPACE_TAB_ICONS[t.key] ?? '•'}
+                    </span>
+                    <span>{t.label}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="mobileMenuAccount">
+                <p className="mobileMenuAccountName">{loggedInAccountLabel}</p>
+                <button
+                  type="button"
+                  className="mobileMenuLogout"
+                  onClick={() => {
+                    setMobileMenuOpen(false)
+                    handleLogout()
+                  }}
+                >
+                  ログアウト
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </main>
   )
 }
