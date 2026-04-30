@@ -123,7 +123,7 @@ const GYOSEKI_CSV_COLUMNS = [
 
 const STORAGE_KEY = 'performanceAllowanceAppData'
 const CLOUD_STATE_ID = 'default'
-const CLOUD_SYNC_INTERVAL_MS = 120000
+const CLOUD_SYNC_INTERVAL_MS = 5000
 const EMPLOYEE_DIRECTORY_SYNC_DEBOUNCE_MS = 1500
 /** 自己評価・上司評価・目標管理の「提出取り消し」は評価期ごとにこの回数まで */
 const MAX_EVAL_SUBMISSION_WITHDRAWALS = 3
@@ -193,6 +193,41 @@ function evalPeriodIsOnOrAfterJoin(periodKey, joinMs) {
   return ms >= joinMs
 }
 
+/** 評価期マスタ行の「暦上の基準」（入社日判定・おすすめ期の並び）。未設定時は key をそのまま使う（従来の YYYY-MM 形式） */
+function evalPeriodRowAnchorString(row) {
+  if (!row || typeof row !== 'object') return ''
+  const ak = String(row.anchorKey ?? '').trim()
+  if (ak) return ak
+  return String(row.key ?? '').trim()
+}
+
+function evalPeriodAnchorMsForRow(row) {
+  return evalPeriodAnchorMs(evalPeriodRowAnchorString(row))
+}
+
+function evalPeriodIsOnOrAfterJoinForRow(row, joinMs) {
+  return evalPeriodIsOnOrAfterJoin(evalPeriodRowAnchorString(row), joinMs)
+}
+
+function compareEvalPeriodDefRows(a, b) {
+  return compareEvalPeriodDesc(evalPeriodRowAnchorString(a), evalPeriodRowAnchorString(b))
+}
+
+/** 社員ID → 期キー → 値 のネストから、指定した期キーだけを全社員分削除する */
+function pruneOnePeriodKeyFromEmployeeNestedMap(map, target) {
+  const t = String(target ?? '').trim()
+  if (!t || !map || typeof map !== 'object' || Array.isArray(map)) return map
+  const next = {}
+  for (const [empId, periods] of Object.entries(map)) {
+    if (!periods || typeof periods !== 'object' || Array.isArray(periods)) continue
+    const kept = Object.fromEntries(
+      Object.entries(periods).filter(([k]) => String(k ?? '').trim() !== t),
+    )
+    if (Object.keys(kept).length > 0) next[empId] = kept
+  }
+  return next
+}
+
 function buildDefaultMarSepEvalPeriods() {
   const y0 = new Date().getFullYear()
   const list = []
@@ -227,8 +262,13 @@ function normalizeEvalPeriodDefinitionRow(row) {
   if (!key) return null
   const label = String(row?.label ?? '').trim() || key
   const onlyForEmployeeIds = parseOnlyForEmployeeIdsFromStored(row)
+  const anchorRaw = String(row?.anchorKey ?? '').trim()
+  const keyLooksLikeLegacyAnchor =
+    /^(\d{4})-(\d{1,2})$/.test(key) || /^(\d{4})-H([12])$/i.test(key)
+  const anchorKey = anchorRaw || (keyLooksLikeLegacyAnchor ? key : '')
   const next = { key, label }
   if (onlyForEmployeeIds.length) next.onlyForEmployeeIds = onlyForEmployeeIds
+  if (anchorKey) next.anchorKey = anchorKey
   return next
 }
 
@@ -308,9 +348,10 @@ function mergeEvalPeriodDefinitionArrays(prevRaw, remoteRaw) {
     const next = { ...cur, label: cur.label || row.label || cur.key }
     if (ids.length) next.onlyForEmployeeIds = ids
     else delete next.onlyForEmployeeIds
+    if (row.anchorKey && !next.anchorKey) next.anchorKey = String(row.anchorKey).trim()
     map.set(row.key, next)
   }
-  return [...map.values()].sort((a, b) => compareEvalPeriodDesc(a.key, b.key))
+  return [...map.values()].sort((a, b) => compareEvalPeriodDefRows(a, b))
 }
 
 function pickRadarPeriodKeys({ activeKey, selfHist, bossHist, execHist, definitions, limit = 3 }) {
@@ -344,35 +385,35 @@ function getSuggestedEvalPeriodKey(definitions, joinDateRaw = null) {
   const globalLike = all.filter((d) => !d.onlyForEmployeeIds?.length)
   let defs = globalLike.length ? globalLike : all
   if (joinMs != null) {
-    const filtered = defs.filter((d) => evalPeriodIsOnOrAfterJoin(d.key, joinMs))
+    const filtered = defs.filter((d) => evalPeriodIsOnOrAfterJoinForRow(d, joinMs))
     if (filtered.length) defs = filtered
   }
-  const keys = defs.map((d) => String(d.key ?? '').trim()).filter(Boolean)
-  if (!keys.length) {
+  const rows = defs.filter((d) => String(d?.key ?? '').trim())
+  if (!rows.length) {
     return ''
   }
   const today = new Date()
   today.setHours(0, 0, 0, 0)
   const todayMs = today.getTime()
-  let bestKey = keys[0]
+  let bestRow = rows[0]
   let bestMs = Number.NEGATIVE_INFINITY
-  let futureKey = null
+  let futureRow = null
   let futureMs = Number.POSITIVE_INFINITY
-  for (const key of keys) {
-    const ms = evalPeriodAnchorMs(key)
+  for (const d of rows) {
+    const ms = evalPeriodAnchorMsForRow(d)
     if (!Number.isFinite(ms)) continue
     if (ms <= todayMs && ms >= bestMs) {
       bestMs = ms
-      bestKey = key
+      bestRow = d
     }
     if (ms > todayMs && ms < futureMs) {
       futureMs = ms
-      futureKey = key
+      futureRow = d
     }
   }
-  if (Number.isFinite(bestMs) && bestMs > Number.NEGATIVE_INFINITY) return bestKey
-  if (futureKey) return futureKey
-  return [...keys].sort(compareEvalPeriodDesc)[0]
+  if (Number.isFinite(bestMs) && bestMs > Number.NEGATIVE_INFINITY) return String(bestRow.key ?? '').trim()
+  if (futureRow) return String(futureRow.key ?? '').trim()
+  return String([...rows].sort(compareEvalPeriodDefRows)[0]?.key ?? '').trim()
 }
 
 function readInitialEvalPeriodStateFromSavedData(sd) {
@@ -403,7 +444,7 @@ function buildEvalPeriodSelectOptionList({
       if (!fid) return false
       return ids.some((id) => String(id ?? '').trim() === fid)
     })
-    .filter((d) => evalPeriodIsOnOrAfterJoin(d.key, joinMs))
+    .filter((d) => evalPeriodIsOnOrAfterJoinForRow(d, joinMs))
     .map((d) => {
       const restricted = Array.isArray(d.onlyForEmployeeIds) && d.onlyForEmployeeIds.length > 0
       const base = String(d.label ?? d.key ?? '').trim() || String(d.key)
@@ -440,7 +481,7 @@ function buildEvalPeriodSelectOptionList({
   scan(supervisorEvalHistoryByEmployee, '履歴')
   for (const row of extraPeriods ?? []) {
     if (!row?.key || seen.has(row.key)) continue
-    if (!evalPeriodIsOnOrAfterJoin(row.key, joinMs)) continue
+    if (!evalPeriodIsOnOrAfterJoin(evalPeriodRowAnchorString(row), joinMs)) continue
     seen.add(row.key)
     tail.push({
       value: row.key,
@@ -706,6 +747,28 @@ function formatLoginLikeCode(value) {
   if (!v) return ''
   if (/^\d+$/.test(v)) return v.padStart(4, '0')
   return v
+}
+
+/** ログイン用。一覧の社員Noは数字のみ4桁埋め表示のため、保存値と入力の桁が違っても一致させる */
+function employeeLoginIdMatchesInput(storedId, inputRaw) {
+  const stored = String(storedId ?? '').trim()
+  const input = String(inputRaw ?? '').trim()
+  if (!stored || !input) return false
+  if (/^\d+$/.test(stored) && /^\d+$/.test(input)) {
+    return formatLoginLikeCode(stored) === formatLoginLikeCode(input)
+  }
+  return stored.toLowerCase() === input.toLowerCase()
+}
+
+/** パスワードも数字のみのときは4桁埋め表示と同じ規則で照合（それ以外は大小区別ありの完全一致） */
+function employeePasswordMatchesInput(storedPassword, inputRaw) {
+  const s = String(storedPassword ?? '').trim()
+  const i = String(inputRaw ?? '').trim()
+  if (!s || !i) return false
+  if (/^\d+$/.test(s) && /^\d+$/.test(i)) {
+    return formatLoginLikeCode(s) === formatLoginLikeCode(i)
+  }
+  return s === i
 }
 
 function normalizeEmployeeExtraMenuKeys(value) {
@@ -1397,7 +1460,7 @@ function resolveMenuRoleKey(normalizedEmail, employees) {
   if (normalizedEmail === 'admin@example.com') return MENU_ROLE_ADMIN
   const emp = employees.find((row) => {
     const emailMatch = String(row.email ?? '').trim().toLowerCase() === normalizedEmail
-    const idMatch = String(row.id ?? '').trim().toLowerCase() === normalizedEmail
+    const idMatch = employeeLoginIdMatchesInput(row.id, normalizedEmail)
     return emailMatch || idMatch
   })
   if (emp?.role === '上司') return MENU_ROLE_JOUSHI
@@ -1890,6 +1953,19 @@ function App() {
     savedData?.gyosekiRowView === 'simple' ? 'simple' : 'detail',
   )
   const [workspaceView, setWorkspaceView] = useState(() => savedData?.workspaceView ?? 'gyoseki')
+  /** 管理画面→一般画面へ戻ったときだけ増やし、評価履歴同期 effect を1回走らせる（タブ切替のたびに走らせない） */
+  const [evalHistAfterAdminGen, setEvalHistAfterAdminGen] = useState(0)
+  const wasAdminWorkspaceRef = useRef(null)
+  useEffect(() => {
+    const nowAdmin = workspaceView === 'admin'
+    if (wasAdminWorkspaceRef.current === null) {
+      wasAdminWorkspaceRef.current = nowAdmin
+      return
+    }
+    const was = wasAdminWorkspaceRef.current
+    wasAdminWorkspaceRef.current = nowAdmin
+    if (was && !nowAdmin) setEvalHistAfterAdminGen((g) => g + 1)
+  }, [workspaceView])
   const [settingsTab, setSettingsTab] = useState(() => savedData?.settingsTab ?? 'skill')
   const [activePage, setActivePage] = useState(() => savedData?.activePage ?? 'input')
   const [employeeDirectoryRows, setEmployeeDirectoryRows] = useState(() => {
@@ -2236,6 +2312,8 @@ function App() {
     supabase ? 'Supabase同期を確認中...' : 'Supabase未設定（ローカル保存のみ）',
   )
   const [syncError, setSyncError] = useState('')
+  /** Supabase 自動保存: idle / pending（待ち） / saving（送信中） */
+  const [cloudWriteStatus, setCloudWriteStatus] = useState('idle')
   const [isEvalPeriodSwitching, setIsEvalPeriodSwitching] = useState(false)
   const evalPeriodSwitchStartedAtRef = useRef(0)
   const mainCardRef = useRef(null)
@@ -2692,7 +2770,7 @@ function App() {
     const byTrimmedId = (targetId) => {
       const t = String(targetId ?? '').trim()
       if (!t) return undefined
-      return employeeDirectoryRows.find((row) => String(row?.id ?? '').trim() === t)
+      return employeeDirectoryRows.find((row) => employeeLoginIdMatchesInput(row.id, t))
     }
     if ((workspaceView === 'bossEval' || workspaceView === 'execEval') && selectedEvalEmployeeId) {
       const picked = byTrimmedId(selectedEvalEmployeeId)
@@ -3474,6 +3552,10 @@ function App() {
     setSelfEvalHistoryByEmployee((prev) => pruneOneKey(prev))
     setSupervisorEvalHistoryByEmployee((prev) => pruneOneKey(prev))
     setExecutiveEvalHistoryByEmployee((prev) => pruneOneKey(prev))
+    setGoalsByEmployeePeriod((prev) => pruneOnePeriodKeyFromEmployeeNestedMap(prev, target))
+    setGoalDirectionByEmployeePeriod((prev) => pruneOnePeriodKeyFromEmployeeNestedMap(prev, target))
+    setGoalFocusMajorByEmployeePeriod((prev) => pruneOnePeriodKeyFromEmployeeNestedMap(prev, target))
+    setGoalSubmissionByEmployee((prev) => pruneOneKey(prev))
     updateEmployeeDirectoryRowsLocal((prev) =>
       (prev ?? []).map((row) => {
         const current = normalizeExtraEvalPeriodsForEmployee(row)
@@ -3639,7 +3721,7 @@ function App() {
       }
       return changed ? next : prev
     })
-  }, [selfEvalByEmployee, evalGradeByEmployeeId, effectiveEvalPeriodKey, workspaceView])
+  }, [selfEvalByEmployee, evalGradeByEmployeeId, effectiveEvalPeriodKey, evalHistAfterAdminGen])
 
   useEffect(() => {
     if (workspaceView === 'admin') return
@@ -3684,7 +3766,7 @@ function App() {
       }
       return changed ? next : prev
     })
-  }, [supervisorEvalByEmployee, evalGradeByEmployeeId, effectiveEvalPeriodKey, workspaceView])
+  }, [supervisorEvalByEmployee, evalGradeByEmployeeId, effectiveEvalPeriodKey, evalHistAfterAdminGen])
 
   useEffect(() => {
     if (workspaceView === 'admin') return
@@ -3695,28 +3777,47 @@ function App() {
       return
     }
     if (periodKey && executiveEvalStatePeriodRef.current !== periodKey) return
+    const stripSavedAt = (slot) => {
+      if (!slot || typeof slot !== 'object' || Array.isArray(slot)) return slot
+      const { savedAt, ...rest } = slot
+      return rest
+    }
     setExecutiveEvalHistoryByEmployee((prev) => {
-      const next = { ...(prev ?? {}) }
-      for (const [empId, state] of Object.entries(executiveEvalByEmployee ?? {})) {
-        const prevEmp = next[empId] ?? {}
+      const entries = Object.entries(executiveEvalByEmployee ?? {})
+      if (entries.length === 0) return prev
+      const base = prev ?? {}
+      let next = base
+      let changed = false
+      for (const [empId, state] of entries) {
+        const prevEmp = base[empId] ?? {}
         const prevSlot = periodKey ? prevEmp?.[periodKey] : null
+        const nextCumulative = { ...state, savedAt: now }
+        const nextSlot = periodKey
+          ? {
+              ...state,
+              savedAt: now,
+              ...(String(prevSlot?.submittedAt ?? '').trim() ? { submittedAt: prevSlot.submittedAt } : {}),
+            }
+          : null
+        const sameCum =
+          JSON.stringify(stripSavedAt(prevEmp.cumulative)) === JSON.stringify(stripSavedAt(nextCumulative))
+        const sameSlot =
+          !periodKey ||
+          JSON.stringify(stripSavedAt(prevSlot)) === JSON.stringify(stripSavedAt(nextSlot))
+        if (sameCum && sameSlot) continue
+        if (!changed) {
+          next = { ...base }
+          changed = true
+        }
         next[empId] = {
           ...prevEmp,
-          cumulative: { ...state, savedAt: now },
-          ...(periodKey
-            ? {
-                [periodKey]: {
-                  ...state,
-                  savedAt: now,
-                  ...(String(prevSlot?.submittedAt ?? '').trim() ? { submittedAt: prevSlot.submittedAt } : {}),
-                },
-              }
-            : {}),
+          cumulative: nextCumulative,
+          ...(periodKey ? { [periodKey]: nextSlot } : {}),
         }
       }
-      return next
+      return changed ? next : prev
     })
-  }, [executiveEvalByEmployee, effectiveEvalPeriodKey, workspaceView])
+  }, [executiveEvalByEmployee, effectiveEvalPeriodKey, evalHistAfterAdminGen])
 
   const renameEmployeeIdInAppState = useCallback((oldId, newId) => {
     const o = String(oldId ?? '').trim()
@@ -3932,10 +4033,13 @@ function App() {
   const handleLogin = (event) => {
     event.preventDefault()
 
-    const normalizedLoginId = email.trim().toLowerCase()
+    const normalizedLoginId = email.trim()
     const normalizedPassword = String(password ?? '').trim()
     if (loginMode === 'admin') {
-      if (normalizedLoginId === 'admin@example.com' && normalizedPassword === String(adminPassword ?? '').trim()) {
+      if (
+        normalizedLoginId.toLowerCase() === 'admin@example.com' &&
+        normalizedPassword === String(adminPassword ?? '').trim()
+      ) {
         setIsLoggedIn(true)
         setLoggedInEmployeeId(null)
         setLoginError('')
@@ -3947,9 +4051,8 @@ function App() {
 
     const matchedEmployee = employeeDirectoryRows.find(
       (row) =>
-        String(row.id ?? '')
-          .trim()
-          .toLowerCase() === normalizedLoginId && String(row.password ?? '').trim() === normalizedPassword,
+        employeeLoginIdMatchesInput(row.id, normalizedLoginId) &&
+        employeePasswordMatchesInput(row.password, normalizedPassword),
     )
     if (matchedEmployee) {
       setIsLoggedIn(true)
@@ -3995,17 +4098,14 @@ function App() {
     }
 
     const target = employeeDirectoryRows.find((row) => {
-      const idMatch =
-        String(row.id ?? '')
-          .trim()
-          .toLowerCase() === id
+      const idMatch = employeeLoginIdMatchesInput(row.id, id)
       const emailMatch =
         String(row.email ?? '')
           .trim()
           .toLowerCase() === id
       return idMatch || emailMatch
     })
-    if (!target || String(target.password ?? '').trim() !== normalizedPrevPassword) {
+    if (!target || !employeePasswordMatchesInput(target.password, normalizedPrevPassword)) {
       setResetFeedbackType('error')
       setResetFeedback('以前のパスワードが違います。')
       return
@@ -4032,6 +4132,17 @@ function App() {
       setSyncError('Supabaseが未設定です。.env.local の設定を確認してください。')
       return false
     }
+    let serialized = ''
+    try {
+      serialized = JSON.stringify(payload)
+    } catch {
+      if (!silent) setSyncMessage('Supabase保存失敗（ローカル保存は有効）')
+      setSyncError('クラウド保存に失敗しました。データの形式を確認してください。')
+      return false
+    }
+    if (silent && serialized === lastCloudPersistRef.current) {
+      return true
+    }
     if (!silent) setSyncMessage('Supabaseに保存中...')
     const { error } = await supabase
       .from('app_state')
@@ -4043,12 +4154,18 @@ function App() {
     }
     if (!silent) setSyncMessage('Supabaseに保存済み')
     setSyncError('')
+    lastCloudPersistRef.current = serialized
     return true
   }, [])
 
   const handleRetryCloudSync = async () => {
-    const payload = buildPersistPayload(true, { includeEvalDrafts: false })
-    await saveCloudState(payload)
+    setCloudWriteStatus('saving')
+    try {
+      const payload = buildPersistPayload(true, { includeEvalDrafts: false })
+      await saveCloudState(payload)
+    } finally {
+      setCloudWriteStatus('idle')
+    }
   }
 
   const buildPersistPayload = (includeSensitive = true, options = {}) => {
@@ -4556,7 +4673,8 @@ function App() {
         const serialized = JSON.stringify(mergedPayload)
         try {
           applyPersistPayload(mergedPayload)
-          lastCloudPersistRef.current = serialized
+          // lastCloudAppliedRef = クラウド上の生データ指紋（定期取得の比較用）
+          // lastCloudPersistRef は buildPersistPayload と同じ形で揃える（下の useEffect）。ここで merged の JSON を入れるとキー順などで常に「未反映」になる
           lastCloudAppliedRef.current = serialized
           setSyncMessage('Supabaseから復元済み')
         } catch (e) {
@@ -4580,6 +4698,7 @@ function App() {
   const lastLocalPersistRef = useRef('')
   const lastCloudPersistRef = useRef('')
   const lastCloudAppliedRef = useRef('')
+  const cloudSaveDebounceTimerRef = useRef(null)
 
   const flushLocalStorageNow = useCallback(() => {
     if (typeof window === 'undefined') return
@@ -4596,7 +4715,9 @@ function App() {
   const flushCloudStateBestEffort = useCallback(() => {
     if (!supabase) return
     try {
-    const payload = buildPersistPayload(true, { includeEvalDrafts: false, includeUiState: false })
+      const payload = buildPersistPayload(true, { includeEvalDrafts: false, includeUiState: false })
+      const serialized = JSON.stringify(payload)
+      if (serialized === lastCloudPersistRef.current) return
       void saveCloudState(payload, { silent: true })
     } catch (e) {
       console.warn('[WorkVision] Supabase への退避保存に失敗しました', e)
@@ -4671,50 +4792,69 @@ function App() {
     executiveEvalHistoryByEmployee,
   ])
 
+  /** 復元直後、lastCloudPersistRef を「自動保存と同じ buildPersistPayload」に揃える（マージ済みJSONとでは文字列一致しないため） */
   useEffect(() => {
-    if (!supabase || !isCloudReady) return
-    const timer = window.setTimeout(async () => {
-      const payload = buildPersistPayload(true, { includeEvalDrafts: false, includeUiState: false })
-      const serialized = JSON.stringify(payload)
-      if (serialized === lastCloudPersistRef.current) return
-      const ok = await saveCloudState(payload, { silent: true })
-      if (ok) lastCloudPersistRef.current = serialized
-    }, CLOUD_SYNC_INTERVAL_MS)
-    return () => window.clearTimeout(timer)
-  }, [
-    selfEvalHistoryByEmployee,
-    supervisorEvalHistoryByEmployee,
-    executiveEvalHistoryByEmployee,
-    goalSubmissionByEmployee,
-    isCloudReady,
-    saveCloudState,
-  ])
+    if (!isCloudReady) return undefined
+    try {
+      lastCloudPersistRef.current = JSON.stringify(
+        buildPersistPayload(true, { includeEvalDrafts: false, includeUiState: false }),
+      )
+    } catch {
+      /* stringify 失敗時は既存 ref のまま */
+    }
+    setCloudWriteStatus('idle')
+    return undefined
+  }, [isCloudReady])
 
   useEffect(() => {
-    if (!supabase || !isCloudReady) return
-    if (!employeeDirectoryDirtyRef.current) return
-    const timer = window.setTimeout(async () => {
-      if (!employeeDirectoryDirtyRef.current) return
-      const payload = buildPersistPayload(true, { includeEvalDrafts: false, includeUiState: false })
-      const serialized = JSON.stringify(payload)
-      const ok = await saveCloudState(payload, { silent: true })
-      if (!ok) return
-      lastCloudPersistRef.current = serialized
-      employeeDirectoryDirtyRef.current = false
-    }, EMPLOYEE_DIRECTORY_SYNC_DEBOUNCE_MS)
-    return () => window.clearTimeout(timer)
-  }, [employeeDirectoryRows, isCloudReady, saveCloudState])
-
-  useEffect(() => {
-    if (!supabase || !isCloudReady) return
-    const timer = window.setTimeout(async () => {
-      const payload = buildPersistPayload(true, { includeEvalDrafts: false, includeUiState: false })
-      const serialized = JSON.stringify(payload)
-      if (serialized === lastCloudPersistRef.current) return
-      const ok = await saveCloudState(payload, { silent: true })
-      if (ok) lastCloudPersistRef.current = serialized
+    if (!supabase || !isCloudReady) {
+      setCloudWriteStatus('idle')
+      return undefined
+    }
+    if (cloudSaveDebounceTimerRef.current) {
+      window.clearTimeout(cloudSaveDebounceTimerRef.current)
+      cloudSaveDebounceTimerRef.current = null
+    }
+    let alive = true
+    const payloadProbe = buildPersistPayload(true, { includeEvalDrafts: false, includeUiState: false })
+    const serializedProbe = JSON.stringify(payloadProbe)
+    if (serializedProbe === lastCloudPersistRef.current) {
+      setCloudWriteStatus('idle')
+      return () => {
+        alive = false
+        if (cloudSaveDebounceTimerRef.current) {
+          window.clearTimeout(cloudSaveDebounceTimerRef.current)
+          cloudSaveDebounceTimerRef.current = null
+        }
+      }
+    }
+    setCloudWriteStatus('pending')
+    cloudSaveDebounceTimerRef.current = window.setTimeout(async () => {
+      cloudSaveDebounceTimerRef.current = null
+      if (!alive) return
+      try {
+        const payload = buildPersistPayload(true, { includeEvalDrafts: false, includeUiState: false })
+        const serialized = JSON.stringify(payload)
+        if (serialized === lastCloudPersistRef.current) {
+          if (alive) setCloudWriteStatus('idle')
+          return
+        }
+        if (alive) setCloudWriteStatus('saving')
+        await saveCloudState(payload, { silent: true })
+        if (!alive) return
+        setCloudWriteStatus('idle')
+      } catch {
+        if (alive) setCloudWriteStatus('idle')
+      }
     }, CLOUD_SYNC_INTERVAL_MS)
-    return () => window.clearTimeout(timer)
+    return () => {
+      alive = false
+      if (cloudSaveDebounceTimerRef.current) {
+        window.clearTimeout(cloudSaveDebounceTimerRef.current)
+        cloudSaveDebounceTimerRef.current = null
+      }
+      setCloudWriteStatus('idle')
+    }
   }, [
     rows,
     employeeDirectoryRows,
@@ -4748,6 +4888,34 @@ function App() {
   ])
 
   useEffect(() => {
+    if (!supabase || !isCloudReady) return undefined
+    if (!employeeDirectoryDirtyRef.current) return undefined
+    const timer = window.setTimeout(async () => {
+      if (!employeeDirectoryDirtyRef.current) return
+      const payload = buildPersistPayload(true, { includeEvalDrafts: false, includeUiState: false })
+      const serialized = JSON.stringify(payload)
+      if (serialized === lastCloudPersistRef.current) {
+        employeeDirectoryDirtyRef.current = false
+        setCloudWriteStatus('idle')
+        return
+      }
+      setCloudWriteStatus('saving')
+      const ok = await saveCloudState(payload, { silent: true })
+      if (!ok) {
+        setCloudWriteStatus('idle')
+        return
+      }
+      employeeDirectoryDirtyRef.current = false
+      if (cloudSaveDebounceTimerRef.current) {
+        window.clearTimeout(cloudSaveDebounceTimerRef.current)
+        cloudSaveDebounceTimerRef.current = null
+      }
+      setCloudWriteStatus('idle')
+    }, EMPLOYEE_DIRECTORY_SYNC_DEBOUNCE_MS)
+    return () => window.clearTimeout(timer)
+  }, [employeeDirectoryRows, isCloudReady, saveCloudState])
+
+  useEffect(() => {
     if (!supabase || !isCloudReady) return
     const timer = window.setInterval(async () => {
       try {
@@ -4771,7 +4939,7 @@ function App() {
         })
         lastCloudAppliedRef.current = serialized
         lastCloudPersistRef.current = serialized
-        setSyncMessage('Supabaseから最新データを反映しました（120秒間隔）')
+        setSyncMessage('Supabaseから最新データを反映しました（5秒間隔）')
         setSyncError('')
       } catch (e) {
         console.warn('[WorkVision] Supabase 定期同期データの反映に失敗しました', e)
@@ -5055,6 +5223,23 @@ function App() {
                 ) : null}
               </div>
             </div>
+
+            {supabase && isCloudReady && cloudWriteStatus !== 'idle' ? (
+              <div
+                className={`cloudWriteStatusBar${cloudWriteStatus === 'saving' ? ' isSaving' : ' isPending'}`}
+                role="status"
+                aria-live="polite"
+              >
+                <span className="cloudWriteStatusDot" aria-hidden />
+                {cloudWriteStatus === 'saving' ? (
+                  <span>クラウドに保存しています…</span>
+                ) : (
+                  <span>
+                    クラウドへ未反映の変更があります。自動保存までお待ちください（最大約5秒・編集中は延長されます）
+                  </span>
+                )}
+              </div>
+            ) : null}
 
             <div style={{ display: effectiveWorkspaceView === 'gyoseki' ? 'block' : 'none' }}>
               <div className="pageTabs pageTabsSub">
@@ -6504,20 +6689,17 @@ function EvalPeriodSettingsPage({ definitions, setDefinitions, onSelectActivePer
     }
     const month = String(draftMonth ?? '').trim()
     if (month !== '03' && month !== '09') return
-    const key = `${year}-${month}`
-    if (definitions.some((d) => d.key === key)) {
-      window.alert('同じキーの行が既にあります。')
-      return
-    }
+    const anchorKey = `${year}-${month}`
+    const storageKey = newEvaluationId('evalPeriod')
     const onlyForEmployeeIds = parseCommaSeparatedEmployeeIds(draftOnlyForIds)
     const defaultLabel = `${year}年${Number(month)}月期`
     const label = draftLabel.trim() || defaultLabel
-    const row = onlyForEmployeeIds.length > 0 ? { key, label, onlyForEmployeeIds } : { key, label }
-    setDefinitions((prev) => {
-      if (prev.some((d) => d.key === key)) return prev
-      return [row, ...prev]
-    })
-    onSelectActivePeriod?.(key)
+    const row =
+      onlyForEmployeeIds.length > 0
+        ? { key: storageKey, anchorKey, label, onlyForEmployeeIds }
+        : { key: storageKey, anchorKey, label }
+    setDefinitions((prev) => [row, ...prev])
+    onSelectActivePeriod?.(storageKey)
     setDraftYear(String(currentYear))
     setDraftMonth('03')
     setDraftLabel('')
@@ -6527,7 +6709,7 @@ function EvalPeriodSettingsPage({ definitions, setDefinitions, onSelectActivePer
   const removeRow = (key) => {
     if (
       !window.confirm(
-        `「${key}」を一覧から削除しますか？この期の履歴データと旧「この人のみ」設定も同時に整理します。`,
+        `「${key}」を一覧から削除しますか？この期の自己/上司/経営層の評価履歴、目標・目標提出・方向性・大項目フォーカス、および旧「この人のみ」設定も同時に整理します。`,
       )
     ) {
       return
@@ -6575,7 +6757,7 @@ function EvalPeriodSettingsPage({ definitions, setDefinitions, onSelectActivePer
     <section className="evalPeriodSettingsPage">
       <h2 className="evalPeriodSettingsTitle">評価期マスタ</h2>
       <p className="evalPeriodSettingsLead">
-        評価の単位となる「期」を定義します。必要な期を手動で追加してください。全社で使う臨時期はそのまま追加し、
+        評価の単位となる「期」を定義します。追加するたびに<strong>内部で一意のキー</strong>が付きます（同じ3月/9月期を複数行作ってもデータはぶつかりません）。一覧の太字は基準月（並び・入社日判定用）、細字は内部キーです。全社で使う臨時期はそのまま追加し、
         <strong>特定の社員だけ</strong>の期は「適用社員C」に社員Cをカンマ区切りで入力してください（空欄のときは全員に表示されます）。
       </p>
       <p className="evalPeriodSettingsNote evalPeriodSettingsNote--drag">
@@ -6606,7 +6788,17 @@ function EvalPeriodSettingsPage({ definitions, setDefinitions, onSelectActivePer
             }}
           >
             <div className="evalPeriodSettingsRowMain">
-              <span className="evalPeriodSettingsKey">{row.key}</span>
+              <span
+                className="evalPeriodSettingsKey"
+                title={row.anchorKey && row.anchorKey !== row.key ? `内部キー: ${row.key}` : undefined}
+              >
+                {row.anchorKey ?? row.key}
+              </span>
+              {row.anchorKey && row.anchorKey !== row.key ? (
+                <span className="evalPeriodSettingsId" title="保存・履歴と紐づく内部キー">
+                  {row.key}
+                </span>
+              ) : null}
               <span className="evalPeriodSettingsLabel">{row.label}</span>
               <span className="evalPeriodSettingsScope">
                 {row.onlyForEmployeeIds?.length
