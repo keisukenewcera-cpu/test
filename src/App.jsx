@@ -213,6 +213,30 @@ function compareEvalPeriodDefRows(a, b) {
   return compareEvalPeriodDesc(evalPeriodRowAnchorString(a), evalPeriodRowAnchorString(b))
 }
 
+function resolveEvalPeriodAnchorForKey(periodKey, definitions) {
+  const key = String(periodKey ?? '').trim()
+  if (!key) return ''
+  const row = Array.isArray(definitions)
+    ? definitions.find((d) => String(d?.key ?? '').trim() === key)
+    : null
+  return row ? evalPeriodRowAnchorString(row) : key
+}
+
+function resolveEquivalentPeriodKey(periodKey, periodsByKey, definitions) {
+  const target = String(periodKey ?? '').trim()
+  if (!target || !periodsByKey || typeof periodsByKey !== 'object') return ''
+  if (Object.prototype.hasOwnProperty.call(periodsByKey, target)) return target
+  const targetAnchor = resolveEvalPeriodAnchorForKey(target, definitions)
+  if (!targetAnchor) return ''
+  for (const candidate of Object.keys(periodsByKey)) {
+    const c = String(candidate ?? '').trim()
+    if (!c) continue
+    const candidateAnchor = resolveEvalPeriodAnchorForKey(c, definitions)
+    if (candidateAnchor && candidateAnchor === targetAnchor) return c
+  }
+  return ''
+}
+
 /** 社員ID → 期キー → 値 のネストから、指定した期キーだけを全社員分削除する */
 function pruneOnePeriodKeyFromEmployeeNestedMap(map, target) {
   const t = String(target ?? '').trim()
@@ -226,6 +250,58 @@ function pruneOnePeriodKeyFromEmployeeNestedMap(map, target) {
     if (Object.keys(kept).length > 0) next[empId] = kept
   }
   return next
+}
+
+function remapPeriodKeysToDefinitionKeysInEmployeeNestedMap(map, definitions) {
+  if (!map || typeof map !== 'object' || Array.isArray(map)) return map
+  const defRows = Array.isArray(definitions) ? definitions : []
+  const keySet = new Set(defRows.map((d) => String(d?.key ?? '').trim()).filter(Boolean))
+  if (!keySet.size) return map
+  const anchorToKey = new Map()
+  for (const row of defRows) {
+    const key = String(row?.key ?? '').trim()
+    if (!key) continue
+    const anchor = evalPeriodRowAnchorString(row)
+    if (!anchor || anchorToKey.has(anchor)) continue
+    anchorToKey.set(anchor, key)
+  }
+  const pickCanonicalKey = (rawKey) => {
+    const k = String(rawKey ?? '').trim()
+    if (!k) return ''
+    if (keySet.has(k)) return k
+    const anchor = resolveEvalPeriodAnchorForKey(k, defRows)
+    if (!anchor) return ''
+    return String(anchorToKey.get(anchor) ?? '').trim()
+  }
+  let changed = false
+  const out = {}
+  for (const [empId, periods] of Object.entries(map)) {
+    if (!periods || typeof periods !== 'object' || Array.isArray(periods)) continue
+    const nextPeriods = {}
+    for (const [rawKey, value] of Object.entries(periods)) {
+      const canonical = pickCanonicalKey(rawKey)
+      if (!canonical) {
+        changed = true
+        continue
+      }
+      if (!Object.prototype.hasOwnProperty.call(nextPeriods, canonical)) {
+        nextPeriods[canonical] = value
+        if (String(rawKey ?? '').trim() !== canonical) changed = true
+        continue
+      }
+      // キー統合時は submittedAt / savedAt が新しい方を残す
+      const current = nextPeriods[canonical]
+      const currentAt = String(current?.submittedAt ?? current?.savedAt ?? '').trim()
+      const incomingAt = String(value?.submittedAt ?? value?.savedAt ?? '').trim()
+      if (incomingAt && (!currentAt || incomingAt > currentAt)) {
+        nextPeriods[canonical] = value
+        changed = true
+      }
+    }
+    if (Object.keys(nextPeriods).length) out[empId] = nextPeriods
+    else changed = true
+  }
+  return changed ? out : map
 }
 
 function buildDefaultMarSepEvalPeriods() {
@@ -316,6 +392,60 @@ function mergeEvalPeriodDefinitionsForInitialCloudHydrate(localPayload, cloudPay
   return cloudPayload
 }
 
+function isIsoAtLeast(a, b) {
+  const aa = String(a ?? '').trim()
+  const bb = String(b ?? '').trim()
+  if (!aa) return false
+  if (!bb) return true
+  return aa >= bb
+}
+
+function mergeConflictSafePayloadForCloudSave(localPayload, cloudPayload) {
+  if (!cloudPayload || typeof cloudPayload !== 'object' || Array.isArray(cloudPayload)) return localPayload
+  const local = localPayload && typeof localPayload === 'object' && !Array.isArray(localPayload) ? localPayload : {}
+  const merged = { ...local }
+
+  const localEvalPeriodAt = String(local.evalPeriodDefinitionsSavedAt ?? '').trim()
+  const cloudEvalPeriodAt = String(cloudPayload.evalPeriodDefinitionsSavedAt ?? '').trim()
+  if (!isIsoAtLeast(localEvalPeriodAt, cloudEvalPeriodAt)) {
+    merged.evalPeriodDefinitions = normalizeEvalPeriodDefinitions(cloudPayload.evalPeriodDefinitions)
+    if (cloudEvalPeriodAt) merged.evalPeriodDefinitionsSavedAt = cloudEvalPeriodAt
+  }
+
+  const localSkillMasterAt = String(local.skillMasterSavedAt ?? '').trim()
+  const cloudSkillMasterAt = String(cloudPayload.skillMasterSavedAt ?? '').trim()
+  if (!isIsoAtLeast(localSkillMasterAt, cloudSkillMasterAt)) {
+    if (Array.isArray(cloudPayload.skillSettings)) merged.skillSettings = cloudPayload.skillSettings
+    if (Array.isArray(cloudPayload.skillSections)) merged.skillSections = cloudPayload.skillSections
+    if (Array.isArray(cloudPayload.skillGrades)) merged.skillGrades = cloudPayload.skillGrades
+    if (typeof cloudPayload.skillActiveGradeId === 'string') merged.skillActiveGradeId = cloudPayload.skillActiveGradeId
+    if (cloudSkillMasterAt) merged.skillMasterSavedAt = cloudSkillMasterAt
+  }
+
+  const localEvalCriteriaAt = String(local.evaluationCriteriaSavedAt ?? '').trim()
+  const cloudEvalCriteriaAt = String(cloudPayload.evaluationCriteriaSavedAt ?? '').trim()
+  if (!isIsoAtLeast(localEvalCriteriaAt, cloudEvalCriteriaAt)) {
+    if (cloudPayload.evaluationCriteria && typeof cloudPayload.evaluationCriteria === 'object') {
+      merged.evaluationCriteria = cloudPayload.evaluationCriteria
+    }
+    if (cloudEvalCriteriaAt) merged.evaluationCriteriaSavedAt = cloudEvalCriteriaAt
+  }
+
+  const localEmployeeDirAt = String(local.employeeDirectorySavedAt ?? '').trim()
+  const cloudEmployeeDirAt = String(cloudPayload.employeeDirectorySavedAt ?? '').trim()
+  if (!isIsoAtLeast(localEmployeeDirAt, cloudEmployeeDirAt)) {
+    if (Array.isArray(cloudPayload.employeeDirectoryRows)) {
+      merged.employeeDirectoryRows = cloudPayload.employeeDirectoryRows
+    }
+    if (Array.isArray(cloudPayload.employeeDeptOptions)) {
+      merged.employeeDeptOptions = cloudPayload.employeeDeptOptions
+    }
+    if (cloudEmployeeDirAt) merged.employeeDirectorySavedAt = cloudEmployeeDirAt
+  }
+
+  return merged
+}
+
 /** Prefer localStorage admin password on first Supabase hydrate when it differs (stale cloud overwrites broke login). */
 function mergeLocalPreferredAdminPasswordOnInitialCloudHydrate(localPayload, cloudPayload) {
   if (!cloudPayload || typeof cloudPayload !== 'object') return cloudPayload
@@ -350,6 +480,46 @@ function mergeEvalPeriodDefinitionArrays(prevRaw, remoteRaw) {
     map.set(row.key, next)
   }
   return [...map.values()].sort((a, b) => compareEvalPeriodDefRows(a, b))
+}
+
+function inferEvalGradeFromScores(criteriaStore, evalState) {
+  const scores = evalState?.scores && typeof evalState.scores === 'object' && !Array.isArray(evalState.scores)
+    ? evalState.scores
+    : {}
+  const filledIds = Object.entries(scores)
+    .filter(([, v]) => String(v ?? '').trim() !== '')
+    .map(([id]) => String(id ?? '').trim())
+    .filter(Boolean)
+  if (!filledIds.length) return ''
+  const byGrade =
+    criteriaStore?.byGrade && typeof criteriaStore.byGrade === 'object' && !Array.isArray(criteriaStore.byGrade)
+      ? criteriaStore.byGrade
+      : {}
+  const candidates = Object.keys(byGrade).filter(Boolean)
+  let bestGrade = ''
+  let bestMatched = -1
+  let bestTotal = Number.POSITIVE_INFINITY
+  for (const grade of candidates) {
+    const ids = new Set(
+      buildEvalCategoriesForGrade(criteriaStore, grade)
+        .flatMap((c) => c.items ?? [])
+        .map((it) => String(it?.id ?? '').trim())
+        .filter(Boolean),
+    )
+    if (!ids.size) continue
+    let matched = 0
+    for (const id of filledIds) {
+      if (ids.has(id)) matched += 1
+    }
+    if (matched <= 0) continue
+    // まず一致数を優先、同数なら総設問数が近い（少ない）等級を優先
+    if (matched > bestMatched || (matched === bestMatched && ids.size < bestTotal)) {
+      bestMatched = matched
+      bestTotal = ids.size
+      bestGrade = grade
+    }
+  }
+  return bestGrade
 }
 
 function pickRadarPeriodKeys({ activeKey, selfHist, bossHist, execHist, definitions, limit = 3 }) {
@@ -1972,6 +2142,22 @@ function App() {
     return normalizeEmployeeDirectoryRows(base)
   })
   const employeeDirectoryDirtyRef = useRef(false)
+  const employeeDirectorySavedAtRef = useRef(String(savedData?.employeeDirectorySavedAt ?? '').trim())
+  const employeeDirectoryWriteFromRemoteRef = useRef(false)
+  const prevEmployeeDirectoryJsonRef = useRef(
+    JSON.stringify({
+      employeeDirectoryRows:
+        Array.isArray(savedData?.employeeDirectoryRows) && savedData.employeeDirectoryRows.length > 0
+          ? normalizeEmployeeDirectoryRows(savedData.employeeDirectoryRows)
+          : normalizeEmployeeDirectoryRows(defaultEmployeeDirectoryRows),
+      employeeDeptOptions: mergeEmployeeDeptOptionsFromRows(
+        savedData?.employeeDeptOptions,
+        Array.isArray(savedData?.employeeDirectoryRows) && savedData.employeeDirectoryRows.length > 0
+          ? normalizeEmployeeDirectoryRows(savedData.employeeDirectoryRows)
+          : normalizeEmployeeDirectoryRows(defaultEmployeeDirectoryRows),
+      ),
+    }),
+  )
   const updateEmployeeDirectoryRowsLocal = useCallback((updater) => {
     employeeDirectoryDirtyRef.current = true
     setEmployeeDirectoryRows(updater)
@@ -1992,6 +2178,17 @@ function App() {
     const rows = normalizeEmployeeDirectoryRows(base)
     return mergeEmployeeDeptOptionsFromRows(savedData?.employeeDeptOptions, rows)
   })
+  useEffect(() => {
+    const nextJson = JSON.stringify({ employeeDirectoryRows, employeeDeptOptions })
+    if (employeeDirectoryWriteFromRemoteRef.current) {
+      employeeDirectoryWriteFromRemoteRef.current = false
+      prevEmployeeDirectoryJsonRef.current = nextJson
+      return
+    }
+    if (nextJson === prevEmployeeDirectoryJsonRef.current) return
+    prevEmployeeDirectoryJsonRef.current = nextJson
+    employeeDirectorySavedAtRef.current = new Date().toISOString()
+  }, [employeeDirectoryRows, employeeDeptOptions])
   const [skillSettings, setSkillSettings] = useState(() => {
     const saved = savedData?.skillSettings
     const base = Array.isArray(saved) && saved.length > 0 ? saved : defaultSkillSettings
@@ -2064,6 +2261,34 @@ function App() {
     const g = savedData?.skillActiveGradeId
     return typeof g === 'string' && g ? g : 'G1'
   })
+  const skillMasterSavedAtRef = useRef(String(savedData?.skillMasterSavedAt ?? '').trim())
+  const skillMasterWriteFromRemoteRef = useRef(false)
+  const prevSkillMasterJsonRef = useRef(
+    JSON.stringify({
+      skillSettings:
+        Array.isArray(savedData?.skillSettings) && savedData.skillSettings.length > 0
+          ? savedData.skillSettings
+          : defaultSkillSettings,
+      skillSections:
+        Array.isArray(savedData?.skillSections) && savedData.skillSections.length > 0
+          ? savedData.skillSections
+          : defaultSkillSections,
+      skillGrades:
+        Array.isArray(savedData?.skillGrades) && savedData.skillGrades.length > 0 ? savedData.skillGrades : defaultSkillGrades,
+      skillActiveGradeId: typeof savedData?.skillActiveGradeId === 'string' && savedData.skillActiveGradeId ? savedData.skillActiveGradeId : 'G1',
+    }),
+  )
+  useEffect(() => {
+    const nextJson = JSON.stringify({ skillSettings, skillSections, skillGrades, skillActiveGradeId })
+    if (skillMasterWriteFromRemoteRef.current) {
+      skillMasterWriteFromRemoteRef.current = false
+      prevSkillMasterJsonRef.current = nextJson
+      return
+    }
+    if (nextJson === prevSkillMasterJsonRef.current) return
+    prevSkillMasterJsonRef.current = nextJson
+    skillMasterSavedAtRef.current = new Date().toISOString()
+  }, [skillSettings, skillSections, skillGrades, skillActiveGradeId])
   const [skillEmployeeProgress, setSkillEmployeeProgress] = useState(() => {
     const s = savedData?.skillEmployeeProgress
     if (s && typeof s === 'object' && !Array.isArray(s)) {
@@ -3001,9 +3226,13 @@ function App() {
         })
         const hasAllEvalCompleted = rows.some((r) => Number.isFinite(r.total100))
         if (!hasAllEvalCompleted) return null
+        const periodLabel =
+          String(
+            (evalPeriodDefinitions ?? []).find((d) => String(d?.key ?? '').trim() === periodKey)?.label ?? '',
+          ).trim() || periodKey
         return {
           periodKey,
-          label: idx === 0 ? `${periodKey}（最新）` : periodKey,
+          label: idx === 0 ? `${periodLabel}（最新）` : periodLabel,
           color: palette[idx] ?? palette[palette.length - 1],
           rows,
         }
@@ -3167,14 +3396,22 @@ function App() {
     const empId = String(employeeId ?? '').trim()
     const pk = String(periodKey ?? '').trim()
     if (!empId || !pk) return String(fallbackGrade ?? '').trim()
-    const selfSlot = selfEvalHistoryByEmployee?.[empId]?.[pk]
-    const bossSlot = supervisorEvalHistoryByEmployee?.[empId]?.[pk]
+    const selfPeriods = selfEvalHistoryByEmployee?.[empId] ?? {}
+    const bossPeriods = supervisorEvalHistoryByEmployee?.[empId] ?? {}
+    const selfKey = resolveEquivalentPeriodKey(pk, selfPeriods, evalPeriodDefinitions)
+    const bossKey = resolveEquivalentPeriodKey(pk, bossPeriods, evalPeriodDefinitions)
+    const selfSlot = selfKey ? selfPeriods?.[selfKey] : undefined
+    const bossSlot = bossKey ? bossPeriods?.[bossKey] : undefined
     const selfSubmitted = Boolean(String(selfSlot?.submittedAt ?? '').trim())
     const bossSubmitted = Boolean(String(bossSlot?.submittedAt ?? '').trim())
     const selfGrade = String(selfSlot?.evalGrade ?? '').trim()
     const bossGrade = String(bossSlot?.evalGrade ?? '').trim()
     if (selfSubmitted && selfGrade) return selfGrade
     if (bossSubmitted && bossGrade) return bossGrade
+    const inferredSelf = inferEvalGradeFromScores(evaluationCriteria, selfSlot)
+    if (inferredSelf) return inferredSelf
+    const inferredBoss = inferEvalGradeFromScores(evaluationCriteria, bossSlot)
+    if (inferredBoss) return inferredBoss
     const currentGrade =
       String(
         employeeDirectoryRows.find((row) => String(row?.id ?? '').trim() === empId)?.grade ??
@@ -3210,8 +3447,14 @@ function App() {
       const empId = String(employee?.id ?? '').trim()
       const pk = String(periodKey ?? '').trim()
       if (!empId || !pk) return Number.NaN
-      const selfHistSlot = selfEvalHistoryByEmployee?.[empId]?.[pk]
-      const bossHistSlot = supervisorEvalHistoryByEmployee?.[empId]?.[pk]
+      const selfPeriods = selfEvalHistoryByEmployee?.[empId] ?? {}
+      const bossPeriods = supervisorEvalHistoryByEmployee?.[empId] ?? {}
+      const execPeriods = executiveEvalHistoryByEmployee?.[empId] ?? {}
+      const selfKey = resolveEquivalentPeriodKey(pk, selfPeriods, evalPeriodDefinitions)
+      const bossKey = resolveEquivalentPeriodKey(pk, bossPeriods, evalPeriodDefinitions)
+      const execKey = resolveEquivalentPeriodKey(pk, execPeriods, evalPeriodDefinitions)
+      const selfHistSlot = selfKey ? selfPeriods?.[selfKey] : undefined
+      const bossHistSlot = bossKey ? bossPeriods?.[bossKey] : undefined
       const execHistByEmp = executiveEvalHistoryByEmployee?.[empId]
       const isActive = pk === String(effectiveEvalPeriodKey ?? '').trim()
       const selfState = {
@@ -3223,8 +3466,8 @@ function App() {
         ...(isActive ? (supervisorEvalByEmployee?.[empId] ?? {}) : {}),
       }
       const execState = isActive
-        ? (executiveEvalByEmployee?.[empId] ?? execHistByEmp?.[pk] ?? execHistByEmp?.cumulative)
-        : (execHistByEmp?.[pk] ?? null)
+        ? (executiveEvalByEmployee?.[empId] ?? (execKey ? execHistByEmp?.[execKey] : null) ?? execHistByEmp?.cumulative)
+        : ((execKey ? execHistByEmp?.[execKey] : null) ?? null)
       const gradeForPeriod = resolveEvalGradeForPeriod(empId, pk, employee?.grade)
       const categories = buildEvalCategoriesForGrade(evaluationCriteria, gradeForPeriod)
       const selfScores = selfState?.scores ?? {}
@@ -3246,16 +3489,34 @@ function App() {
       return parts.reduce((sum, x) => sum + (x.score * x.weight), 0) / weightTotal
   }
   const selfEvalSubmittedRawForActive = Boolean(
-    evalSubjectEmployee?.id &&
-      String(selfEvalHistoryByEmployee?.[evalSubjectEmployee.id]?.[effectiveEvalPeriodKey]?.submittedAt ?? '').trim(),
+    (() => {
+      const empId = String(evalSubjectEmployee?.id ?? '').trim()
+      const pk = String(effectiveEvalPeriodKey ?? '').trim()
+      if (!empId || !pk) return ''
+      const periods = selfEvalHistoryByEmployee?.[empId] ?? {}
+      const resolved = resolveEquivalentPeriodKey(pk, periods, evalPeriodDefinitions)
+      return resolved ? String(periods?.[resolved]?.submittedAt ?? '').trim() : ''
+    })(),
   )
   const supervisorEvalSubmittedRawForActive = Boolean(
-    evalSubjectEmployee?.id &&
-      String(supervisorEvalHistoryByEmployee?.[evalSubjectEmployee.id]?.[effectiveEvalPeriodKey]?.submittedAt ?? '').trim(),
+    (() => {
+      const empId = String(evalSubjectEmployee?.id ?? '').trim()
+      const pk = String(effectiveEvalPeriodKey ?? '').trim()
+      if (!empId || !pk) return ''
+      const periods = supervisorEvalHistoryByEmployee?.[empId] ?? {}
+      const resolved = resolveEquivalentPeriodKey(pk, periods, evalPeriodDefinitions)
+      return resolved ? String(periods?.[resolved]?.submittedAt ?? '').trim() : ''
+    })(),
   )
   const executiveEvalSubmittedRawForActive = Boolean(
-    evalSubjectEmployee?.id &&
-      String(executiveEvalHistoryByEmployee?.[evalSubjectEmployee.id]?.[effectiveEvalPeriodKey]?.submittedAt ?? '').trim(),
+    (() => {
+      const empId = String(evalSubjectEmployee?.id ?? '').trim()
+      const pk = String(effectiveEvalPeriodKey ?? '').trim()
+      if (!empId || !pk) return ''
+      const periods = executiveEvalHistoryByEmployee?.[empId] ?? {}
+      const resolved = resolveEquivalentPeriodKey(pk, periods, evalPeriodDefinitions)
+      return resolved ? String(periods?.[resolved]?.submittedAt ?? '').trim() : ''
+    })(),
   )
   const selfEvalSubmittedForActive = selfEvalSubmittedRawForActive
   const supervisorEvalSubmittedForActive = supervisorEvalSubmittedRawForActive
@@ -3352,6 +3613,37 @@ function App() {
       })
     },
     [effectiveEvalPeriodKey, supervisorEvalHistoryByEmployee, employeeDirectoryRows],
+  )
+
+  const withdrawExecutiveEvalForMember = useCallback(
+    (employeeId, periodKeyOverride) => {
+      const empId = String(employeeId ?? '').trim()
+      const periodKey = String(periodKeyOverride ?? effectiveEvalPeriodKey ?? '').trim()
+      if (!empId || !periodKey) return
+      const periods = executiveEvalHistoryByEmployee?.[empId] ?? {}
+      const resolvedKey = resolveEquivalentPeriodKey(periodKey, periods, evalPeriodDefinitions)
+      const slot = resolvedKey ? periods?.[resolvedKey] : null
+      if (!String(slot?.submittedAt ?? '').trim()) return
+      const empLabel =
+        String(employeeDirectoryRows.find((r) => String(r?.id ?? '').trim() === empId)?.name ?? '').trim() || empId
+      if (!window.confirm(`${empLabel} の2次評価(経営層)（${periodKey}）の提出を取り消しますか？\n\n再編集できるようになります。`)) return
+      setExecutiveEvalHistoryByEmployee((prev) => {
+        const key = resolveEquivalentPeriodKey(periodKey, prev?.[empId] ?? {}, evalPeriodDefinitions)
+        if (!key) return prev
+        const current = prev?.[empId]?.[key] ?? {}
+        return {
+          ...(prev ?? {}),
+          [empId]: {
+            ...((prev ?? {})[empId] ?? {}),
+            [key]: {
+              ...current,
+              submittedAt: '',
+            },
+          },
+        }
+      })
+    },
+    [effectiveEvalPeriodKey, executiveEvalHistoryByEmployee, evalPeriodDefinitions, employeeDirectoryRows],
   )
 
   const submitSelfEvalForActivePeriod = useCallback(() => {
@@ -3566,6 +3858,41 @@ function App() {
     return 1
   }, [updateEmployeeDirectoryRowsLocal])
 
+  useEffect(() => {
+    if (!Array.isArray(evalPeriodDefinitions) || !evalPeriodDefinitions.length) return
+    setSelfEvalHistoryByEmployee((prev) =>
+      remapPeriodKeysToDefinitionKeysInEmployeeNestedMap(prev, evalPeriodDefinitions),
+    )
+    setSupervisorEvalHistoryByEmployee((prev) =>
+      remapPeriodKeysToDefinitionKeysInEmployeeNestedMap(prev, evalPeriodDefinitions),
+    )
+    setExecutiveEvalHistoryByEmployee((prev) =>
+      remapPeriodKeysToDefinitionKeysInEmployeeNestedMap(prev, evalPeriodDefinitions),
+    )
+    setGoalsByEmployeePeriod((prev) =>
+      remapPeriodKeysToDefinitionKeysInEmployeeNestedMap(prev, evalPeriodDefinitions),
+    )
+    setGoalDirectionByEmployeePeriod((prev) =>
+      remapPeriodKeysToDefinitionKeysInEmployeeNestedMap(prev, evalPeriodDefinitions),
+    )
+    setGoalFocusMajorByEmployeePeriod((prev) =>
+      remapPeriodKeysToDefinitionKeysInEmployeeNestedMap(prev, evalPeriodDefinitions),
+    )
+    setGoalSubmissionByEmployee((prev) =>
+      remapPeriodKeysToDefinitionKeysInEmployeeNestedMap(prev, evalPeriodDefinitions),
+    )
+    setActiveEvalPeriodKey((prev) => {
+      const cur = String(prev ?? '').trim()
+      if (!cur) return prev
+      const remapped = remapPeriodKeysToDefinitionKeysInEmployeeNestedMap(
+        { x: { [cur]: { ok: true } } },
+        evalPeriodDefinitions,
+      )
+      const canonical = String(Object.keys(remapped?.x ?? {})[0] ?? cur).trim()
+      return canonical || prev
+    })
+  }, [evalPeriodDefinitions])
+
 
   const updateSelfEvalForSubject = useCallback(
     (updater) => {
@@ -3617,8 +3944,10 @@ function App() {
       const perEmp = {}
       for (const [empId, periods] of Object.entries(hist ?? {})) {
         if (!periods || typeof periods !== 'object' || Array.isArray(periods)) continue
-        if (!effectiveEvalPeriodKey || !periods[effectiveEvalPeriodKey]) continue
-        perEmp[empId] = periods[effectiveEvalPeriodKey]
+        if (!effectiveEvalPeriodKey) continue
+        const resolvedKey = resolveEquivalentPeriodKey(effectiveEvalPeriodKey, periods, evalPeriodDefinitions)
+        if (!resolvedKey || !periods[resolvedKey]) continue
+        perEmp[empId] = periods[resolvedKey]
       }
       return normalizer(perEmp)
     }
@@ -3629,7 +3958,8 @@ function App() {
       for (const [empId, periods] of Object.entries(hist ?? {})) {
         if (!empId || !periods || typeof periods !== 'object' || Array.isArray(periods)) continue
         if (!effectiveEvalPeriodKey) continue
-        const slot = periods[effectiveEvalPeriodKey]
+        const resolvedKey = resolveEquivalentPeriodKey(effectiveEvalPeriodKey, periods, evalPeriodDefinitions)
+        const slot = resolvedKey ? periods[resolvedKey] : null
         if (!slot || typeof slot !== 'object' || Array.isArray(slot)) continue
         const normalized = normalizeExecutiveEvalByEmployeeMap({ [empId]: slot })[empId]
         if (normalized) perEmp[empId] = normalized
@@ -3670,6 +4000,7 @@ function App() {
     }
   }, [
     effectiveEvalPeriodKey,
+    evalPeriodDefinitions,
     selfEvalHistoryByEmployee,
     supervisorEvalHistoryByEmployee,
     executiveEvalHistoryByEmployee,
@@ -4130,9 +4461,18 @@ function App() {
       setSyncError('Supabaseが未設定です。.env.local の設定を確認してください。')
       return false
     }
+    let payloadToSave = payload
     let serialized = ''
     try {
-      serialized = JSON.stringify(payload)
+      const { data: currentCloudData } = await supabase
+        .from('app_state')
+        .select('payload')
+        .eq('id', CLOUD_STATE_ID)
+        .maybeSingle()
+      if (currentCloudData?.payload && typeof currentCloudData.payload === 'object') {
+        payloadToSave = mergeConflictSafePayloadForCloudSave(payload, currentCloudData.payload)
+      }
+      serialized = JSON.stringify(payloadToSave)
     } catch {
       if (!silent) setSyncMessage('Supabase保存失敗（ローカル保存は有効）')
       setSyncError('クラウド保存に失敗しました。データの形式を確認してください。')
@@ -4144,7 +4484,7 @@ function App() {
     if (!silent) setSyncMessage('Supabaseに保存中...')
     const { error } = await supabase
       .from('app_state')
-      .upsert({ id: CLOUD_STATE_ID, payload }, { onConflict: 'id' })
+      .upsert({ id: CLOUD_STATE_ID, payload: payloadToSave }, { onConflict: 'id' })
     if (error) {
       setSyncMessage('Supabase保存失敗（ローカル保存は有効）')
       setSyncError('クラウド保存に失敗しました。ネットワークまたはSupabase設定を確認して再試行してください。')
@@ -4180,10 +4520,12 @@ function App() {
     const payload = {
     rows,
       employeeDirectoryRows: includeSensitive ? employeeDirectoryRows : stripSensitiveEmployeeFields(employeeDirectoryRows),
+    ...(employeeDirectorySavedAtRef.current ? { employeeDirectorySavedAt: employeeDirectorySavedAtRef.current } : {}),
     skillSettings,
     skillSections,
     skillGrades,
     skillActiveGradeId,
+    ...(skillMasterSavedAtRef.current ? { skillMasterSavedAt: skillMasterSavedAtRef.current } : {}),
     skillEmployeeProgress,
     skillProgressUpdatedAtByEmployee,
       goalsByEmployeePeriod,
@@ -4247,6 +4589,7 @@ function App() {
       includeEvalDrafts = true,
       includeEmployeeDirectory = true,
       includeSettingsData = true,
+      includeSkillMaster = false,
       includeEvalPeriodDefinitions = false,
       includeEvaluationCriteria = false,
       forceEmployeeDirectory = false,
@@ -4259,8 +4602,16 @@ function App() {
       Array.isArray(payload.employeeDirectoryRows) &&
       payload.employeeDirectoryRows.length > 0
     ) {
-      setEmployeeDirectoryRows(normalizeEmployeeDirectoryRows(payload.employeeDirectoryRows))
-      employeeDirectoryDirtyRef.current = false
+      const incomingAt = String(payload.employeeDirectorySavedAt ?? '').trim()
+      const currentAt = String(employeeDirectorySavedAtRef.current ?? '').trim()
+      const shouldApplyEmployeeDirectory =
+        !currentAt || (incomingAt && incomingAt >= currentAt) || (!incomingAt && !currentAt)
+      if (shouldApplyEmployeeDirectory) {
+        employeeDirectoryWriteFromRemoteRef.current = true
+        setEmployeeDirectoryRows(normalizeEmployeeDirectoryRows(payload.employeeDirectoryRows))
+        if (incomingAt) employeeDirectorySavedAtRef.current = incomingAt
+        employeeDirectoryDirtyRef.current = false
+      }
     }
     if (
       includeEmployeeDirectory &&
@@ -4271,18 +4622,41 @@ function App() {
         Array.isArray(payload.employeeDirectoryRows) && payload.employeeDirectoryRows.length > 0
           ? normalizeEmployeeDirectoryRows(payload.employeeDirectoryRows)
           : undefined
-      setEmployeeDeptOptions(mergeEmployeeDeptOptionsFromRows(payload.employeeDeptOptions, rowsForDept))
+      const incomingAt = String(payload.employeeDirectorySavedAt ?? '').trim()
+      const currentAt = String(employeeDirectorySavedAtRef.current ?? '').trim()
+      const shouldApplyEmployeeDirectory =
+        !currentAt || (incomingAt && incomingAt >= currentAt) || (!incomingAt && !currentAt)
+      if (shouldApplyEmployeeDirectory) {
+        employeeDirectoryWriteFromRemoteRef.current = true
+        setEmployeeDeptOptions(mergeEmployeeDeptOptionsFromRows(payload.employeeDeptOptions, rowsForDept))
+        if (incomingAt) employeeDirectorySavedAtRef.current = incomingAt
+      }
     } else if (
       includeEmployeeDirectory &&
       (!employeeDirectoryDirtyRef.current || forceEmployeeDirectory) &&
       Array.isArray(payload.employeeDirectoryRows) &&
       payload.employeeDirectoryRows.length > 0
     ) {
-      setEmployeeDeptOptions((prev) =>
-        mergeEmployeeDeptOptionsFromRows(prev, normalizeEmployeeDirectoryRows(payload.employeeDirectoryRows)),
-      )
+      const incomingAt = String(payload.employeeDirectorySavedAt ?? '').trim()
+      const currentAt = String(employeeDirectorySavedAtRef.current ?? '').trim()
+      const shouldApplyEmployeeDirectory =
+        !currentAt || (incomingAt && incomingAt >= currentAt) || (!incomingAt && !currentAt)
+      if (shouldApplyEmployeeDirectory) {
+        employeeDirectoryWriteFromRemoteRef.current = true
+        setEmployeeDeptOptions((prev) =>
+          mergeEmployeeDeptOptionsFromRows(prev, normalizeEmployeeDirectoryRows(payload.employeeDirectoryRows)),
+        )
+        if (incomingAt) employeeDirectorySavedAtRef.current = incomingAt
+      }
     }
-    if (includeSettingsData && Array.isArray(payload.skillSettings)) {
+    const incomingSkillMasterAt = String(payload.skillMasterSavedAt ?? '').trim()
+    const currentSkillMasterAt = String(skillMasterSavedAtRef.current ?? '').trim()
+    const shouldApplySkillMaster =
+      !currentSkillMasterAt ||
+      (incomingSkillMasterAt && incomingSkillMasterAt >= currentSkillMasterAt) ||
+      (!incomingSkillMasterAt && !currentSkillMasterAt)
+    if ((includeSettingsData || includeSkillMaster) && Array.isArray(payload.skillSettings) && shouldApplySkillMaster) {
+      skillMasterWriteFromRemoteRef.current = true
       setSkillSettings(
         payload.skillSettings.map((s) => {
           const st = Math.min(20, Math.max(1, Number(s.stages) || 3))
@@ -4295,15 +4669,20 @@ function App() {
           }
         }),
       )
+      if (incomingSkillMasterAt) skillMasterSavedAtRef.current = incomingSkillMasterAt
     }
-    if (includeSettingsData && Array.isArray(payload.skillGrades) && payload.skillGrades.length > 0) {
+    if ((includeSettingsData || includeSkillMaster) && Array.isArray(payload.skillGrades) && payload.skillGrades.length > 0 && shouldApplySkillMaster) {
+      skillMasterWriteFromRemoteRef.current = true
       const cleaned = payload.skillGrades.filter(
         (g) => g && typeof g.id === 'string' && typeof g.label === 'string',
       )
       if (cleaned.length > 0) setSkillGrades(cleaned)
+      if (incomingSkillMasterAt) skillMasterSavedAtRef.current = incomingSkillMasterAt
     }
-    if (includeSettingsData && typeof payload.skillActiveGradeId === 'string' && payload.skillActiveGradeId) {
+    if ((includeSettingsData || includeSkillMaster) && typeof payload.skillActiveGradeId === 'string' && payload.skillActiveGradeId && shouldApplySkillMaster) {
+      skillMasterWriteFromRemoteRef.current = true
       setSkillActiveGradeId(payload.skillActiveGradeId)
+      if (incomingSkillMasterAt) skillMasterSavedAtRef.current = incomingSkillMasterAt
     }
     if (
       includeSettingsData &&
@@ -4486,11 +4865,13 @@ function App() {
     if (Array.isArray(payload.promotionRequests)) {
       setPromotionRequests(normalizePromotionRequests(payload.promotionRequests))
     }
-    if (includeSettingsData && Array.isArray(payload.skillSections) && payload.skillSections.length > 0) {
+    if ((includeSettingsData || includeSkillMaster) && Array.isArray(payload.skillSections) && payload.skillSections.length > 0 && shouldApplySkillMaster) {
+      skillMasterWriteFromRemoteRef.current = true
       const cleaned = payload.skillSections.filter(
         (s) => s && typeof s.id === 'string' && typeof s.label === 'string',
       )
       if (cleaned.length > 0) setSkillSections(cleaned)
+      if (incomingSkillMasterAt) skillMasterSavedAtRef.current = incomingSkillMasterAt
     }
     if (typeof payload.departmentSalesDenture === 'string') {
       setDepartmentSalesDenture(payload.departmentSalesDenture)
@@ -4946,6 +5327,7 @@ function App() {
           includeEvalDrafts: false,
           includeEmployeeDirectory: false,
           includeSettingsData: false,
+          includeSkillMaster: true,
           includeEvalPeriodDefinitions: true,
           includeEvaluationCriteria: false,
         })
@@ -5954,6 +6336,7 @@ function App() {
                 onWithdrawGoalSubmissionForMember={withdrawGoalsSubmissionForMember}
                 goalSubmissionByEmployee={goalSubmissionByEmployee}
                 onSubmitExecutiveEvaluation={submitExecutiveEvalForMember}
+                onWithdrawExecutiveEvaluation={withdrawExecutiveEvalForMember}
               />
             ) : null}
             {effectiveWorkspaceView === 'count' ? (
@@ -5979,6 +6362,10 @@ function App() {
                 selfEvalByEmployee={selfEvalByEmployee}
                 supervisorEvalByEmployee={supervisorEvalByEmployee}
                 executiveEvalByEmployee={executiveEvalByEmployee}
+                selfEvalHistoryByEmployee={selfEvalHistoryByEmployee}
+                supervisorEvalHistoryByEmployee={supervisorEvalHistoryByEmployee}
+                executiveEvalHistoryByEmployee={executiveEvalHistoryByEmployee}
+                evalPeriodDefinitions={evalPeriodDefinitions}
                 evaluationCriteria={evaluationCriteria}
                 hideGradeAndTotalScore={menuRoleKey === MENU_ROLE_YAKUIN}
                 onEmployeeIdRename={renameEmployeeIdInAppState}
@@ -6148,8 +6535,14 @@ function App() {
                 evalPeriodSelectOptions={evalPeriodSelectOptions}
                 evalPeriodFallbackKey={evalPeriodFallbackKey}
                 executiveEvalHistoryByEmployee={executiveEvalHistoryByEmployee}
+                selfEvalHistoryByEmployee={selfEvalHistoryByEmployee}
+                supervisorEvalHistoryByEmployee={supervisorEvalHistoryByEmployee}
+                evalPeriodDefinitions={evalPeriodDefinitions}
                 isSubmittedForPeriod={executiveEvalSubmittedForActive}
                 onSubmitEvaluation={submitExecutiveEvalForActivePeriod}
+                onWithdrawSubmission={() =>
+                  withdrawExecutiveEvalForMember(evalSubjectEmployee?.id, effectiveEvalPeriodKey)
+                }
                 peerSelfEval={evalSubjectEmployee ? selfEvalByEmployee[evalSubjectEmployee.id] : undefined}
                 peerSupervisorEval={evalSubjectEmployee ? supervisorEvalByEmployee[evalSubjectEmployee.id] : undefined}
                 canEvaluate
@@ -8153,6 +8546,10 @@ const MemberEvalRadarChart = memo(function MemberEvalRadarChart({
   }, [targetSeriesForMajorList])
   const latestPeriodKey = String(usableSeries[0]?.periodKey ?? '').trim()
   const shownActivePeriodKey = String(activePeriodKey ?? '').trim()
+  const shownActivePeriodLabel = String(
+    usableSeries.find((s) => String(s?.periodKey ?? '').trim() === shownActivePeriodKey)?.label ?? shownActivePeriodKey,
+  ).trim()
+  const latestPeriodLabel = String(usableSeries[0]?.label ?? latestPeriodKey).trim()
   const highlightedMajorKey = String(highlightMajorKey ?? '').trim()
   const modeTitle = '総合得点（一覧式）3期レーダー'
   const wrapperClass = `memberEvalRadar${compact ? ' isCompact' : ''}`
@@ -8166,11 +8563,11 @@ const MemberEvalRadarChart = memo(function MemberEvalRadarChart({
             {Number.isFinite(shownScore) ? `${shownScore.toFixed(1)}点` : '—'}
             {String(gradeLabel ?? '').trim() ? ` / 等級 ${String(gradeLabel).trim()}` : ''}
           </p>
-          {(shownActivePeriodKey || latestPeriodKey) ? (
+          {(shownActivePeriodLabel || latestPeriodLabel) ? (
             <small className="memberEvalRadarPeriodMeta">
-              {shownActivePeriodKey ? `表示期: ${shownActivePeriodKey}` : ''}
-              {shownActivePeriodKey && latestPeriodKey ? ' / ' : ''}
-              {latestPeriodKey ? `3期比較の最新: ${latestPeriodKey}` : ''}
+              {shownActivePeriodLabel ? `表示期: ${shownActivePeriodLabel}` : ''}
+              {shownActivePeriodLabel && latestPeriodLabel ? ' / ' : ''}
+              {latestPeriodLabel ? `3期比較の最新: ${latestPeriodLabel}` : ''}
             </small>
           ) : null}
           {showWeightedFormula ? (
@@ -8181,11 +8578,11 @@ const MemberEvalRadarChart = memo(function MemberEvalRadarChart({
         <div className="memberEvalRadarHead">
           <h4>{modeTitle}</h4>
           <p>一覧式の総合得点: {Number.isFinite(shownScore) ? `${shownScore.toFixed(1)}点` : '—'}</p>
-          {(shownActivePeriodKey || latestPeriodKey) ? (
+          {(shownActivePeriodLabel || latestPeriodLabel) ? (
             <small className="memberEvalRadarPeriodMeta">
-              {shownActivePeriodKey ? `表示期: ${shownActivePeriodKey}` : ''}
-              {shownActivePeriodKey && latestPeriodKey ? ' / ' : ''}
-              {latestPeriodKey ? `3期比較の最新: ${latestPeriodKey}` : ''}
+              {shownActivePeriodLabel ? `表示期: ${shownActivePeriodLabel}` : ''}
+              {shownActivePeriodLabel && latestPeriodLabel ? ' / ' : ''}
+              {latestPeriodLabel ? `3期比較の最新: ${latestPeriodLabel}` : ''}
             </small>
           ) : null}
           {showWeightedFormula ? (
@@ -8327,6 +8724,7 @@ function EvalQuestionnairePage({
   submissionWithdrawalsUsed = 0,
   onWithdrawSubmission,
   withdrawBlockedByDeadline = false,
+  forcedEvalGrade = '',
 }) {
   const isBoss = variant === 'boss'
   const isExec = variant === 'exec'
@@ -8364,6 +8762,8 @@ function EvalQuestionnairePage({
   }
 
   const viewingEvalGrade = useMemo(() => {
+    const forced = String(forcedEvalGrade ?? '').trim()
+    if (forced) return forced
     const empId = String(employee?.id ?? '').trim()
     const activeKey = String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '').trim()
     if (!empId || !activeKey) return String(employee?.grade ?? '').trim()
@@ -8371,7 +8771,7 @@ function EvalQuestionnairePage({
     const stored = String(slot?.evalGrade ?? '').trim()
     const isSubmitted = Boolean(String(slot?.submittedAt ?? '').trim())
     return isSubmitted ? (stored || String(employee?.grade ?? '').trim()) : String(employee?.grade ?? '').trim()
-  }, [employee?.id, employee?.grade, evalHistoryByEmployee, activeEvalPeriodKey, evalPeriodFallbackKey])
+  }, [forcedEvalGrade, employee?.id, employee?.grade, evalHistoryByEmployee, activeEvalPeriodKey, evalPeriodFallbackKey])
 
   const resolvedEvalGradeForItems = useMemo(() => {
     const byGrade =
@@ -8682,8 +9082,8 @@ function EvalQuestionnairePage({
       <div className="selfEvalActivePeriodBanner" id="eval-active-period-banner" role="status">
         <span className="selfEvalActivePeriodBannerLabel">いま編集している評価期</span>
         <span className="selfEvalActivePeriodBannerValue">{resolvedPeriodLabel}</span>
-        <code className="selfEvalActivePeriodBannerKey" title="内部キー（表記が似ている期の見分け用）">
-          {resolvedPeriodKey || '—'}
+        <code className="selfEvalActivePeriodBannerKey" title="評価期ラベル">
+          {resolvedPeriodLabel || '—'}
         </code>
       </div>
       <div className="selfEvalGuide">
@@ -8875,10 +9275,6 @@ function EvalQuestionnairePage({
         <div className="selfEvalSubmitBar">
           <p className="selfEvalSubmitHint selfEvalSubmitHint--periodTarget">
             提出の対象となる評価期: <strong>{resolvedPeriodLabel}</strong>
-            <span className="selfEvalSubmitPeriodKeyWrap">
-              {' '}
-              （キー <code>{resolvedPeriodKey || '—'}</code>）
-            </span>
           </p>
           <button
             type="button"
@@ -8897,6 +9293,16 @@ function EvalQuestionnairePage({
                   ? '提出すると、この評価期は閲覧のみになり編集できません。'
                   : '全項目の評価を完了すると提出できます。'}
           </p>
+          {typeof onWithdrawSubmission === 'function' && isExec && isSubmittedForPeriod ? (
+            <>
+              <button type="button" className="selfEvalWithdrawBtn" onClick={() => onWithdrawSubmission?.()}>
+                提出を取り消す
+              </button>
+              <p className="selfEvalSubmitHint selfEvalWithdrawHint">
+                取り消し後はこの評価期の2次評価を再編集できます。
+              </p>
+            </>
+          ) : null}
           {typeof onWithdrawSubmission === 'function' && !isExec && isSubmittedForPeriod && !withdrawBlockedByDeadline && submissionWithdrawalsUsed < MAX_EVAL_SUBMISSION_WITHDRAWALS ? (
             <>
               <button type="button" className="selfEvalWithdrawBtn" onClick={() => onWithdrawSubmission?.()}>
@@ -8925,7 +9331,7 @@ function EvalQuestionnairePage({
             <button type="button" className="modalClose" onClick={() => setSelfEvalHistoryDetail(null)}>
               ×
             </button>
-            <h3>{selfEvalHistoryDetail.periodKey} の自己評価</h3>
+            <h3>{evalPeriodOptionLabel(evalPeriodSelectOptions, selfEvalHistoryDetail.periodKey)} の自己評価</h3>
             <p className="selfEvalHistorySnapshotLead">
               <span className="selfEvalHistorySnapshotBadge">閲覧のみ</span>
               等級（記録）: <strong>{selfEvalHistoryDetail.evalGradeLabel}</strong>
@@ -9114,8 +9520,12 @@ function ExecutiveEvaluationPage({
   evalPeriodSelectOptions,
   evalPeriodFallbackKey,
   executiveEvalHistoryByEmployee,
+  selfEvalHistoryByEmployee,
+  supervisorEvalHistoryByEmployee,
+  evalPeriodDefinitions,
   isSubmittedForPeriod,
   onSubmitEvaluation,
+  onWithdrawSubmission,
   peerSelfEval,
   peerSupervisorEval,
   canEvaluate,
@@ -9123,6 +9533,46 @@ function ExecutiveEvaluationPage({
   focusMajorKey = '',
   isPeriodSwitching = false,
 }) {
+  const resolvedExecEvalGrade = useMemo(() => {
+    const empId = String(employee?.id ?? '').trim()
+    const pk = String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '').trim()
+    if (!empId || !pk) return String(employee?.grade ?? '').trim()
+    const selfPeriods = selfEvalHistoryByEmployee?.[empId] ?? {}
+    const bossPeriods = supervisorEvalHistoryByEmployee?.[empId] ?? {}
+    const execPeriods = executiveEvalHistoryByEmployee?.[empId] ?? {}
+    const selfKey = resolveEquivalentPeriodKey(pk, selfPeriods, evalPeriodDefinitions)
+    const bossKey = resolveEquivalentPeriodKey(pk, bossPeriods, evalPeriodDefinitions)
+    const execKey = resolveEquivalentPeriodKey(pk, execPeriods, evalPeriodDefinitions)
+    const execSlot = execKey ? execPeriods?.[execKey] : null
+    const execSubmitted = Boolean(String(execSlot?.submittedAt ?? '').trim())
+    const execGrade = String(execSlot?.evalGrade ?? '').trim()
+    if (execSubmitted && execGrade) return execGrade
+    const inferredExecGrade = inferEvalGradeFromScores(evaluationCriteria, execSlot)
+    if (inferredExecGrade) return inferredExecGrade
+    const bossSlot = bossKey ? bossPeriods?.[bossKey] : null
+    const bossSubmitted = Boolean(String(bossSlot?.submittedAt ?? '').trim())
+    const bossGrade = String(bossSlot?.evalGrade ?? '').trim()
+    if (bossSubmitted && bossGrade) return bossGrade
+    const inferredBossGrade = inferEvalGradeFromScores(evaluationCriteria, bossSlot)
+    if (inferredBossGrade) return inferredBossGrade
+    const selfSlot = selfKey ? selfPeriods?.[selfKey] : null
+    const selfSubmitted = Boolean(String(selfSlot?.submittedAt ?? '').trim())
+    const selfGrade = String(selfSlot?.evalGrade ?? '').trim()
+    if (selfSubmitted && selfGrade) return selfGrade
+    const inferredSelfGrade = inferEvalGradeFromScores(evaluationCriteria, selfSlot)
+    if (inferredSelfGrade) return inferredSelfGrade
+    return String(employee?.grade ?? '').trim()
+  }, [
+    employee?.id,
+    employee?.grade,
+    activeEvalPeriodKey,
+    evalPeriodFallbackKey,
+    selfEvalHistoryByEmployee,
+    supervisorEvalHistoryByEmployee,
+    executiveEvalHistoryByEmployee,
+    evalPeriodDefinitions,
+    evaluationCriteria,
+  ])
   const normalizedEvalState = {
     scores: evalState?.scores ?? {},
     comments: evalState?.comments ?? {},
@@ -9157,10 +9607,12 @@ function ExecutiveEvaluationPage({
       evalPeriodFallbackKey={evalPeriodFallbackKey}
       isSubmittedForPeriod={Boolean(isSubmittedForPeriod)}
       onSubmitEvaluation={onSubmitEvaluation}
+      onWithdrawSubmission={onWithdrawSubmission}
       canEvaluate={canEvaluate}
       blockedReason={blockedReason}
       focusMajorKey={focusMajorKey}
       isPeriodSwitching={isPeriodSwitching}
+      forcedEvalGrade={resolvedExecEvalGrade}
     />
   )
 }
@@ -9409,8 +9861,8 @@ function GoalManagementPage({
       <div className="selfEvalActivePeriodBanner goalMgmtActivePeriodBanner" id="goal-mgmt-active-period-banner" role="status">
         <span className="selfEvalActivePeriodBannerLabel">いま編集している評価期</span>
         <span className="selfEvalActivePeriodBannerValue">{resolvedPeriodLabelGoals}</span>
-        <code className="selfEvalActivePeriodBannerKey" title="内部キー（表記が似ている期の見分け用）">
-          {resolvedPeriodKeyGoals || '—'}
+        <code className="selfEvalActivePeriodBannerKey" title="評価期ラベル">
+          {resolvedPeriodLabelGoals || '—'}
         </code>
       </div>
       {Array.isArray(radarSeries) && radarSeries.length > 0 ? (
@@ -10359,7 +10811,7 @@ const MemberHistoryTab = memo(function MemberHistoryTab({ rows, summary }) {
           <tbody>
             {rows.map((row) => (
               <tr key={row.periodKey}>
-                <td>{row.periodKey}</td>
+                <td>{row.periodLabel}</td>
                 <td>{row.selfLabel}</td>
                 <td className={String(row.selfDelta).startsWith('+') ? 'isUp' : String(row.selfDelta).startsWith('-') ? 'isDown' : ''}>
                   {row.selfDelta}
@@ -10423,6 +10875,7 @@ function AdminMockPage({
   onWithdrawGoalSubmissionForMember,
   goalSubmissionByEmployee,
   onSubmitExecutiveEvaluation,
+  onWithdrawExecutiveEvaluation,
 }) {
   const SELF_BOSS_GAP_ALERT_THRESHOLD = 20
   const [selectedMemberId, setSelectedMemberId] = useState(null)
@@ -10736,9 +11189,17 @@ function AdminMockPage({
     if (!selectedMember) return ''
     const periodKey = String(selectedMemberEffectivePeriodKey ?? '').trim()
     const empId = String(selectedMember.id ?? '').trim()
-    const selfStored = String(selfEvalHistoryByEmployee?.[empId]?.[periodKey]?.evalGrade ?? '').trim()
-    const bossStored = String(supervisorEvalHistoryByEmployee?.[empId]?.[periodKey]?.evalGrade ?? '').trim()
-    const preferred = selfStored || bossStored || String(selectedMember.grade ?? '').trim()
+    const selfPeriods = selfEvalHistoryByEmployee?.[empId] ?? {}
+    const bossPeriods = supervisorEvalHistoryByEmployee?.[empId] ?? {}
+    const selfKey = resolveEquivalentPeriodKey(periodKey, selfPeriods, evalPeriodDefinitions)
+    const bossKey = resolveEquivalentPeriodKey(periodKey, bossPeriods, evalPeriodDefinitions)
+    const selfSlot = selfKey ? selfPeriods?.[selfKey] : null
+    const bossSlot = bossKey ? bossPeriods?.[bossKey] : null
+    const selfStored = String(selfSlot?.evalGrade ?? '').trim()
+    const bossStored = String(bossSlot?.evalGrade ?? '').trim()
+    const inferredSelf = inferEvalGradeFromScores(evaluationCriteria, selfSlot)
+    const inferredBoss = inferEvalGradeFromScores(evaluationCriteria, bossSlot)
+    const preferred = selfStored || bossStored || inferredSelf || inferredBoss || String(selectedMember.grade ?? '').trim()
     const byGrade =
       evaluationCriteria?.byGrade &&
       typeof evaluationCriteria.byGrade === 'object' &&
@@ -10755,6 +11216,7 @@ function AdminMockPage({
     selectedMemberEffectivePeriodKey,
     selfEvalHistoryByEmployee,
     supervisorEvalHistoryByEmployee,
+    evalPeriodDefinitions,
     evaluationCriteria,
   ])
   const selectedMemberEvalItems = useMemo(() => {
@@ -10844,7 +11306,7 @@ function AdminMockPage({
         if (!hasAllEvalCompleted) return null
         return {
           periodKey,
-          label: idx === 0 ? `${periodKey}（最新）` : periodKey,
+          label: idx === 0 ? `${evalPeriodOptionLabel(adminMemberEvalPeriodSelectOptions, periodKey)}（最新）` : evalPeriodOptionLabel(adminMemberEvalPeriodSelectOptions, periodKey),
           color: palette[idx] ?? palette[palette.length - 1],
           rows,
         }
@@ -11233,10 +11695,12 @@ function AdminMockPage({
   ])
   const selectedMemberExecutiveSubmittedForActive = useMemo(() => {
     if (!selectedMember) return false
-    const periodKey = selectedMemberEffectivePeriodKey
+    const periodKey = String(selectedMemberEffectivePeriodKey ?? '').trim()
     if (!periodKey) return false
-    return Boolean(String(executiveEvalHistoryByEmployee?.[selectedMember.id]?.[periodKey]?.submittedAt ?? '').trim())
-  }, [selectedMember, selectedMemberEffectivePeriodKey, executiveEvalHistoryByEmployee])
+    const periods = executiveEvalHistoryByEmployee?.[selectedMember.id] ?? {}
+    const resolved = resolveEquivalentPeriodKey(periodKey, periods, evalPeriodDefinitions)
+    return Boolean(String((resolved ? periods?.[resolved] : null)?.submittedAt ?? '').trim())
+  }, [selectedMember, selectedMemberEffectivePeriodKey, executiveEvalHistoryByEmployee, evalPeriodDefinitions])
   const selectedMemberGoals = useMemo(() => {
     if (!selectedMember) return []
     const periodKey = String(selectedMemberEffectivePeriodKey ?? '').trim()
@@ -11262,30 +11726,35 @@ function AdminMockPage({
     const empId = selectedMember.id
     const selfPeriods = Object.keys(selfEvalHistoryByEmployee?.[empId] ?? {})
     const bossPeriods = Object.keys(supervisorEvalHistoryByEmployee?.[empId] ?? {})
-    const periodKeys = [...new Set([...selfPeriods, ...bossPeriods])].sort(compareEvalPeriodDesc)
-    const cumulativeExecState = executiveEvalByEmployee?.[empId] ?? executiveEvalHistoryByEmployee?.[empId]?.cumulative
+    const execPeriods = Object.keys(executiveEvalHistoryByEmployee?.[empId] ?? {}).filter((k) => String(k ?? '').trim() !== 'cumulative')
+    const periodKeys = [...new Set([...selfPeriods, ...bossPeriods, ...execPeriods])].sort(compareEvalPeriodDesc)
     const execScore = (state) => {
       if (!state) return null
       return executiveScore100ForState(state, evaluationCriteria, selectedMember?.grade)
     }
     const rawRows = periodKeys.map((periodKey) => {
-      const selfState = selfEvalHistoryByEmployee?.[empId]?.[periodKey]
+      const selfKey = resolveEquivalentPeriodKey(periodKey, selfEvalHistoryByEmployee?.[empId] ?? {}, evalPeriodDefinitions)
+      const bossKey = resolveEquivalentPeriodKey(periodKey, supervisorEvalHistoryByEmployee?.[empId] ?? {}, evalPeriodDefinitions)
+      const execKey = resolveEquivalentPeriodKey(periodKey, executiveEvalHistoryByEmployee?.[empId] ?? {}, evalPeriodDefinitions)
+      const selfState = selfKey ? selfEvalHistoryByEmployee?.[empId]?.[selfKey] : null
       const selfGrade = String(selfState?.evalGrade ?? selectedMember?.grade ?? '').trim()
       const selfCategories = buildEvalCategoriesForGrade(evaluationCriteria, selfGrade)
       const self100 = weightedEvalScore100ByCategories(selfCategories, selfState?.scores ?? {})
-      const bossState = supervisorEvalHistoryByEmployee?.[empId]?.[periodKey]
+      const bossState = bossKey ? supervisorEvalHistoryByEmployee?.[empId]?.[bossKey] : null
       const bossGrade = String(bossState?.evalGrade ?? selectedMember?.grade ?? '').trim()
       const bossCategories = buildEvalCategoriesForGrade(evaluationCriteria, bossGrade)
       const boss100 = weightedEvalScore100ByCategories(bossCategories, bossState?.scores ?? {})
-      const exec100 = execScore(cumulativeExecState)
+      const execState = execKey ? executiveEvalHistoryByEmployee?.[empId]?.[execKey] : null
+      const exec100 = execScore(execState)
       return {
         periodKey,
+        periodLabel: evalPeriodOptionLabel(adminMemberEvalPeriodSelectOptions, periodKey),
         self100,
         boss100,
         exec100,
-        selfLabel: self100 == null ? '—' : `${self100.toFixed(1)}点`,
-        bossLabel: boss100 == null ? '—' : `${boss100.toFixed(1)}点`,
-        execLabel: exec100 == null ? '—' : `${exec100.toFixed(1)}点`,
+        selfLabel: Number.isFinite(self100) ? `${self100.toFixed(1)}点` : '—',
+        bossLabel: Number.isFinite(boss100) ? `${boss100.toFixed(1)}点` : '—',
+        execLabel: Number.isFinite(exec100) ? `${exec100.toFixed(1)}点` : '—',
       }
     })
     const deltaLabel = (now, prev) => {
@@ -11340,8 +11809,8 @@ function AdminMockPage({
       .filter((x) => Number.isFinite(x.v))
       .sort((a, b) => Math.abs(b.v) - Math.abs(a.v))[0]
     return {
-      latestPeriod: latest.periodKey,
-      previousPeriod: prev?.periodKey ?? null,
+      latestPeriod: latest.periodLabel,
+      previousPeriod: prev?.periodLabel ?? null,
       selfTrend: trend(selfD),
       bossTrend: trend(bossD),
       execTrend: trend(execD),
@@ -11884,6 +12353,10 @@ function AdminMockPage({
                     onSubmitEvaluation={() =>
                       onSubmitExecutiveEvaluation?.(selectedMember?.id, selectedMemberEffectivePeriodKey)
                     }
+                    onWithdrawSubmission={() =>
+                      onWithdrawExecutiveEvaluation?.(selectedMember?.id, selectedMemberEffectivePeriodKey)
+                    }
+                    forcedEvalGrade={selectedMemberActiveEvalGrade}
                     canEvaluate
                     blockedReason="自己評価と1次評価(上司)の提出後に2次評価(経営層)を入力できます。"
                     focusMajorKey={selectedMemberGoalFocusMajorKey}
@@ -12261,6 +12734,10 @@ function EmployeeManagePage({
   selfEvalByEmployee,
   supervisorEvalByEmployee,
   executiveEvalByEmployee,
+  selfEvalHistoryByEmployee,
+  supervisorEvalHistoryByEmployee,
+  executiveEvalHistoryByEmployee,
+  evalPeriodDefinitions,
   evaluationCriteria,
   hideGradeAndTotalScore = false,
   onEmployeeIdRename,
@@ -12424,6 +12901,88 @@ function EmployeeManagePage({
     }
     return out
   }, [rows, skills, skillProgress, selfEvalByEmployee, supervisorEvalByEmployee, executiveEvalByEmployee, evaluationCriteria])
+
+  const evalPeriodLabelOptions = useMemo(
+    () =>
+      (evalPeriodDefinitions ?? [])
+        .map((d) => {
+          const value = String(d?.key ?? '').trim()
+          if (!value) return null
+          return { value, label: String(d?.label ?? '').trim() || value }
+        })
+        .filter(Boolean),
+    [evalPeriodDefinitions],
+  )
+
+  const periodScoreSummariesByEmployeeId = useMemo(() => {
+    const out = {}
+    for (const row of rows) {
+      const empId = String(row?.id ?? '').trim()
+      if (!empId) continue
+      if (String(row?.role ?? '').trim() === '役員') {
+        out[empId] = []
+        continue
+      }
+      const selfPeriods = selfEvalHistoryByEmployee?.[empId] ?? {}
+      const bossPeriods = supervisorEvalHistoryByEmployee?.[empId] ?? {}
+      const execPeriods = executiveEvalHistoryByEmployee?.[empId] ?? {}
+      const periodKeys = [
+        ...new Set([
+          ...Object.keys(selfPeriods),
+          ...Object.keys(bossPeriods),
+          ...Object.keys(execPeriods).filter((k) => String(k ?? '').trim() !== 'cumulative'),
+        ]),
+      ]
+        .map((k) => String(k ?? '').trim())
+        .filter(Boolean)
+        .sort(compareEvalPeriodDesc)
+        .slice(0, 3)
+      out[empId] = periodKeys.map((periodKey) => {
+        const selfKey = resolveEquivalentPeriodKey(periodKey, selfPeriods, evalPeriodDefinitions)
+        const bossKey = resolveEquivalentPeriodKey(periodKey, bossPeriods, evalPeriodDefinitions)
+        const execKey = resolveEquivalentPeriodKey(periodKey, execPeriods, evalPeriodDefinitions)
+        const selfSlot = selfKey ? selfPeriods?.[selfKey] : null
+        const bossSlot = bossKey ? bossPeriods?.[bossKey] : null
+        const execSlot = execKey ? execPeriods?.[execKey] : null
+        const grade =
+          String(selfSlot?.evalGrade ?? '').trim() ||
+          String(bossSlot?.evalGrade ?? '').trim() ||
+          String(execSlot?.evalGrade ?? '').trim() ||
+          inferEvalGradeFromScores(evaluationCriteria, selfSlot) ||
+          inferEvalGradeFromScores(evaluationCriteria, bossSlot) ||
+          inferEvalGradeFromScores(evaluationCriteria, execSlot) ||
+          String(row?.grade ?? '').trim()
+        const categories = buildEvalCategoriesForGrade(evaluationCriteria, grade)
+        const self100 = weightedEvalScore100ByCategories(categories, selfSlot?.scores ?? {})
+        const boss100 = weightedEvalScore100ByCategories(categories, bossSlot?.scores ?? {})
+        const exec100 = executiveScore100ForState(execSlot, evaluationCriteria, grade)
+        const parts = []
+        if (Number.isFinite(self100)) parts.push({ score: self100, weight: 0.25 })
+        if (Number.isFinite(boss100)) parts.push({ score: boss100, weight: 0.35 })
+        if (Number.isFinite(exec100)) parts.push({ score: exec100, weight: 0.4 })
+        const weightTotal = parts.reduce((sum, p) => sum + p.weight, 0)
+        const total100 =
+          Number.isFinite(weightTotal) && weightTotal > 0
+            ? parts.reduce((sum, p) => sum + p.score * p.weight, 0) / weightTotal
+            : Number.NaN
+        return {
+          periodKey,
+          periodLabel: evalPeriodOptionLabel(evalPeriodLabelOptions, periodKey),
+          grade,
+          scoreLabel: Number.isFinite(total100) ? `${total100.toFixed(1)}点` : '—',
+        }
+      })
+    }
+    return out
+  }, [
+    rows,
+    selfEvalHistoryByEmployee,
+    supervisorEvalHistoryByEmployee,
+    executiveEvalHistoryByEmployee,
+    evalPeriodDefinitions,
+    evalPeriodLabelOptions,
+    evaluationCriteria,
+  ])
 
   const handleEmployeeExportCsv = () => {
     const headers = EMPLOYEE_DIRECTORY_CSV_HEADERS
@@ -12656,6 +13215,7 @@ function EmployeeManagePage({
           const isExecutive = String(row.role ?? '').trim() === '役員'
           const scoreLabel = isExecutive ? '役員' : scoreByEmployeeId[row.id] ?? '0.0点'
           const gradeLabel = isExecutive ? '役員' : row.grade
+          const periodSummaries = periodScoreSummariesByEmployeeId[row.id] ?? []
           return (
             <div className="row employeeListRow" key={row.id}>
               <div className="employeeListAvatar" aria-hidden>
@@ -12683,7 +13243,7 @@ function EmployeeManagePage({
                       <span className="employeeListMetaSep"> · </span>
                       <span className="employeeListMetaGrade">{gradeLabel}</span>
                       <span className="employeeListMetaSep"> · </span>
-                      <span className="employeeListMetaScore">{scoreLabel}</span>
+                      <span className="employeeListMetaScore">{periodSummaries[0]?.scoreLabel ?? scoreLabel}</span>
                     </>
                   )}
                 </p>
@@ -12695,7 +13255,17 @@ function EmployeeManagePage({
               {hideGradeAndTotalScore ? null : (
                 <>
                   <span className="grade employeeListColGrade">{gradeLabel}</span>
-                  <span className="score employeeListColScore">{scoreLabel}</span>
+                  <span className="score employeeListColScore">
+                    {periodSummaries.length ? (
+                      periodSummaries.map((entry) => (
+                        <span key={`${row.id}-${entry.periodKey}`} className="employeeScorePeriodLine">
+                          {entry.periodLabel}: {entry.grade || '—'} / {entry.scoreLabel}
+                        </span>
+                      ))
+                    ) : (
+                      scoreLabel
+                    )}
+                  </span>
                 </>
               )}
               <span className="employeeListColRole">

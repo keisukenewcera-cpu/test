@@ -3502,6 +3502,11 @@ select:focus {
   font-weight: 700;
 }
 
+.employeeScorePeriodLine {
+  display: block;
+  line-height: 1.45;
+}
+
 .employeeTable .roleTag {
   font-style: normal;
   font-size: 11px;
@@ -9206,6 +9211,11 @@ select:focus {
   .skillUpFilterTab {
     flex: 0 0 auto;
     min-width: 120px;
+  }
+
+  .selfEvalPage {
+    margin: 0 0 24px;
+    padding: 0;
   }
 
   .selfEvalHeader h2 {
