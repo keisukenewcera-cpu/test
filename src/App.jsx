@@ -4550,12 +4550,9 @@ function App() {
       const payload = data?.payload
       if (payload && typeof payload === 'object') {
         const localPayload = loadSavedData()
-<<<<<<< HEAD
-        const mergedPayload = mergeEvaluationCriteriaForInitialCloudHydrate(localPayload, payload)
-=======
         let mergedPayload = mergeEvalPeriodDefinitionsForInitialCloudHydrate(localPayload, payload)
         mergedPayload = mergeLocalPreferredAdminPasswordOnInitialCloudHydrate(localPayload, mergedPayload)
->>>>>>> 611b95bde2da2f48e0046321494be3a16c69ffa8
+        mergedPayload = mergeEvaluationCriteriaForInitialCloudHydrate(localPayload, mergedPayload)
         const serialized = JSON.stringify(mergedPayload)
         try {
           applyPersistPayload(mergedPayload)
