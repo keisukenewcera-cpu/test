@@ -299,16 +299,14 @@ function mergeEvalPeriodDefinitionsForInitialCloudHydrate(localPayload, cloudPay
   const localAt = String(local.evalPeriodDefinitionsSavedAt ?? '').trim()
   const cloudAt = String(cloudPayload.evalPeriodDefinitionsSavedAt ?? '').trim()
 
-  if (localAt && cloudAt) {
-    if (localAt > cloudAt) {
-      return { ...cloudPayload, evalPeriodDefinitions: localDefs, evalPeriodDefinitionsSavedAt: localAt }
-    }
-    return cloudPayload
-  }
-  if (localAt && !cloudAt) {
+  // 共有対象の評価期マスタは、クラウド側に timestamp がある場合は常にクラウドを採用する。
+  // 端末間で localStorage が残っていると初回起動時にローカル優先で巻き戻る不具合を避けるため。
+  if (cloudAt) return cloudPayload
+  if (localAt) {
     return { ...cloudPayload, evalPeriodDefinitions: localDefs, evalPeriodDefinitionsSavedAt: localAt }
   }
-  if (!localAt && !cloudAt && JSON.stringify(localDefs) !== JSON.stringify(cloudDefs)) {
+  if (cloudDefs.length > 0) return cloudPayload
+  if (localDefs.length > 0) {
     return {
       ...cloudPayload,
       evalPeriodDefinitions: localDefs,
@@ -4249,6 +4247,7 @@ function App() {
       includeEvalDrafts = true,
       includeEmployeeDirectory = true,
       includeSettingsData = true,
+      includeEvalPeriodDefinitions = false,
       includeEvaluationCriteria = false,
       forceEmployeeDirectory = false,
     } = options
@@ -4426,7 +4425,7 @@ function App() {
     if (includeUiState && typeof payload.activeEvalPeriodKey === 'string' && payload.activeEvalPeriodKey.trim()) {
       setActiveEvalPeriodKey(payload.activeEvalPeriodKey.trim())
     }
-    if (includeSettingsData && Array.isArray(payload.evalPeriodDefinitions)) {
+    if ((includeSettingsData || includeEvalPeriodDefinitions) && Array.isArray(payload.evalPeriodDefinitions)) {
       evalPeriodDefsWriteFromRemoteRef.current = true
       setEvalPeriodDefinitions(normalizeEvalPeriodDefinitions(payload.evalPeriodDefinitions))
       const at = String(payload.evalPeriodDefinitionsSavedAt ?? '').trim()
@@ -4940,6 +4939,7 @@ function App() {
           includeEvalDrafts: false,
           includeEmployeeDirectory: false,
           includeSettingsData: false,
+          includeEvalPeriodDefinitions: true,
           includeEvaluationCriteria: false,
         })
         lastCloudAppliedRef.current = serialized
