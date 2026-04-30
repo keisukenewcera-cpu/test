@@ -222,56 +222,13 @@ function parseOnlyForEmployeeIdsFromStored(row) {
   return []
 }
 
-function normalizeDeadlineDate(value) {
-  const s = String(value ?? '').trim()
-  if (!s) return ''
-  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/)
-  if (m) return `${m[1]}-${m[2]}-${m[3]}`
-  const ms = new Date(s).getTime()
-  if (!Number.isFinite(ms)) return ''
-  const d = new Date(ms)
-  const y = d.getFullYear()
-  const mm = String(d.getMonth() + 1).padStart(2, '0')
-  const dd = String(d.getDate()).padStart(2, '0')
-  return `${y}-${mm}-${dd}`
-}
-
-function deadlineStartMs(value) {
-  const s = normalizeDeadlineDate(value)
-  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/)
-  if (!m) return Number.NaN
-  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0).getTime()
-}
-
-function isSelfEvalDeadlineLockedForPeriod(evalPeriodDefinitions, periodKey) {
-  const pk = String(periodKey ?? '').trim()
-  if (!pk) return false
-  const row = (evalPeriodDefinitions ?? []).find((d) => String(d?.key ?? '').trim() === pk)
-  const at = normalizeDeadlineDate(row?.selfEvalDeadlineAt)
-  return Number.isFinite(deadlineStartMs(at)) ? Date.now() >= deadlineStartMs(at) : false
-}
-
-function isSupervisorEvalDeadlineLockedForPeriod(evalPeriodDefinitions, periodKey) {
-  const pk = String(periodKey ?? '').trim()
-  if (!pk) return false
-  const row = (evalPeriodDefinitions ?? []).find((d) => String(d?.key ?? '').trim() === pk)
-  const at = normalizeDeadlineDate(row?.supervisorEvalDeadlineAt)
-  return Number.isFinite(deadlineStartMs(at)) ? Date.now() >= deadlineStartMs(at) : false
-}
-
 function normalizeEvalPeriodDefinitionRow(row) {
   const key = String(row?.key ?? '').trim()
   if (!key) return null
   const label = String(row?.label ?? '').trim() || key
   const onlyForEmployeeIds = parseOnlyForEmployeeIdsFromStored(row)
-  const selfEvalDeadlineAt = normalizeDeadlineDate(row?.selfEvalDeadlineAt)
-  const supervisorEvalDeadlineAt = normalizeDeadlineDate(row?.supervisorEvalDeadlineAt)
-  const executiveEvalDeadlineAt = normalizeDeadlineDate(row?.executiveEvalDeadlineAt)
   const next = { key, label }
   if (onlyForEmployeeIds.length) next.onlyForEmployeeIds = onlyForEmployeeIds
-  if (selfEvalDeadlineAt) next.selfEvalDeadlineAt = selfEvalDeadlineAt
-  if (supervisorEvalDeadlineAt) next.supervisorEvalDeadlineAt = supervisorEvalDeadlineAt
-  if (executiveEvalDeadlineAt) next.executiveEvalDeadlineAt = executiveEvalDeadlineAt
   return next
 }
 
@@ -292,6 +249,50 @@ function normalizeEvalPeriodDefinitions(raw) {
   return []
 }
 
+/** Prefer newer eval-period master when hydrating from Supabase so local deletes are not overwritten by stale cloud rows. */
+function mergeEvalPeriodDefinitionsForInitialCloudHydrate(localPayload, cloudPayload) {
+  if (!cloudPayload || typeof cloudPayload !== 'object') return cloudPayload
+  const local =
+    localPayload && typeof localPayload === 'object' && !Array.isArray(localPayload) ? localPayload : {}
+  const localDefs = normalizeEvalPeriodDefinitions(local.evalPeriodDefinitions)
+  const cloudDefs = normalizeEvalPeriodDefinitions(cloudPayload.evalPeriodDefinitions)
+  const localAt = String(local.evalPeriodDefinitionsSavedAt ?? '').trim()
+  const cloudAt = String(cloudPayload.evalPeriodDefinitionsSavedAt ?? '').trim()
+
+  if (localAt && cloudAt) {
+    if (localAt > cloudAt) {
+      return { ...cloudPayload, evalPeriodDefinitions: localDefs, evalPeriodDefinitionsSavedAt: localAt }
+    }
+    return cloudPayload
+  }
+  if (localAt && !cloudAt) {
+    return { ...cloudPayload, evalPeriodDefinitions: localDefs, evalPeriodDefinitionsSavedAt: localAt }
+  }
+  if (!localAt && !cloudAt && JSON.stringify(localDefs) !== JSON.stringify(cloudDefs)) {
+    return {
+      ...cloudPayload,
+      evalPeriodDefinitions: localDefs,
+      evalPeriodDefinitionsSavedAt: new Date().toISOString(),
+    }
+  }
+  return cloudPayload
+}
+
+/** Prefer localStorage admin password on first Supabase hydrate when it differs (stale cloud overwrites broke login). */
+function mergeLocalPreferredAdminPasswordOnInitialCloudHydrate(localPayload, cloudPayload) {
+  if (!cloudPayload || typeof cloudPayload !== 'object') return cloudPayload
+  const local = localPayload && typeof localPayload === 'object' && !Array.isArray(localPayload) ? localPayload : {}
+  const hasLocal =
+    Object.prototype.hasOwnProperty.call(local, 'adminPassword') && typeof local.adminPassword === 'string'
+  if (!hasLocal) return cloudPayload
+  const lp = local.adminPassword
+  const cp = typeof cloudPayload.adminPassword === 'string' ? cloudPayload.adminPassword : undefined
+  if (lp && lp !== cp) {
+    return { ...cloudPayload, adminPassword: lp }
+  }
+  return cloudPayload
+}
+
 function mergeEvalPeriodDefinitionArrays(prevRaw, remoteRaw) {
   const prev = parseEvalPeriodDefinitionList(prevRaw)
   const remote = parseEvalPeriodDefinitionList(remoteRaw)
@@ -307,15 +308,6 @@ function mergeEvalPeriodDefinitionArrays(prevRaw, remoteRaw) {
     const next = { ...cur, label: cur.label || row.label || cur.key }
     if (ids.length) next.onlyForEmployeeIds = ids
     else delete next.onlyForEmployeeIds
-    const mergedSelfDeadline = normalizeDeadlineDate(cur.selfEvalDeadlineAt ?? row.selfEvalDeadlineAt)
-    if (mergedSelfDeadline) next.selfEvalDeadlineAt = mergedSelfDeadline
-    else delete next.selfEvalDeadlineAt
-    const mergedSupervisorDeadline = normalizeDeadlineDate(cur.supervisorEvalDeadlineAt ?? row.supervisorEvalDeadlineAt)
-    if (mergedSupervisorDeadline) next.supervisorEvalDeadlineAt = mergedSupervisorDeadline
-    else delete next.supervisorEvalDeadlineAt
-    const mergedExecutiveDeadline = normalizeDeadlineDate(cur.executiveEvalDeadlineAt ?? row.executiveEvalDeadlineAt)
-    if (mergedExecutiveDeadline) next.executiveEvalDeadlineAt = mergedExecutiveDeadline
-    else delete next.executiveEvalDeadlineAt
     map.set(row.key, next)
   }
   return [...map.values()].sort((a, b) => compareEvalPeriodDesc(a.key, b.key))
@@ -561,8 +553,8 @@ const calcEmployeeSkillStars = (allSkills, employeeProgress) =>
 
 const escapeCsvField = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`
 
-/** 従業員管理 CSV の1行目。パスワード列あり（セル空なら既存パスワードを維持）。 */
-const EMPLOYEE_DIRECTORY_CSV_HEADERS = ['社員C', '名前', '部署', '等級', '総合得点', '役割', 'パスワード']
+/** 従業員管理 CSV の1行目。パスワード列あり（セル空なら既存パスワードを維持）。入社日は YYYY-MM-DD（空可）。 */
+const EMPLOYEE_DIRECTORY_CSV_HEADERS = ['社員C', '名前', '入社日', '部署', '等級', '総合得点', '役割', 'パスワード']
 
 /** 退職扱い: 社員C を「退職」または「退職_…」にした行（例: 退職_e1） */
 function isEmployeeDirectoryRetired(row) {
@@ -675,6 +667,30 @@ function normalizeEmployeeGrade(value) {
   return 'G1'
 }
 
+/** 入社日。YYYY-MM-DD のみ有効。空または不正なら '' */
+function normalizeEmployeeJoinDate(value) {
+  const s = String(value ?? '').trim()
+  if (!s) return ''
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return ''
+  const y = Number(s.slice(0, 4))
+  const mo = Number(s.slice(5, 7))
+  const d = Number(s.slice(8, 10))
+  if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(d)) return ''
+  const dt = new Date(y, mo - 1, d)
+  if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return ''
+  return s
+}
+
+function formatJoinDateJa(ymd) {
+  const s = normalizeEmployeeJoinDate(ymd)
+  if (!s) return ''
+  try {
+    return new Date(`${s}T12:00:00`).toLocaleDateString('ja-JP')
+  } catch {
+    return s
+  }
+}
+
 function normalizeEmployeeNoLinkKey(value) {
   const raw = String(value ?? '')
   if (!raw) return ''
@@ -751,7 +767,7 @@ function mergeEmployeeDirectoryRows(prev, imported) {
       const next = { ...row }
       for (const k of EMPLOYEE_DIRECTORY_MERGE_KEYS) {
         if (Object.prototype.hasOwnProperty.call(imp, k)) {
-          next[k] = imp[k]
+          next[k] = k === 'joinDate' ? normalizeEmployeeJoinDate(imp[k]) : imp[k]
         }
       }
       const nextPassword =
@@ -775,6 +791,7 @@ function mergeEmployeeDirectoryRows(prev, imported) {
     if (!seen.has(String(imp.id))) {
       merged.push({
         ...imp,
+        joinDate: normalizeEmployeeJoinDate(imp.joinDate),
         password: String(imp.password ?? '').trim() ? String(imp.password).trim() : '',
       })
       seen.add(String(imp.id))
@@ -2097,6 +2114,20 @@ function App() {
   })
   const [evalPeriodDefinitions, setEvalPeriodDefinitions] = useState(() => __initEvalPeriodState.defs)
   const [activeEvalPeriodKey, setActiveEvalPeriodKey] = useState(() => __initEvalPeriodState.active)
+  const evalPeriodDefsSavedAtRef = useRef(String(savedData?.evalPeriodDefinitionsSavedAt ?? '').trim())
+  const evalPeriodDefsWriteFromRemoteRef = useRef(false)
+  const prevEvalPeriodDefsJsonRef = useRef(JSON.stringify(__initEvalPeriodState.defs))
+  useEffect(() => {
+    if (evalPeriodDefsWriteFromRemoteRef.current) {
+      evalPeriodDefsWriteFromRemoteRef.current = false
+      prevEvalPeriodDefsJsonRef.current = JSON.stringify(evalPeriodDefinitions)
+      return
+    }
+    const nextJson = JSON.stringify(evalPeriodDefinitions)
+    if (nextJson === prevEvalPeriodDefsJsonRef.current) return
+    prevEvalPeriodDefsJsonRef.current = nextJson
+    evalPeriodDefsSavedAtRef.current = new Date().toISOString()
+  }, [evalPeriodDefinitions])
   const [selfEvalByEmployee, setSelfEvalByEmployee] = useState(() => normalizeEvalByEmployeeMap(savedData?.selfEvalByEmployee))
   const [supervisorEvalByEmployee, setSupervisorEvalByEmployee] = useState(() =>
     normalizeEvalByEmployeeMap(savedData?.supervisorEvalByEmployee),
@@ -2700,23 +2731,6 @@ function App() {
     [activeEvalPeriodKey, evalPeriodFallbackKey],
   )
   const effectiveEvalPeriodKey = activeEvalPeriodKey ?? evalPeriodFallbackKey
-  const activeEvalPeriodDef = useMemo(() => {
-    const key = String(effectiveEvalPeriodKey ?? '').trim()
-    if (!key) return null
-    return (evalPeriodDefinitions ?? []).find((d) => String(d?.key ?? '').trim() === key) ?? null
-  }, [effectiveEvalPeriodKey, evalPeriodDefinitions])
-  const selfEvalDeadlineAt = normalizeDeadlineDate(activeEvalPeriodDef?.selfEvalDeadlineAt)
-  const supervisorEvalDeadlineAt = normalizeDeadlineDate(activeEvalPeriodDef?.supervisorEvalDeadlineAt)
-  const executiveEvalDeadlineAt = normalizeDeadlineDate(activeEvalPeriodDef?.executiveEvalDeadlineAt)
-  const isSelfEvalDeadlineLocked = Number.isFinite(deadlineStartMs(selfEvalDeadlineAt))
-    ? Date.now() >= deadlineStartMs(selfEvalDeadlineAt)
-    : false
-  const isSupervisorEvalDeadlineLocked = Number.isFinite(deadlineStartMs(supervisorEvalDeadlineAt))
-    ? Date.now() >= deadlineStartMs(supervisorEvalDeadlineAt)
-    : false
-  const isExecutiveEvalDeadlineLocked = Number.isFinite(deadlineStartMs(executiveEvalDeadlineAt))
-    ? Date.now() >= deadlineStartMs(executiveEvalDeadlineAt)
-    : false
 
   const goalMgmtEmployee = loggedInEmployee
   const goalMgmtPeriodKey = String(
@@ -3167,9 +3181,9 @@ function App() {
     evalSubjectEmployee?.id &&
       String(executiveEvalHistoryByEmployee?.[evalSubjectEmployee.id]?.[effectiveEvalPeriodKey]?.submittedAt ?? '').trim(),
   )
-  const selfEvalSubmittedForActive = selfEvalSubmittedRawForActive || isSelfEvalDeadlineLocked
-  const supervisorEvalSubmittedForActive = supervisorEvalSubmittedRawForActive || isSupervisorEvalDeadlineLocked
-  const executiveEvalSubmittedForActive = executiveEvalSubmittedRawForActive || isExecutiveEvalDeadlineLocked
+  const selfEvalSubmittedForActive = selfEvalSubmittedRawForActive
+  const supervisorEvalSubmittedForActive = supervisorEvalSubmittedRawForActive
+  const executiveEvalSubmittedForActive = executiveEvalSubmittedRawForActive
 
   const supervisorSubmissionWithdrawalsUsed = useMemo(
     () =>
@@ -3187,10 +3201,6 @@ function App() {
       const empId = String(employeeId ?? '').trim()
       const periodKey = String(periodKeyOverride ?? effectiveEvalPeriodKey ?? '').trim()
       if (!empId || !periodKey) return
-      if (isSelfEvalDeadlineLockedForPeriod(evalPeriodDefinitions, periodKey)) {
-        window.alert('この評価期の自己評価は締切後のため、提出の取り消しはできません。')
-        return
-      }
       const slot = selfEvalHistoryByEmployee?.[empId]?.[periodKey]
       if (!String(slot?.submittedAt ?? '').trim()) return
       const used = clampEvalSubmissionWithdrawalsUsed(slot?.submissionWithdrawalsUsed)
@@ -3225,7 +3235,7 @@ function App() {
         }
       })
     },
-    [effectiveEvalPeriodKey, evalPeriodDefinitions, selfEvalHistoryByEmployee, employeeDirectoryRows],
+    [effectiveEvalPeriodKey, selfEvalHistoryByEmployee, employeeDirectoryRows],
   )
 
   const withdrawSupervisorEvalForMember = useCallback(
@@ -3233,10 +3243,6 @@ function App() {
       const empId = String(employeeId ?? '').trim()
       const periodKey = String(periodKeyOverride ?? effectiveEvalPeriodKey ?? '').trim()
       if (!empId || !periodKey) return
-      if (isSupervisorEvalDeadlineLockedForPeriod(evalPeriodDefinitions, periodKey)) {
-        window.alert('この評価期の1次評価(上司)は締切後のため、提出の取り消しはできません。')
-        return
-      }
       const slot = supervisorEvalHistoryByEmployee?.[empId]?.[periodKey]
       if (!String(slot?.submittedAt ?? '').trim()) return
       const used = clampEvalSubmissionWithdrawalsUsed(slot?.submissionWithdrawalsUsed)
@@ -3269,12 +3275,11 @@ function App() {
         }
       })
     },
-    [effectiveEvalPeriodKey, evalPeriodDefinitions, supervisorEvalHistoryByEmployee, employeeDirectoryRows],
+    [effectiveEvalPeriodKey, supervisorEvalHistoryByEmployee, employeeDirectoryRows],
   )
 
   const submitSelfEvalForActivePeriod = useCallback(() => {
     if (!evalSubjectEmployee?.id || !effectiveEvalPeriodKey) return
-    if (isSelfEvalDeadlineLocked) return
     const confirmed = window.confirm(`自己評価（${effectiveEvalPeriodKey}）を提出しますか？提出後はこの期を編集できません。`)
     if (!confirmed) return
     const now = new Date().toISOString()
@@ -3295,11 +3300,10 @@ function App() {
         },
       }
     })
-  }, [evalSubjectEmployee?.id, effectiveEvalPeriodKey, selfBossGapForPeriod, isSelfEvalDeadlineLocked])
+  }, [evalSubjectEmployee?.id, effectiveEvalPeriodKey])
 
   const submitSupervisorEvalForActivePeriod = useCallback(() => {
     if (!evalSubjectEmployee?.id || !effectiveEvalPeriodKey) return
-    if (isSupervisorEvalDeadlineLocked) return
     const confirmed = window.confirm(`1次評価(上司)（${effectiveEvalPeriodKey}）を提出しますか？提出後はこの期を編集できません。`)
     if (!confirmed) return
     const now = new Date().toISOString()
@@ -3320,7 +3324,6 @@ function App() {
     })
     const gap = selfBossGapForPeriod(evalSubjectEmployee.id, effectiveEvalPeriodKey)
     if (Number.isFinite(gap) && gap >= SELF_BOSS_GAP_ALERT_THRESHOLD) {
-      const selfLocked = isSelfEvalDeadlineLockedForPeriod(evalPeriodDefinitions, effectiveEvalPeriodKey)
       setSelfEvalHistoryByEmployee((prev) => {
         const empId = evalSubjectEmployee.id
         const current = prev?.[empId]?.[effectiveEvalPeriodKey]
@@ -3331,7 +3334,7 @@ function App() {
             ...((prev ?? {})[empId] ?? {}),
             [effectiveEvalPeriodKey]: {
               ...current,
-              ...(selfLocked ? {} : { submittedAt: '' }),
+              submittedAt: '',
               resubmitRequestedAt: now,
               resubmitReason: `1次評価との乖離が${gap.toFixed(1)}点のため再提出が必要です`,
               submissionWithdrawalsUsed: clampEvalSubmissionWithdrawalsUsed(current?.submissionWithdrawalsUsed),
@@ -3339,19 +3342,14 @@ function App() {
           },
         }
       })
-      if (selfLocked) {
-        window.alert(`自己/1次評価の乖離が${gap.toFixed(1)}点です。自己評価締切後のため、提出状態は維持したまま再確認依頼を記録しました。`)
-      } else {
-        window.alert(`自己/1次評価の乖離が${gap.toFixed(1)}点です。自己評価の再提出を依頼しました。`)
-      }
+      window.alert(`自己/1次評価の乖離が${gap.toFixed(1)}点です。自己評価の再提出を依頼しました。`)
     }
-  }, [evalSubjectEmployee?.id, effectiveEvalPeriodKey, isSupervisorEvalDeadlineLocked, evalPeriodDefinitions])
+  }, [evalSubjectEmployee?.id, effectiveEvalPeriodKey, selfBossGapForPeriod])
   const submitSupervisorEvalForMember = useCallback(
     (employeeId, periodKeyOverride) => {
       const empId = String(employeeId ?? '').trim()
       const periodKey = String(periodKeyOverride ?? effectiveEvalPeriodKey ?? '').trim()
       if (!empId || !periodKey) return
-      if (isSupervisorEvalDeadlineLockedForPeriod(evalPeriodDefinitions, periodKey)) return
       const confirmed = window.confirm(`1次評価(上司)（${periodKey}）を提出しますか？提出後はこの期を編集できません。`)
       if (!confirmed) return
       const now = new Date().toISOString()
@@ -3371,7 +3369,6 @@ function App() {
       })
       const gap = selfBossGapForPeriod(empId, periodKey)
       if (Number.isFinite(gap) && gap >= SELF_BOSS_GAP_ALERT_THRESHOLD) {
-        const selfLocked = isSelfEvalDeadlineLockedForPeriod(evalPeriodDefinitions, periodKey)
         setSelfEvalHistoryByEmployee((prev) => {
           const current = prev?.[empId]?.[periodKey]
           if (!current) return prev
@@ -3381,7 +3378,7 @@ function App() {
               ...((prev ?? {})[empId] ?? {}),
               [periodKey]: {
                 ...current,
-                ...(selfLocked ? {} : { submittedAt: '' }),
+                submittedAt: '',
                 resubmitRequestedAt: now,
                 resubmitReason: `1次評価との乖離が${gap.toFixed(1)}点のため再提出が必要です`,
                 submissionWithdrawalsUsed: clampEvalSubmissionWithdrawalsUsed(current?.submissionWithdrawalsUsed),
@@ -3389,18 +3386,13 @@ function App() {
             },
           }
         })
-        if (selfLocked) {
-          window.alert(`自己/1次評価の乖離が${gap.toFixed(1)}点です。自己評価締切後のため、提出状態は維持したまま再確認依頼を記録しました。`)
-        } else {
-          window.alert(`自己/1次評価の乖離が${gap.toFixed(1)}点です。自己評価の再提出を依頼しました。`)
-        }
+        window.alert(`自己/1次評価の乖離が${gap.toFixed(1)}点です。自己評価の再提出を依頼しました。`)
       }
     },
-    [effectiveEvalPeriodKey, evalPeriodDefinitions, selfBossGapForPeriod],
+    [effectiveEvalPeriodKey, selfBossGapForPeriod],
   )
   const submitExecutiveEvalForActivePeriod = useCallback(() => {
     if (!evalSubjectEmployee?.id || !effectiveEvalPeriodKey) return
-    if (isExecutiveEvalDeadlineLocked) return
     const confirmed = window.confirm(`2次評価(経営層)（${effectiveEvalPeriodKey}）を提出しますか？提出後はこの期を編集できません。`)
     if (!confirmed) return
     const now = new Date().toISOString()
@@ -3418,13 +3410,12 @@ function App() {
         },
       }
     })
-  }, [evalSubjectEmployee?.id, effectiveEvalPeriodKey, isExecutiveEvalDeadlineLocked])
+  }, [evalSubjectEmployee?.id, effectiveEvalPeriodKey])
   const submitExecutiveEvalForMember = useCallback(
     (employeeId, periodKeyOverride) => {
       const empId = String(employeeId ?? '').trim()
       const periodKey = String(periodKeyOverride ?? effectiveEvalPeriodKey ?? '').trim()
       if (!empId || !periodKey) return
-      if (isExecutiveEvalDeadlineLockedForPeriod(evalPeriodDefinitions, periodKey)) return
       const confirmed = window.confirm(`2次評価(経営層)（${periodKey}）を提出しますか？提出後はこの期を編集できません。`)
       if (!confirmed) return
       const now = new Date().toISOString()
@@ -3442,7 +3433,7 @@ function App() {
         }
       })
     },
-    [effectiveEvalPeriodKey, evalPeriodDefinitions],
+    [effectiveEvalPeriodKey],
   )
 
   const cleanupEvalPeriodHistory = useCallback(() => {
@@ -4089,6 +4080,7 @@ function App() {
     menuVisibilityByRole,
       ...(includeUiState ? { activeEvalPeriodKey } : {}),
       evalPeriodDefinitions,
+      ...(evalPeriodDefsSavedAtRef.current ? { evalPeriodDefinitionsSavedAt: evalPeriodDefsSavedAtRef.current } : {}),
     ...(includeEvalDrafts
       ? {
           selfEvalByEmployee,
@@ -4314,13 +4306,11 @@ function App() {
     if (includeUiState && typeof payload.activeEvalPeriodKey === 'string' && payload.activeEvalPeriodKey.trim()) {
       setActiveEvalPeriodKey(payload.activeEvalPeriodKey.trim())
     }
-    if (
-      includeSettingsData &&
-      Array.isArray(payload.evalPeriodDefinitions) &&
-      payload.evalPeriodDefinitions.length > 0
-    ) {
-      // Replace instead of merge so deleted period keys are not resurrected by late cloud/snapshot payloads.
+    if (includeSettingsData && Array.isArray(payload.evalPeriodDefinitions)) {
+      evalPeriodDefsWriteFromRemoteRef.current = true
       setEvalPeriodDefinitions(normalizeEvalPeriodDefinitions(payload.evalPeriodDefinitions))
+      const at = String(payload.evalPeriodDefinitionsSavedAt ?? '').trim()
+      if (at) evalPeriodDefsSavedAtRef.current = at
     }
     if (
       payload.selfEvalHistoryByEmployee &&
@@ -4560,7 +4550,12 @@ function App() {
       const payload = data?.payload
       if (payload && typeof payload === 'object') {
         const localPayload = loadSavedData()
+<<<<<<< HEAD
         const mergedPayload = mergeEvaluationCriteriaForInitialCloudHydrate(localPayload, payload)
+=======
+        let mergedPayload = mergeEvalPeriodDefinitionsForInitialCloudHydrate(localPayload, payload)
+        mergedPayload = mergeLocalPreferredAdminPasswordOnInitialCloudHydrate(localPayload, mergedPayload)
+>>>>>>> 611b95bde2da2f48e0046321494be3a16c69ffa8
         const serialized = JSON.stringify(mergedPayload)
         try {
           applyPersistPayload(mergedPayload)
@@ -5933,10 +5928,7 @@ function App() {
                 onWithdrawSubmission={() =>
                   withdrawSupervisorEvalForMember(evalSubjectEmployee?.id, effectiveEvalPeriodKey)
                 }
-                withdrawBlockedByDeadline={isSupervisorEvalDeadlineLockedForPeriod(
-                  evalPeriodDefinitions,
-                  effectiveEvalPeriodKey,
-                )}
+                withdrawBlockedByDeadline={false}
                 canEvaluate
                 blockedReason="自己評価の提出後に1次評価(上司)を入力できます。"
                 focusMajorKey={evalFocusMajorKeyForActive}
@@ -6473,9 +6465,6 @@ function EvalPeriodSettingsPage({ definitions, setDefinitions, onSelectActivePer
   const [draftMonth, setDraftMonth] = useState('03')
   const [draftLabel, setDraftLabel] = useState('')
   const [draftOnlyForIds, setDraftOnlyForIds] = useState('')
-  const [draftSelfEvalDeadlineAt, setDraftSelfEvalDeadlineAt] = useState('')
-  const [draftSupervisorEvalDeadlineAt, setDraftSupervisorEvalDeadlineAt] = useState('')
-  const [draftExecutiveEvalDeadlineAt, setDraftExecutiveEvalDeadlineAt] = useState('')
   const [draggingPeriodKey, setDraggingPeriodKey] = useState('')
   const [dragOverPeriodKey, setDragOverPeriodKey] = useState('')
   const rowRefs = useRef({})
@@ -6526,13 +6515,7 @@ function EvalPeriodSettingsPage({ definitions, setDefinitions, onSelectActivePer
     const onlyForEmployeeIds = parseCommaSeparatedEmployeeIds(draftOnlyForIds)
     const defaultLabel = `${year}年${Number(month)}月期`
     const label = draftLabel.trim() || defaultLabel
-    const selfEvalDeadlineAt = normalizeDeadlineDate(draftSelfEvalDeadlineAt)
-    const supervisorEvalDeadlineAt = normalizeDeadlineDate(draftSupervisorEvalDeadlineAt)
-    const executiveEvalDeadlineAt = normalizeDeadlineDate(draftExecutiveEvalDeadlineAt)
     const row = onlyForEmployeeIds.length > 0 ? { key, label, onlyForEmployeeIds } : { key, label }
-    if (selfEvalDeadlineAt) row.selfEvalDeadlineAt = selfEvalDeadlineAt
-    if (supervisorEvalDeadlineAt) row.supervisorEvalDeadlineAt = supervisorEvalDeadlineAt
-    if (executiveEvalDeadlineAt) row.executiveEvalDeadlineAt = executiveEvalDeadlineAt
     setDefinitions((prev) => {
       if (prev.some((d) => d.key === key)) return prev
       return [row, ...prev]
@@ -6542,9 +6525,6 @@ function EvalPeriodSettingsPage({ definitions, setDefinitions, onSelectActivePer
     setDraftMonth('03')
     setDraftLabel('')
     setDraftOnlyForIds('')
-    setDraftSelfEvalDeadlineAt('')
-    setDraftSupervisorEvalDeadlineAt('')
-    setDraftExecutiveEvalDeadlineAt('')
   }
 
   const removeRow = (key) => {
@@ -6636,10 +6616,6 @@ function EvalPeriodSettingsPage({ definitions, setDefinitions, onSelectActivePer
                   ? `指定社員: ${row.onlyForEmployeeIds.join(', ')}`
                   : '全員'}
               </span>
-              <span className="evalPeriodSettingsScope">
-                自己締切: {row.selfEvalDeadlineAt || '未設定'} / 上司締切: {row.supervisorEvalDeadlineAt || '未設定'} / 経営層締切:{' '}
-                {row.executiveEvalDeadlineAt || '未設定'}
-              </span>
             </div>
             <div className="evalPeriodSettingsRowActions">
               <button type="button" className="evalPeriodSettingsRemove" onClick={() => removeRow(row.key)}>
@@ -6685,26 +6661,6 @@ function EvalPeriodSettingsPage({ definitions, setDefinitions, onSelectActivePer
               value={draftOnlyForIds}
               onChange={(e) => setDraftOnlyForIds(e.target.value)}
               placeholder="例: e1, 0001（カンマ・スペース区切り）"
-            />
-          </label>
-          <label className="evalPeriodSettingsAddField evalPeriodSettingsAddField--wide">
-            自己評価締切（任意）
-            <input type="date" value={draftSelfEvalDeadlineAt} onChange={(e) => setDraftSelfEvalDeadlineAt(e.target.value)} />
-          </label>
-          <label className="evalPeriodSettingsAddField evalPeriodSettingsAddField--wide">
-            上司評価締切（任意）
-            <input
-              type="date"
-              value={draftSupervisorEvalDeadlineAt}
-              onChange={(e) => setDraftSupervisorEvalDeadlineAt(e.target.value)}
-            />
-          </label>
-          <label className="evalPeriodSettingsAddField evalPeriodSettingsAddField--wide">
-            経営層評価締切（任意）
-            <input
-              type="date"
-              value={draftExecutiveEvalDeadlineAt}
-              onChange={(e) => setDraftExecutiveEvalDeadlineAt(e.target.value)}
             />
           </label>
       </div>
@@ -10991,9 +10947,8 @@ function AdminMockPage({
     if (!selectedMember) return false
     const periodKey = String(selectedMemberEffectivePeriodKey ?? '').trim()
     if (!periodKey) return false
-    const submittedRaw = Boolean(String(selfEvalHistoryByEmployee?.[selectedMember.id]?.[periodKey]?.submittedAt ?? '').trim())
-    return submittedRaw || isSelfEvalDeadlineLockedForPeriod(evalPeriodDefinitions, periodKey)
-  }, [selectedMember, selectedMemberEffectivePeriodKey, selfEvalHistoryByEmployee, evalPeriodDefinitions])
+    return Boolean(String(selfEvalHistoryByEmployee?.[selectedMember.id]?.[periodKey]?.submittedAt ?? '').trim())
+  }, [selectedMember, selectedMemberEffectivePeriodKey, selfEvalHistoryByEmployee])
   const selectedMemberPeerSelfEvalForActive = useMemo(() => {
     if (!selectedMember) return { scores: {}, comments: {} }
     const periodKey = String(selectedMemberEffectivePeriodKey ?? '').trim()
@@ -11022,10 +10977,6 @@ function AdminMockPage({
       supervisorEvalHistoryByEmployee?.[selectedMember.id]?.[periodKey]?.submissionWithdrawalsUsed,
     )
   }, [selectedMember, selectedMemberEffectivePeriodKey, supervisorEvalHistoryByEmployee])
-  const selectedMemberSupervisorDeadlineLocked = useMemo(
-    () => isSupervisorEvalDeadlineLockedForPeriod(evalPeriodDefinitions, selectedMemberEffectivePeriodKey),
-    [evalPeriodDefinitions, selectedMemberEffectivePeriodKey],
-  )
   const selectedMemberSelfEvalSubmittedRaw = useMemo(() => {
     if (!selectedMember) return false
     const pk = String(selectedMemberEffectivePeriodKey ?? '').trim()
@@ -11040,10 +10991,6 @@ function AdminMockPage({
       selfEvalHistoryByEmployee?.[selectedMember.id]?.[pk]?.submissionWithdrawalsUsed,
     )
   }, [selectedMember, selectedMemberEffectivePeriodKey, selfEvalHistoryByEmployee])
-  const selectedMemberSelfDeadlineLockedForPeriod = useMemo(
-    () => isSelfEvalDeadlineLockedForPeriod(evalPeriodDefinitions, selectedMemberEffectivePeriodKey),
-    [evalPeriodDefinitions, selectedMemberEffectivePeriodKey],
-  )
   const selectedMemberGoalSubmittedRaw = useMemo(() => {
     if (!selectedMember) return false
     const pk = String(selectedMemberEffectivePeriodKey ?? '').trim()
@@ -11523,8 +11470,7 @@ function AdminMockPage({
                     <MemberSelfEvalTab rows={selectedMemberSelfEvalRows} />
                     {typeof onWithdrawSelfEvaluation === 'function' && selectedMember && selectedMemberSelfEvalSubmittedRaw ? (
                       <div className="selfEvalSubmitBar evaluatorWithdrawBarForMember">
-                        {!selectedMemberSelfDeadlineLockedForPeriod &&
-                        selectedMemberSelfSubmissionWithdrawalsUsed < MAX_EVAL_SUBMISSION_WITHDRAWALS ? (
+                        {selectedMemberSelfSubmissionWithdrawalsUsed < MAX_EVAL_SUBMISSION_WITHDRAWALS ? (
                           <>
                             <button
                               type="button"
@@ -11546,9 +11492,6 @@ function AdminMockPage({
                           <p className="selfEvalSubmitHint">
                             この評価期での提出取り消しは上限（{MAX_EVAL_SUBMISSION_WITHDRAWALS}回）に達しています。
                           </p>
-                        ) : null}
-                        {selectedMemberSelfDeadlineLockedForPeriod ? (
-                          <p className="selfEvalSubmitHint">この評価期の自己評価は締切後のため、提出の取り消しはできません。</p>
                         ) : null}
                       </div>
                     ) : null}
@@ -11575,7 +11518,7 @@ function AdminMockPage({
                     onWithdrawSubmission={() =>
                       onWithdrawSupervisorEvaluation?.(selectedMember?.id, selectedMemberEffectivePeriodKey)
                     }
-                    withdrawBlockedByDeadline={selectedMemberSupervisorDeadlineLocked}
+                    withdrawBlockedByDeadline={false}
                     canEvaluate
                     blockedReason="自己評価の提出後に1次評価(上司)を入力できます。"
                     focusMajorKey={selectedMemberGoalFocusMajorKey}
@@ -11815,7 +11758,7 @@ function AdminMockPage({
           id="admin-member-list"
           title="従業員一覧"
           titleMeta={`${adminFilteredMemberRows.length}人 / ${totalCount}人`}
-          defaultOpen={false}
+          defaultOpen
           className="adminDashAccordion--members"
         >
           <div className="adminPanel adminPanel--inAccordion">
@@ -12130,6 +12073,7 @@ function EmployeeManagePage({
   const [newEmployee, setNewEmployee] = useState({
     id: '',
     name: '',
+    joinDate: '',
     dept: '製造',
     role: '一般従業員',
     grade: 'G1',
@@ -12154,13 +12098,20 @@ function EmployeeManagePage({
 
   const handleCreateEmployee = (event) => {
     event.preventDefault()
-    if (!newEmployee.id.trim() || !newEmployee.name.trim()) return
+    const idRaw = String(newEmployee.id ?? '').trim()
+    const canonicalId = normalizeEmployeeNoLinkKey(idRaw) || idRaw
+    if (!canonicalId || !newEmployee.name.trim()) return
+    if (rows.some((r) => String(r.id) === canonicalId)) {
+      window.alert('その社員Cは既に使われています。')
+      return
+    }
 
     setRows((prev) => [
       ...prev,
       {
-        id: newEmployee.id.trim(),
+        id: canonicalId,
         name: newEmployee.name.trim(),
+        joinDate: normalizeEmployeeJoinDate(newEmployee.joinDate),
         dept: normalizeEmployeeDept(newEmployee.dept, deptList),
         grade: newEmployee.grade,
         score: '0.0点',
@@ -12173,6 +12124,7 @@ function EmployeeManagePage({
     setNewEmployee({
       id: '',
       name: '',
+      joinDate: '',
       dept: deptList[0] ?? '製造',
       role: '一般従業員',
       grade: 'G1',
@@ -12183,8 +12135,10 @@ function EmployeeManagePage({
 
   const handleStartEdit = (row) => {
     setEditingOriginalId(row.id)
+    const idStr = String(row?.id ?? '').trim()
     setEditingRow({
       ...row,
+      id: formatLoginLikeCode(idStr) || idStr,
       extraMenuKeys: normalizeEmployeeExtraMenuKeys(row?.extraMenuKeys),
     })
     setIsEditModalOpen(true)
@@ -12197,7 +12151,8 @@ function EmployeeManagePage({
     const trimmedName = editingRow.name.trim()
     if (!trimmedName) return
 
-    const nextId = String(editingRow.id ?? '').trim()
+    const idRaw = String(editingRow.id ?? '').trim()
+    const nextId = normalizeEmployeeNoLinkKey(idRaw) || idRaw
     if (!nextId) {
       window.alert('社員Cを入力してください。')
       return
@@ -12212,6 +12167,7 @@ function EmployeeManagePage({
       ...editingRow,
       id: nextId,
       name: trimmedName,
+      joinDate: normalizeEmployeeJoinDate(editingRow.joinDate),
       dept: normalizeEmployeeDept(editingRow.dept, deptList),
       grade: normalizeEmployeeGrade(editingRow.grade),
       extraMenuKeys: normalizeEmployeeExtraMenuKeys(editingRow.extraMenuKeys),
@@ -12267,6 +12223,7 @@ function EmployeeManagePage({
       [
         escapeCsvField(row.id),
         escapeCsvField(row.name),
+        escapeCsvField(row.joinDate ?? ''),
         escapeCsvField(row.dept),
         escapeCsvField(row.grade),
         escapeCsvField(scoreByEmployeeId[row.id] ?? '0.0点'),
@@ -12324,6 +12281,7 @@ function EmployeeManagePage({
       const scoreIdx = findHeaderIndex(headers, ['総合得点'])
       const roleIdx = findHeaderIndex(headers, ['役割'])
       const passwordIdx = findHeaderIndex(headers, ['パスワード', 'password', 'Password'])
+      const joinDateIdx = findHeaderIndex(headers, ['入社日', 'joinDate', '入社'])
 
       if (nameIdx < 0) {
         setDirectoryCsvMessage('CSVヘッダーに「名前」または「社員名」列が必要です。')
@@ -12363,6 +12321,9 @@ function EmployeeManagePage({
         if (passwordTrimmed) {
           patch.password = passwordTrimmed
         }
+        if (joinDateIdx >= 0) {
+          patch.joinDate = normalizeEmployeeJoinDate(cols[joinDateIdx] ?? '')
+        }
         imported.push(patch)
       }
 
@@ -12382,7 +12343,9 @@ function EmployeeManagePage({
             grade: Object.prototype.hasOwnProperty.call(imp, 'grade') ? imp.grade : 'G1',
             score: Object.prototype.hasOwnProperty.call(imp, 'score') ? imp.score : '0.0点',
             role: Object.prototype.hasOwnProperty.call(imp, 'role') ? imp.role : '一般従業員',
-            joinDate: imp.joinDate ?? '',
+            joinDate: Object.prototype.hasOwnProperty.call(imp, 'joinDate')
+              ? normalizeEmployeeJoinDate(imp.joinDate)
+              : '',
             email: imp.email ?? '',
             extraMenuKeys: normalizeEmployeeExtraMenuKeys(imp.extraMenuKeys),
           }
@@ -12454,6 +12417,7 @@ function EmployeeManagePage({
         <code className="employeeCsvHeaderLine">{EMPLOYEE_DIRECTORY_CSV_HEADERS.map(escapeCsvField).join(',')}</code>
         <span className="employeeCsvHeaderHintNote">
           パスワード列は任意です。空欄のまま取り込むと、既存ユーザーのパスワードは変わりません。
+          入社日は YYYY-MM-DD（列を省略すると既存の入社日を維持。列がある行で空欄にすると入社日をクリアします）。
           退職者は社員Cを「退職」または「退職_元のID」（例: 退職_e1）にすると、評価者用の一覧で「退職のみ」表示できます。
           部署列は「設定 → 部署マスタ」に登録した名前と一致させてください（未登録の名前は先頭の部署に置き換わります）。
         </span>
@@ -12468,6 +12432,7 @@ function EmployeeManagePage({
           <span className="employeeListHeadAvatar" aria-hidden />
           <span>社員C</span>
           <span>名前</span>
+          <span>入社日</span>
           <span>部署</span>
           {hideGradeAndTotalScore ? null : (
             <>
@@ -12499,6 +12464,12 @@ function EmployeeManagePage({
                   </span>
                   <span className="employeeListMetaSep"> · </span>
                   <span>{row.dept || '—'}</span>
+                  {normalizeEmployeeJoinDate(row.joinDate) ? (
+                    <>
+                      <span className="employeeListMetaSep"> · </span>
+                      <span className="employeeListMetaJoin">入社 {formatJoinDateJa(row.joinDate)}</span>
+                    </>
+                  ) : null}
                   {hideGradeAndTotalScore ? null : (
                     <>
                       <span className="employeeListMetaSep"> · </span>
@@ -12508,6 +12479,9 @@ function EmployeeManagePage({
                     </>
                   )}
                 </p>
+              </span>
+              <span className="employeeListColJoinDate" title="YYYY-MM-DD">
+                {normalizeEmployeeJoinDate(row.joinDate) ? formatJoinDateJa(row.joinDate) : '—'}
               </span>
               <span className="employeeListColDept">{row.dept}</span>
               {hideGradeAndTotalScore ? null : (
@@ -12555,7 +12529,7 @@ function EmployeeManagePage({
                 <input
                   type="text"
                   placeholder="例: 0001"
-                  value={newEmployee.id}
+                  value={formatLoginLikeCode(newEmployee.id)}
                   onChange={(event) => setNewEmployee((prev) => ({ ...prev, id: event.target.value }))}
                   required
                 />
@@ -12572,6 +12546,16 @@ function EmployeeManagePage({
                   onChange={(event) => setNewEmployee((prev) => ({ ...prev, name: event.target.value }))}
                   required
                 />
+              </label>
+
+              <label>
+                入社日（任意）
+                <input
+                  type="date"
+                  value={normalizeEmployeeJoinDate(newEmployee.joinDate) || ''}
+                  onChange={(event) => setNewEmployee((prev) => ({ ...prev, joinDate: event.target.value }))}
+                />
+                <small>YYYY-MM-DD。評価期の候補から入社前の期を除くのに使います。</small>
               </label>
 
               <label>
@@ -12696,6 +12680,16 @@ function EmployeeManagePage({
                   onChange={(event) => setEditingRow((prev) => ({ ...prev, name: event.target.value }))}
                   required
                 />
+              </label>
+
+              <label>
+                入社日（任意）
+                <input
+                  type="date"
+                  value={normalizeEmployeeJoinDate(editingRow.joinDate) || ''}
+                  onChange={(event) => setEditingRow((prev) => ({ ...prev, joinDate: event.target.value }))}
+                />
+                <small>YYYY-MM-DD。評価期の候補から入社前の期を除くのに使います。</small>
               </label>
 
               <label>
