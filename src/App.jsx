@@ -4238,6 +4238,9 @@ function App() {
 
   const buildPersistPayloadRef = useRef(() => ({}))
   buildPersistPayloadRef.current = () => buildPersistPayload(true)
+  /** 定期クラウド取得後の lastCloudPersistRef 同期用（setInterval 内は古いクロージャになり得るため ref 経由） */
+  const buildCloudSyncPayloadRef = useRef(() => ({}))
+  buildCloudSyncPayloadRef.current = () => buildPersistPayload(true, { includeEvalDrafts: false, includeUiState: false })
 
   const applyPersistPayload = (payload, options = {}) => {
     const {
@@ -4927,7 +4930,9 @@ function App() {
         const payload = data?.payload
         if (!payload || typeof payload !== 'object') return
         const serialized = JSON.stringify(payload)
-        if (!serialized || serialized === lastCloudAppliedRef.current || serialized === lastCloudPersistRef.current) return
+        // 比較は「前回フェッチしたクラウドJSON」とのみ。lastCloudPersistRef は buildPersistPayload 基準なので
+        // ここで一致判定に混ぜるとキー順の違いだけで毎回マージ→未反映バーが出続ける
+        if (!serialized || serialized === lastCloudAppliedRef.current) return
         // 評価基準は初回 loadCloudState で同期。ここで毎回当てると古いクラウドで削除・編集が巻き戻る
         applyPersistPayload(payload, {
           includeUiState: false,
@@ -4938,7 +4943,14 @@ function App() {
           includeEvaluationCriteria: false,
         })
         lastCloudAppliedRef.current = serialized
-        lastCloudPersistRef.current = serialized
+        // applyPersistPayload は setState なので、同一ターンの buildPersistPayload は古い。次ティックで ref を正規化
+        window.setTimeout(() => {
+          try {
+            lastCloudPersistRef.current = JSON.stringify(buildCloudSyncPayloadRef.current())
+          } catch {
+            /* stringify 失敗時は既存 ref のまま */
+          }
+        }, 0)
         setSyncMessage('Supabaseから最新データを反映しました（5秒間隔）')
         setSyncError('')
       } catch (e) {
