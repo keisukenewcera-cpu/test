@@ -6582,6 +6582,50 @@ select:focus {
   color: #92400e;
 }
 
+.evalCritMajorToneHint {
+  font-size: 12px;
+  font-weight: 600;
+  margin-left: 6px;
+  opacity: 0.85;
+}
+
+.evalCritSuperGroupFieldset {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.evalCritSuperGroupLegend {
+  margin: 0 0 8px;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.evalCritSuperGroupRadios {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.evalCritRadioRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 13px;
+  color: #334155;
+  line-height: 1.45;
+  cursor: pointer;
+}
+
+.evalCritRadioRow input {
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+
 .evalCritChevron {
   color: #64748b;
   font-size: 12px;

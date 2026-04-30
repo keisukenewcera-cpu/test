@@ -1024,7 +1024,12 @@ function buildEvalCategoriesForGrade(criteriaStore, gradeId) {
   if (sharedMajors.length > 0 && minorsByMajor) {
     return sharedMajors.map((major, majorIndex) => {
       const title = String(major?.title ?? '').trim()
-      const superGroup = seedSuperGroupByTitle.get(title) ?? 'business'
+      const superGroup =
+        major?.superGroup === 'interpersonal'
+          ? 'interpersonal'
+          : major?.superGroup === 'business'
+            ? 'business'
+            : (seedSuperGroupByTitle.get(title) ?? 'business')
       const rawMinors = Array.isArray(minorsByMajor[major.id]) ? minorsByMajor[major.id] : []
       const items = rawMinors
         .map((minor, minorIndex) => ({
@@ -1077,10 +1082,30 @@ function normalizeEvaluationMajor(m) {
 }
 
 function normalizeSharedMajor(m) {
-  return {
-    id: typeof m?.id === 'string' && m.id ? m.id : newEvaluationId('maj'),
-    title: String(m?.title ?? '').trim(),
-  }
+  const id = typeof m?.id === 'string' && m.id ? m.id : newEvaluationId('maj')
+  const title = String(m?.title ?? '').trim()
+  const sg = m?.superGroup
+  const out = { id, title }
+  if (sg === 'interpersonal') out.superGroup = 'interpersonal'
+  else if (sg === 'business') out.superGroup = 'business'
+  return out
+}
+
+/** CSVの「大分類」セルから superGroup を解釈（空は null） */
+function parseCsvSuperGroupCell(cell) {
+  const t = String(cell ?? '').trim()
+  if (!t) return null
+  const lower = t.toLowerCase()
+  if (lower === 'interpersonal') return 'interpersonal'
+  if (lower === 'business') return 'business'
+  if (t === SELF_EVAL_SUPER_GROUP.interpersonal.label || t.includes('対人') || t === '黄') return 'interpersonal'
+  if (t === SELF_EVAL_SUPER_GROUP.business.label || t.includes('業務')) return 'business'
+  return null
+}
+
+function sharedMajorSuperGroupLabel(major) {
+  const sg = major?.superGroup === 'interpersonal' ? 'interpersonal' : 'business'
+  return SELF_EVAL_SUPER_GROUP[sg].label
 }
 
 /** 旧形式 { G1: majors[], G2: ... } を大項目共通＋等級別小項目へ移行 */
@@ -1088,6 +1113,7 @@ function migrateLegacyEvaluationCriteriaToShared(raw, gradeList) {
   const grades = gradeList?.length ? gradeList : defaultSkillGrades
   const gradeIds = grades.map((g) => g.id)
   const majorSeen = new Map()
+  const majorSuperGroupById = new Map()
   const majorOrder = []
   for (const gid of gradeIds) {
     const arr = Array.isArray(raw?.[gid]) ? raw[gid] : []
@@ -1099,12 +1125,28 @@ function migrateLegacyEvaluationCriteriaToShared(raw, gradeList) {
         majorSeen.set(id, title)
         majorOrder.push(id)
       }
+      const csvSg = m?.superGroup === 'interpersonal' || m?.superGroup === 'business' ? m.superGroup : null
+      if (csvSg) majorSuperGroupById.set(id, csvSg)
     }
   }
   if (majorOrder.length === 0) {
     return buildDefaultEvaluationCriteriaFromSelfEval(gradeList)
   }
-  const sharedMajors = majorOrder.map((id) => ({ id, title: majorSeen.get(id) }))
+  const seedSuperGroupByTitle = new Map(
+    SELF_EVAL_CATEGORIES.map((cat) => [
+      String(cat.title ?? '').trim(),
+      cat.superGroup === 'interpersonal' ? 'interpersonal' : 'business',
+    ]),
+  )
+  const sharedMajors = majorOrder.map((id) => {
+    const title = String(majorSeen.get(id) ?? '').trim()
+    const fromMajor = majorSuperGroupById.get(id)
+    const superGroup =
+      fromMajor === 'interpersonal' || fromMajor === 'business'
+        ? fromMajor
+        : seedSuperGroupByTitle.get(title) ?? 'business'
+    return { id, title: majorSeen.get(id), superGroup }
+  })
   const minorsByGrade = {}
   for (const gid of gradeIds) {
     minorsByGrade[gid] = {}
@@ -1157,11 +1199,56 @@ function normalizeEvaluationCriteriaStore(raw, gradeList) {
   return migrateLegacyEvaluationCriteriaToShared(raw, gradeList)
 }
 
+/** Supabase 初回復元で、手元の評価基準（削除含む）が古いクラウドで上書きされないようにする */
+function mergeEvaluationCriteriaForInitialCloudHydrate(localPayload, cloudPayload) {
+  if (!cloudPayload || typeof cloudPayload !== 'object') return cloudPayload
+  const local = localPayload && typeof localPayload === 'object' && !Array.isArray(localPayload) ? localPayload : {}
+  const localRaw = local.evaluationCriteria
+  const cloudRaw = cloudPayload.evaluationCriteria
+  if (!cloudRaw || typeof cloudRaw !== 'object' || Array.isArray(cloudRaw)) return cloudPayload
+  if (!localRaw || typeof localRaw !== 'object' || Array.isArray(localRaw)) return cloudPayload
+
+  const gradeList =
+    Array.isArray(local.skillGrades) && local.skillGrades.some((g) => g && g.id)
+      ? local.skillGrades
+      : Array.isArray(cloudPayload.skillGrades) && cloudPayload.skillGrades.some((g) => g && g.id)
+        ? cloudPayload.skillGrades
+        : defaultSkillGrades
+
+  const localNorm = normalizeEvaluationCriteriaStore(localRaw, gradeList)
+  const cloudNorm = normalizeEvaluationCriteriaStore(cloudRaw, gradeList)
+  const localJson = JSON.stringify(localNorm)
+  const cloudJson = JSON.stringify(cloudNorm)
+  if (localJson === cloudJson) return cloudPayload
+
+  const localAt = String(local.evaluationCriteriaSavedAt ?? '').trim()
+  const cloudAt = String(cloudPayload.evaluationCriteriaSavedAt ?? '').trim()
+
+  if (localAt && cloudAt) {
+    if (localAt > cloudAt) {
+      return { ...cloudPayload, evaluationCriteria: localNorm, evaluationCriteriaSavedAt: localAt }
+    }
+    return cloudPayload
+  }
+  if (localAt && !cloudAt) {
+    return { ...cloudPayload, evaluationCriteria: localNorm, evaluationCriteriaSavedAt: localAt }
+  }
+  if (!localAt && !cloudAt) {
+    return {
+      ...cloudPayload,
+      evaluationCriteria: localNorm,
+      evaluationCriteriaSavedAt: new Date().toISOString(),
+    }
+  }
+  return cloudPayload
+}
+
 function buildDefaultEvaluationCriteriaFromSelfEval(gradeList) {
   const grades = gradeList?.length ? gradeList : defaultSkillGrades
   const sharedMajors = SELF_EVAL_CATEGORIES.map((cat) => ({
     id: `maj-seed-${cat.id}`,
     title: cat.title,
+    superGroup: cat.superGroup === 'interpersonal' ? 'interpersonal' : 'business',
   }))
   const seedMinorsForOneGrade = () =>
     Object.fromEntries(
@@ -1974,6 +2061,33 @@ function App() {
     }
     return buildDefaultEvaluationCriteriaFromSelfEval(gradeListForEval)
   })
+  const evalCriteriaSavedAtRef = useRef(String(savedData?.evaluationCriteriaSavedAt ?? '').trim())
+  const evalCriteriaWriteFromRemoteRef = useRef(false)
+  const prevEvalCriteriaJsonRef = useRef(
+    JSON.stringify(
+      (() => {
+        const raw = savedData?.evaluationCriteria
+        const gradeListForEval =
+          Array.isArray(savedData?.skillGrades) && savedData.skillGrades.some((g) => g && g.id)
+            ? savedData.skillGrades
+            : defaultSkillGrades
+        return raw && typeof raw === 'object' && !Array.isArray(raw)
+          ? normalizeEvaluationCriteriaStore(raw, gradeListForEval)
+          : buildDefaultEvaluationCriteriaFromSelfEval(gradeListForEval)
+      })(),
+    ),
+  )
+  useEffect(() => {
+    if (evalCriteriaWriteFromRemoteRef.current) {
+      evalCriteriaWriteFromRemoteRef.current = false
+      prevEvalCriteriaJsonRef.current = JSON.stringify(evaluationCriteria)
+      return
+    }
+    const nextJson = JSON.stringify(evaluationCriteria)
+    if (nextJson === prevEvalCriteriaJsonRef.current) return
+    prevEvalCriteriaJsonRef.current = nextJson
+    evalCriteriaSavedAtRef.current = new Date().toISOString()
+  }, [evaluationCriteria])
   const [menuVisibilityByRole, setMenuVisibilityByRole] = useState(() => {
     const raw = savedData?.menuVisibilityByRole
     if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
@@ -3971,6 +4085,7 @@ function App() {
       goalFocusMajorByEmployeePeriod,
       goalSubmissionByEmployee,
     evaluationCriteria,
+      ...(evalCriteriaSavedAtRef.current ? { evaluationCriteriaSavedAt: evalCriteriaSavedAtRef.current } : {}),
     menuVisibilityByRole,
       ...(includeUiState ? { activeEvalPeriodKey } : {}),
       evalPeriodDefinitions,
@@ -4159,7 +4274,10 @@ function App() {
         Array.isArray(payload.skillGrades) && payload.skillGrades.length > 0
           ? payload.skillGrades.filter((g) => g && typeof g.id === 'string' && typeof g.label === 'string')
           : defaultSkillGrades
+      evalCriteriaWriteFromRemoteRef.current = true
       setEvaluationCriteria(normalizeEvaluationCriteriaStore(payload.evaluationCriteria, gradeList))
+      const ecAt = String(payload.evaluationCriteriaSavedAt ?? '').trim()
+      if (ecAt) evalCriteriaSavedAtRef.current = ecAt
     }
     if (
       includeSettingsData &&
@@ -4441,9 +4559,11 @@ function App() {
 
       const payload = data?.payload
       if (payload && typeof payload === 'object') {
-        const serialized = JSON.stringify(payload)
+        const localPayload = loadSavedData()
+        const mergedPayload = mergeEvaluationCriteriaForInitialCloudHydrate(localPayload, payload)
+        const serialized = JSON.stringify(mergedPayload)
         try {
-          applyPersistPayload(payload)
+          applyPersistPayload(mergedPayload)
           lastCloudPersistRef.current = serialized
           lastCloudAppliedRef.current = serialized
           setSyncMessage('Supabaseから復元済み')
@@ -4648,13 +4768,14 @@ function App() {
         if (!payload || typeof payload !== 'object') return
         const serialized = JSON.stringify(payload)
         if (!serialized || serialized === lastCloudAppliedRef.current || serialized === lastCloudPersistRef.current) return
+        // 評価基準は初回 loadCloudState で同期。ここで毎回当てると古いクラウドで削除・編集が巻き戻る
         applyPersistPayload(payload, {
           includeUiState: false,
           mergeEvalHistories: true,
           includeEvalDrafts: false,
           includeEmployeeDirectory: false,
           includeSettingsData: false,
-          includeEvaluationCriteria: true,
+          includeEvaluationCriteria: false,
         })
         lastCloudAppliedRef.current = serialized
         lastCloudPersistRef.current = serialized
@@ -6612,6 +6733,8 @@ function EvaluationCriteriaPage({ grades, criteria, setCriteria }) {
   const [openMajors, setOpenMajors] = useState({})
   const [majorModal, setMajorModal] = useState(null)
   const [majorDraftTitle, setMajorDraftTitle] = useState('')
+  /** selfeval UI: business=青（業務）, interpersonal=黄（対人） */
+  const [majorDraftSuperGroup, setMajorDraftSuperGroup] = useState('business')
   const [minorModal, setMinorModal] = useState(null)
   const [minorDraft, setMinorDraft] = useState({
     title: '',
@@ -6638,6 +6761,7 @@ function EvaluationCriteriaPage({ grades, criteria, setCriteria }) {
       sharedMajors.map((sm) => ({
         id: sm.id,
         title: sm.title,
+        superGroup: sm.superGroup === 'interpersonal' ? 'interpersonal' : 'business',
         minors: Array.isArray(minorsForGrade[sm.id]) ? minorsForGrade[sm.id] : [],
       })),
     [sharedMajors, minorsForGrade],
@@ -6671,14 +6795,19 @@ function EvaluationCriteriaPage({ grades, criteria, setCriteria }) {
   const openAddMajor = () => {
     setMajorModal({ mode: 'add' })
     setMajorDraftTitle('')
+    setMajorDraftSuperGroup('business')
   }
 
   const openEditMajor = (major) => {
     setMajorModal({ mode: 'edit', majorId: major.id })
     setMajorDraftTitle(major.title)
+    setMajorDraftSuperGroup(major.superGroup === 'interpersonal' ? 'interpersonal' : 'business')
   }
 
-  const closeMajorModal = () => setMajorModal(null)
+  const closeMajorModal = () => {
+    setMajorModal(null)
+    setMajorDraftSuperGroup('business')
+  }
 
   const saveMajorModal = () => {
     const t = majorDraftTitle.trim()
@@ -6686,10 +6815,11 @@ function EvaluationCriteriaPage({ grades, criteria, setCriteria }) {
       window.alert('大項目名を入力してください。')
       return
     }
+    const sg = majorDraftSuperGroup === 'interpersonal' ? 'interpersonal' : 'business'
     if (majorModal.mode === 'add') {
       const id = newEvaluationId('maj')
       setCriteria((prev) => {
-        const nextShared = [...(prev.sharedMajors ?? []), { id, title: t }]
+        const nextShared = [...(prev.sharedMajors ?? []), { id, title: t, superGroup: sg }]
         const nextMinors = { ...(prev.minorsByGrade ?? {}) }
         for (const g of grades) {
           const gid = g.id
@@ -6703,7 +6833,7 @@ function EvaluationCriteriaPage({ grades, criteria, setCriteria }) {
       setCriteria((prev) => ({
         ...prev,
         sharedMajors: (prev.sharedMajors ?? []).map((m) =>
-          m.id === majorModal.majorId ? { ...m, title: t } : m,
+          m.id === majorModal.majorId ? { ...m, title: t, superGroup: sg } : m,
         ),
       }))
     }
@@ -6791,6 +6921,7 @@ function EvaluationCriteriaPage({ grades, criteria, setCriteria }) {
       '等級名',
       '大項目ID',
       '大項目名',
+      '大分類',
       '小項目ID',
       '小項目名',
       'ウェイト',
@@ -6818,6 +6949,7 @@ function EvaluationCriteriaPage({ grades, criteria, setCriteria }) {
               escapeCsvField(gradeLabelById[gradeId] ?? gradeId),
               escapeCsvField(major.id),
               escapeCsvField(major.title),
+              escapeCsvField(sharedMajorSuperGroupLabel(major)),
               escapeCsvField(''),
               escapeCsvField(''),
               escapeCsvField(''),
@@ -6838,6 +6970,7 @@ function EvaluationCriteriaPage({ grades, criteria, setCriteria }) {
               escapeCsvField(gradeLabelById[gradeId] ?? gradeId),
               escapeCsvField(major.id),
               escapeCsvField(major.title),
+              escapeCsvField(sharedMajorSuperGroupLabel(major)),
               escapeCsvField(minor.id),
               escapeCsvField(minor.title),
               escapeCsvField(minor.weightPct ?? 0),
@@ -6870,6 +7003,7 @@ function EvaluationCriteriaPage({ grades, criteria, setCriteria }) {
       '等級名',
       '大項目ID',
       '大項目名',
+      '大分類',
       '小項目ID',
       '小項目名',
       'ウェイト',
@@ -6910,6 +7044,7 @@ function EvaluationCriteriaPage({ grades, criteria, setCriteria }) {
       const majorIdIdx = findHeaderIndex(headers, ['大項目ID', 'majorId'])
       const minorTitleIdx = findHeaderIndex(headers, ['小項目名', 'minorTitle'])
       const minorIdIdx = findHeaderIndex(headers, ['小項目ID', 'minorId'])
+      const majorSuperGroupIdx = findHeaderIndex(headers, ['大分類', 'superGroup', '表示グループ'])
       const weightIdx = findHeaderIndex(headers, ['ウェイト', 'weightPct'])
       const s1Idx = findHeaderIndex(headers, ['1点基準', 'score1'])
       const s2Idx = findHeaderIndex(headers, ['2点基準', 'score2'])
@@ -6936,12 +7071,20 @@ function EvaluationCriteriaPage({ grades, criteria, setCriteria }) {
 
         if (!byGrade[gradeId]) byGrade[gradeId] = new Map()
         const majorId = String(cols[majorIdIdx] ?? '').trim() || `maj_csv_${majorTitle}`
+        const parsedSuperGroup =
+          majorSuperGroupIdx >= 0 ? parseCsvSuperGroupCell(cols[majorSuperGroupIdx]) : null
         if (!byGrade[gradeId].has(majorId)) {
-          byGrade[gradeId].set(majorId, { id: majorId, title: majorTitle, minors: [] })
+          byGrade[gradeId].set(majorId, {
+            id: majorId,
+            title: majorTitle,
+            minors: [],
+            ...(parsedSuperGroup ? { superGroup: parsedSuperGroup } : {}),
+          })
           importedMajorCount += 1
         } else {
           const existingMajor = byGrade[gradeId].get(majorId)
           existingMajor.title = majorTitle
+          if (parsedSuperGroup) existingMajor.superGroup = parsedSuperGroup
         }
 
         const minorTitle = minorTitleIdx >= 0 ? String(cols[minorTitleIdx] ?? '').trim() : ''
@@ -7002,7 +7145,7 @@ function EvaluationCriteriaPage({ grades, criteria, setCriteria }) {
       <header className="evalCritHeader">
         <h2>評価基準設定</h2>
         <p className="evalCritLead">
-          大項目（評価の大目標）は等級によらず共通です（G1〜G6で同じ構成になります）。小項目・ウエイト・1〜5点の基準は、等級を切り替えて等級ごとに設定します。
+          大項目（評価の大目標）は等級によらず共通です（G1〜G6で同じ構成になります）。追加・編集時に「業務能力（青）」か「対人関係能力（黄）」を選ぶと、自己評価・上司評価画面の色分けに反映されます。小項目・ウエイト・1〜5点の基準は、等級を切り替えて等級ごとに設定します。
         </p>
       </header>
 
@@ -7069,6 +7212,11 @@ function EvaluationCriteriaPage({ grades, criteria, setCriteria }) {
                     </span>
                     <span className="evalCritMajorTitle">
                       {maj.title}
+                      <span className="evalCritMajorToneHint">
+                        {maj.superGroup === 'interpersonal'
+                          ? `（${SELF_EVAL_SUPER_GROUP.interpersonal.label}）`
+                          : `（${SELF_EVAL_SUPER_GROUP.business.label}）`}
+                      </span>
                       <span className="evalCritMajorCount">（{maj.minors.length}項目）</span>
                     </span>
                   </button>
@@ -7136,6 +7284,36 @@ function EvaluationCriteriaPage({ grades, criteria, setCriteria }) {
                 placeholder="例：業務遂行能力"
               />
             </label>
+            <fieldset className="evalCritSuperGroupFieldset">
+              <legend className="evalCritFormLabel evalCritSuperGroupLegend">表示グループ（自己評価・上司評価の色）</legend>
+              <div className="evalCritSuperGroupRadios">
+                <label className="evalCritRadioRow">
+                  <input
+                    type="radio"
+                    name="majorDraftSuperGroup"
+                    value="business"
+                    checked={majorDraftSuperGroup === 'business'}
+                    onChange={() => setMajorDraftSuperGroup('business')}
+                  />
+                  <span>
+                    <strong>{SELF_EVAL_SUPER_GROUP.business.label}</strong>（青） — {SELF_EVAL_SUPER_GROUP.business.description}
+                  </span>
+                </label>
+                <label className="evalCritRadioRow">
+                  <input
+                    type="radio"
+                    name="majorDraftSuperGroup"
+                    value="interpersonal"
+                    checked={majorDraftSuperGroup === 'interpersonal'}
+                    onChange={() => setMajorDraftSuperGroup('interpersonal')}
+                  />
+                  <span>
+                    <strong>{SELF_EVAL_SUPER_GROUP.interpersonal.label}</strong>（黄） —{' '}
+                    {SELF_EVAL_SUPER_GROUP.interpersonal.description}
+                  </span>
+                </label>
+              </div>
+            </fieldset>
             <div className="evalCritModalFooter">
               <button type="button" className="evalCritBtnGhost" onClick={closeMajorModal}>
                 キャンセル
