@@ -90,11 +90,11 @@
   }
 
   .employeeTable .row {
-    min-width: 740px;
+    min-width: 820px;
   }
 
   .employeeTable.employeeTable--yakuin .row {
-    min-width: 560px;
+    min-width: 640px;
   }
 
   .allowanceTable {
@@ -3402,9 +3402,24 @@ select:focus {
   color: #0f172a;
 }
 
+.employeeListColJoinDate {
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.employeeListMetaJoin {
+  font-weight: 600;
+  color: #64748b;
+}
+
 .employeeTable .row {
   display: grid;
-  grid-template-columns: 44px 0.68fr 1.38fr 1fr 0.68fr 0.88fr 0.95fr 1fr 0.78fr;
+  grid-template-columns: 44px 0.62fr 1.12fr 0.72fr 0.92fr 0.62fr 0.82fr 0.86fr 0.92fr 0.92fr 0.72fr;
   gap: 8px;
   padding: 9px 10px;
   border-top: 1px solid #edf0f8;
@@ -3413,7 +3428,7 @@ select:focus {
 }
 
 .employeeTable.employeeTable--yakuin .row {
-  grid-template-columns: 44px 0.68fr 1.45fr 1.05fr 1fr 1.05fr 0.88fr 0.72fr;
+  grid-template-columns: 44px 0.62fr 1.2fr 0.72fr 1.02fr 1fr 1.02fr 0.85fr 0.68fr;
 }
 
 .employeeTable .row.head {
@@ -8283,7 +8298,7 @@ select:focus {
   }
 
   .employeeTable .row {
-    grid-template-columns: 44px 0.7fr 1.3fr 0.9fr 0.7fr 0.9fr 1fr 1.05fr 0.85fr;
+    grid-template-columns: 44px 0.65fr 1.15fr 0.72fr 0.88fr 0.65fr 0.82fr 0.85fr 0.92fr 0.92fr 0.8fr;
     font-size: 12px;
   }
 
@@ -8298,7 +8313,7 @@ select:focus {
   }
 
   .employeeTable.employeeTable--yakuin .row {
-    grid-template-columns: 44px 0.7fr 1.3fr 0.9fr 1fr 1.05fr 0.85fr;
+    grid-template-columns: 44px 0.65fr 1.2fr 0.72fr 0.95fr 1fr 1.02fr 0.85fr 0.78fr;
   }
 
   .memberTable.memberTable--yakuin .row {
@@ -8871,6 +8886,7 @@ select:focus {
   }
 
   .employeeListColId,
+  .employeeListColJoinDate,
   .employeeListColDept,
   .employeeListColGrade,
   .employeeListColScore,
