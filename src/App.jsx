@@ -4426,10 +4426,17 @@ function App() {
       setActiveEvalPeriodKey(payload.activeEvalPeriodKey.trim())
     }
     if ((includeSettingsData || includeEvalPeriodDefinitions) && Array.isArray(payload.evalPeriodDefinitions)) {
-      evalPeriodDefsWriteFromRemoteRef.current = true
-      setEvalPeriodDefinitions(normalizeEvalPeriodDefinitions(payload.evalPeriodDefinitions))
-      const at = String(payload.evalPeriodDefinitionsSavedAt ?? '').trim()
-      if (at) evalPeriodDefsSavedAtRef.current = at
+      const incomingAt = String(payload.evalPeriodDefinitionsSavedAt ?? '').trim()
+      const currentAt = String(evalPeriodDefsSavedAtRef.current ?? '').trim()
+      // 端末間で古い payload が後から届いても、評価期マスタを巻き戻さない。
+      // savedAt が無い更新は current がある場合に破棄、savedAt 同士は新しい方のみ適用。
+      const shouldApplyEvalPeriods =
+        !currentAt || (incomingAt && incomingAt >= currentAt) || (!incomingAt && !currentAt)
+      if (shouldApplyEvalPeriods) {
+        evalPeriodDefsWriteFromRemoteRef.current = true
+        setEvalPeriodDefinitions(normalizeEvalPeriodDefinitions(payload.evalPeriodDefinitions))
+        if (incomingAt) evalPeriodDefsSavedAtRef.current = incomingAt
+      }
     }
     if (
       payload.selfEvalHistoryByEmployee &&
