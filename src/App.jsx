@@ -86,6 +86,14 @@ const sanitizePercentInput = (value) => {
   return normalizedInteger
 }
 
+/** 一覧アバター用（先頭1文字、空なら ?） */
+const directoryNameInitial = (name) => {
+  const s = String(name ?? '').trim()
+  if (!s) return '?'
+  const first = [...s][0]
+  return first ?? '?'
+}
+
 const createRow = (index) => ({
   id: Date.now() + index,
   employeeNo: '',
@@ -4582,6 +4590,15 @@ function App() {
     }
   }, [accountMenuOpen, mobileMenuOpen])
 
+  useEffect(() => {
+    if (!mobileMenuOpen) return
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') setMobileMenuOpen(false)
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [mobileMenuOpen])
+
   const handleWorkspaceTabSelect = useCallback((nextKey) => {
     setWorkspaceView(nextKey)
     setAccountMenuOpen(false)
@@ -4596,7 +4613,7 @@ function App() {
   }, [])
 
   return (
-    <main className={`app ${!isLoggedIn ? 'appLogin' : ''}`}>
+    <main className={`app ${!isLoggedIn ? 'appLogin' : ''}${isLoggedIn && mobileMenuOpen ? ' isMobileMenuOpen' : ''}`}>
       <section ref={mainCardRef} className={`card ${!isLoggedIn ? 'cardLogin' : ''}`}>
         {!isLoggedIn ? (
           <div className="loginScreen">
@@ -5494,7 +5511,7 @@ function App() {
                 canViewExecutiveCommentEval={menuRoleKey === MENU_ROLE_YAKUIN || menuRoleKey === MENU_ROLE_ADMIN}
                 forcedSelectedMemberId={adminSelectedMemberId}
                 forcedDetailTab={adminDetailTab}
-                onSelectMember={(employeeId) => setAdminSelectedMemberId(employeeId)}
+                onSelectMember={(employeeId) => setAdminSelectedMemberId(employeeId ?? null)}
                 onChangeDetailTab={(tabId) => setAdminDetailTab(tabId)}
                 promotionRequests={promotionRequests}
                 canApprovePromotions={menuRoleKey === MENU_ROLE_ADMIN}
@@ -5722,46 +5739,75 @@ function App() {
       </section>
       {isLoggedIn ? (
         <div className={`mobileMenuWrap ${mobileMenuOpen ? 'isOpen' : ''}`}>
+          <div className="mobileMenuLayer" aria-hidden={!mobileMenuOpen}>
+            <button
+              type="button"
+              className="mobileMenuBackdrop"
+              tabIndex={-1}
+              aria-label="メニューを閉じる"
+              onClick={() => setMobileMenuOpen(false)}
+            />
+            <button
+              type="button"
+              className="mobileMenuOverlayClose"
+              tabIndex={-1}
+              aria-hidden={!mobileMenuOpen}
+              aria-label="メニューを閉じる"
+              onClick={() => setMobileMenuOpen(false)}
+            >
+              ×
+            </button>
+            <aside
+              id="mobile-workspace-menu"
+              className="mobileMenuDrawer"
+              role="dialog"
+              aria-modal="true"
+              aria-label="モバイルメニュー"
+              aria-hidden={!mobileMenuOpen}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mobileMenuPanel" role="menu">
+                <div className="mobileMenuTabList">
+                  {visibleWorkspaceTabs.map((t) => (
+                    <button
+                      key={t.key}
+                      type="button"
+                      className={`mobileMenuItem ${effectiveWorkspaceView === t.key ? 'isActive' : ''}`}
+                      onClick={() => handleWorkspaceTabSelect(t.key)}
+                    >
+                      <span className="mobileMenuItemIcon" aria-hidden>
+                        {MAIN_WORKSPACE_TAB_ICONS[t.key] ?? '•'}
+                      </span>
+                      <span>{t.label}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="mobileMenuAccount">
+                  <p className="mobileMenuAccountName">{loggedInAccountLabel}</p>
+                  <button
+                    type="button"
+                    className="mobileMenuLogout"
+                    onClick={() => {
+                      setMobileMenuOpen(false)
+                      handleLogout()
+                    }}
+                  >
+                    ログアウト
+                  </button>
+                </div>
+              </div>
+            </aside>
+          </div>
           <button
             type="button"
             className="mobileMenuToggle"
-            aria-label="メニューを開く"
+            aria-label={mobileMenuOpen ? 'メニューを閉じる' : 'メニューを開く'}
+            aria-expanded={mobileMenuOpen}
+            aria-controls="mobile-workspace-menu"
             onClick={() => setMobileMenuOpen((prev) => !prev)}
           >
             ☰
           </button>
-          {mobileMenuOpen ? (
-            <div className="mobileMenuPanel" role="menu" aria-label="モバイルメニュー">
-              <div className="mobileMenuTabList">
-                {visibleWorkspaceTabs.map((t) => (
-                  <button
-                    key={t.key}
-                    type="button"
-                    className={`mobileMenuItem ${effectiveWorkspaceView === t.key ? 'isActive' : ''}`}
-                    onClick={() => handleWorkspaceTabSelect(t.key)}
-                  >
-                    <span className="mobileMenuItemIcon" aria-hidden>
-                      {MAIN_WORKSPACE_TAB_ICONS[t.key] ?? '•'}
-                    </span>
-                    <span>{t.label}</span>
-                  </button>
-                ))}
-              </div>
-              <div className="mobileMenuAccount">
-                <p className="mobileMenuAccountName">{loggedInAccountLabel}</p>
-                <button
-                  type="button"
-                  className="mobileMenuLogout"
-                  onClick={() => {
-                    setMobileMenuOpen(false)
-                    handleLogout()
-                  }}
-                >
-                  ログアウト
-                </button>
-              </div>
-            </div>
-          ) : null}
         </div>
       ) : null}
     </main>
@@ -9926,31 +9972,34 @@ function AdminMockPage({
   useEffect(() => {
     if (!adminFilteredMemberRows.length) {
       setSelectedMemberId(null)
-      return
-    }
-    if (!selectedMemberId) {
-      setSelectedMemberId(adminFilteredMemberRows[0].id)
+      onSelectMember?.(null)
       return
     }
     if (selectedMemberId && !adminFilteredMemberRows.some((m) => m.id === selectedMemberId)) {
       setSelectedMemberId(null)
+      onSelectMember?.(null)
     }
-  }, [adminFilteredMemberRows, selectedMemberId])
+  }, [adminFilteredMemberRows, selectedMemberId, onSelectMember])
 
   useEffect(() => {
-    if (!forcedSelectedMemberId) return
-    const row = directoryRows.find((r) => String(r.id) === String(forcedSelectedMemberId))
-    if (row && isEmployeeDirectoryRetired(row) && adminMemberEmployment === 'active') {
-      setAdminMemberEmployment('all')
+    const fid =
+      forcedSelectedMemberId != null && String(forcedSelectedMemberId).trim() !== ''
+        ? String(forcedSelectedMemberId).trim()
+        : null
+    if (fid) {
+      const row = directoryRows.find((r) => String(r.id) === fid)
+      if (row && isEmployeeDirectoryRetired(row) && adminMemberEmployment === 'active') {
+        setAdminMemberEmployment('all')
+      }
     }
-  }, [forcedSelectedMemberId, directoryRows, adminMemberEmployment])
-
-  useEffect(() => {
-    if (!forcedSelectedMemberId) return
-    if (adminFilteredMemberRows.some((m) => m.id === forcedSelectedMemberId)) {
-      setSelectedMemberId(forcedSelectedMemberId)
+    if (!fid) {
+      setSelectedMemberId(null)
+      return
     }
-  }, [forcedSelectedMemberId, adminFilteredMemberRows])
+    if (adminFilteredMemberRows.some((m) => m.id === fid)) {
+      setSelectedMemberId(fid)
+    }
+  }, [forcedSelectedMemberId, adminFilteredMemberRows, directoryRows, adminMemberEmployment])
 
   // NOTE: Do not force-sync detailTab from parent state here.
   // Local tab clicks must always win to keep admin tab switching responsive.
@@ -10120,11 +10169,14 @@ function AdminMockPage({
     if (active && optionValues.includes(active)) return active
     return String(optionValues[0] ?? evalPeriodFallbackKey ?? '').trim()
   }, [adminMemberPeriodKey, adminMemberEvalPeriodSelectOptions, evalPeriodFallbackKey])
-  const scrollMemberDockIntoView = useCallback(() => {
+  const scrollAdminMemberViewToTop = useCallback(() => {
     window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        adminMemberDetailDockRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-      })
+      const dock = adminMemberDetailDockRef.current
+      const card = dock?.closest?.('.card')
+      if (card && typeof card.scrollTo === 'function') {
+        card.scrollTo({ top: 0, behavior: 'auto' })
+      }
+      adminMockTopRef.current?.scrollIntoView({ behavior: 'auto', block: 'start' })
     })
   }, [])
   const selectedMemberSkills = useMemo(() => {
@@ -10879,8 +10931,21 @@ function AdminMockPage({
           {selectedMember ? (
           <div
             ref={adminMemberDetailDockRef}
-            className="adminMemberDetailDock"
+            className="adminMemberDetailDock adminMemberDetailDock--page"
           >
+            <div className="adminMemberDetailDockToolbar">
+              <button
+                type="button"
+                className="adminMemberDetailBackBtn"
+                onClick={() => {
+                  setSelectedMemberId(null)
+                  onSelectMember?.(null)
+                  scrollAdminMemberViewToTop()
+                }}
+              >
+                ← 一覧に戻る
+              </button>
+            </div>
               <section key={selectedMember.id} className="memberDetailWorkspace">
               <header
                 className="memberDetailHero"
@@ -11366,7 +11431,8 @@ function AdminMockPage({
               </div>
         </section>
           </div>
-        ) : null}
+        ) : (
+        <>
         <AdminDashAccordion
           id="admin-member-list"
           title="従業員一覧"
@@ -11375,48 +11441,75 @@ function AdminMockPage({
           className="adminDashAccordion--members"
         >
           <div className="adminPanel adminPanel--inAccordion">
-          <div className="filters filtersAdminMember">
-            <input
-              type="text"
-              placeholder="名前で検索..."
-              value={adminMemberSearch}
-              onChange={(event) => setAdminMemberSearch(event.target.value)}
-            />
-            <select value={adminMemberDept} onChange={(event) => setAdminMemberDept(event.target.value)}>
-              <option value="">全部署</option>
-              {adminDeptOptions.map((d) => (
-                <option key={d} value={d}>
-                  {d}
-                </option>
-              ))}
-            </select>
-            {hideGradeSelfEvalAndGradeStats ? null : (
-              <select value={adminMemberGrade} onChange={(event) => setAdminMemberGrade(event.target.value)}>
-                <option value="">全等級</option>
-                {adminGradeOptions.map((g) => (
-                  <option key={g} value={g}>
-                    {g}
-                  </option>
-                ))}
-              </select>
-            )}
-            <select value={adminMemberEmployment} onChange={(event) => setAdminMemberEmployment(event.target.value)}>
-              <option value="all">全員</option>
-              <option value="active">在籍のみ</option>
-              <option value="retired">退職のみ</option>
-            </select>
-            <select value={adminMemberSort} onChange={(event) => setAdminMemberSort(event.target.value)}>
-              <option value="name">並び: 名前</option>
-              <option value="id">並び: 社員C</option>
-              {hideGradeSelfEvalAndGradeStats ? null : <option value="grade">並び: 等級</option>}
-              <option value="retiredFirst">並び: 退職を上</option>
-            </select>
+          <div
+            className={`filters filtersAdminMember${hideGradeSelfEvalAndGradeStats ? ' filtersAdminMember--yakuin' : ''}`}
+          >
+            <label className="filtersAdminMemberSearchLabel">
+              <span className="filtersAdminMemberSearchIcon" aria-hidden>
+                🔍
+              </span>
+              <input
+                type="search"
+                enterKeyHint="search"
+                autoComplete="off"
+                placeholder="名前で検索…"
+                value={adminMemberSearch}
+                onChange={(event) => setAdminMemberSearch(event.target.value)}
+              />
+            </label>
+            <details className="filtersAdminMemberNarrow">
+              <summary
+                className="filtersAdminMemberNarrowSummary"
+                title="部署・等級・在籍・並び順の条件"
+              >
+                <span className="filtersAdminMemberNarrowSummaryLabel">絞り込み</span>
+                <span className="filtersAdminMemberNarrowSummaryChevron" aria-hidden>
+                  ›
+                </span>
+              </summary>
+              <div className="filtersAdminMemberSelects">
+                <select value={adminMemberDept} onChange={(event) => setAdminMemberDept(event.target.value)}>
+                  <option value="">全部署</option>
+                  {adminDeptOptions.map((d) => (
+                    <option key={d} value={d}>
+                      {d}
+                    </option>
+                  ))}
+                </select>
+                {hideGradeSelfEvalAndGradeStats ? null : (
+                  <select value={adminMemberGrade} onChange={(event) => setAdminMemberGrade(event.target.value)}>
+                    <option value="">全等級</option>
+                    {adminGradeOptions.map((g) => (
+                      <option key={g} value={g}>
+                        {g}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <select value={adminMemberEmployment} onChange={(event) => setAdminMemberEmployment(event.target.value)}>
+                  <option value="all">全員</option>
+                  <option value="active">在籍のみ</option>
+                  <option value="retired">退職のみ</option>
+                </select>
+                <select value={adminMemberSort} onChange={(event) => setAdminMemberSort(event.target.value)}>
+                  <option value="name">並び: 名前</option>
+                  <option value="id">並び: 社員C</option>
+                  {hideGradeSelfEvalAndGradeStats ? null : <option value="grade">並び: 等級</option>}
+                  <option value="retiredFirst">並び: 退職を上</option>
+                </select>
+              </div>
+            </details>
           </div>
           <p className="adminMemberRetireHint">
             退職者は従業員管理で社員Cを「退職」または「退職_元のID」（例: 退職_e1）にすると、ここで「退職のみ」表示できます。
           </p>
-          <div className={`memberTable${hideGradeSelfEvalAndGradeStats ? ' memberTable--yakuin' : ''}`}>
+          <div
+            className={`memberTable${hideGradeSelfEvalAndGradeStats ? ' memberTable--yakuin' : ''}`}
+            role="region"
+            aria-label="従業員一覧"
+          >
             <div className="row head">
+              <span className="memberListHeadAvatar" aria-hidden />
               <span>社員C</span>
               <span>名前</span>
               <span>部署</span>
@@ -11424,32 +11517,52 @@ function AdminMockPage({
               <span>★数</span>
             </div>
             {adminFilteredMemberRows.map((member) => (
-              <div className={`row${member.retired ? ' isRetiredMember' : ''}`} key={member.id}>
-                <span className="memberIdCell" title={member.retired ? '退職扱い' : ''}>
+              <div className={`row memberListRow${member.retired ? ' isRetiredMember' : ''}`} key={member.id}>
+                <div className="memberListAvatar" aria-hidden>
+                  {directoryNameInitial(member.name)}
+                </div>
+                <span className="memberIdCell memberListColId" title={member.retired ? '退職扱い' : ''}>
                   {member.id}
                   {member.retired ? <em className="retiredBadge">退職</em> : null}
                 </span>
-                <span>
+                <span className="memberListColName">
                   <button
                     type="button"
-                    className={`memberNameButton ${selectedMemberId === member.id ? 'isActive' : ''}`}
+                    className={`memberNameButton memberListNameBtn ${selectedMemberId === member.id ? 'isActive' : ''}`}
                     title={`${member.name}の詳細へ移動`}
                     onClick={() => {
                       setSelectedMemberId(member.id)
                       onSelectMember?.(member.id)
-                      window.requestAnimationFrame(() => {
-                        window.requestAnimationFrame(() => {
-                          scrollMemberDockIntoView()
-                        })
-                      })
+                      scrollAdminMemberViewToTop()
                     }}
                   >
                     {member.name}
                   </button>
+                  <p className="memberListMetaLine">
+                    <span className="memberListMetaId">{member.id}</span>
+                    {member.retired ? (
+                      <>
+                        <span className="memberListMetaSep"> · </span>
+                        <em className="memberListMetaRetired">退職</em>
+                      </>
+                    ) : null}
+                    <span className="memberListMetaSep"> · </span>
+                    <span>{member.role}</span>
+                    <span className="memberListMetaSep"> · </span>
+                    <span>{member.dept || '—'}</span>
+                    {hideGradeSelfEvalAndGradeStats ? null : (
+                      <>
+                        <span className="memberListMetaSep"> · </span>
+                        <span>等級 {member.grade}</span>
+                      </>
+                    )}
+                    <span className="memberListMetaSep"> · </span>
+                    <span className="memberListMetaStars">★{member.stars}</span>
+                  </p>
                 </span>
-                <span>{member.dept}</span>
-                {hideGradeSelfEvalAndGradeStats ? null : <span>{member.grade}</span>}
-                <span className="stars">★ {member.stars}</span>
+                <span className="memberListColDept">{member.dept}</span>
+                {hideGradeSelfEvalAndGradeStats ? null : <span className="memberListColGrade">{member.grade}</span>}
+                <span className="stars memberListColStars">★ {member.stars}</span>
               </div>
             ))}
           </div>
@@ -11522,11 +11635,7 @@ function AdminMockPage({
                         if (!hideGradeSelfEvalAndGradeStats) setAdminMemberGrade('')
                         setSelectedMemberId(alert.id)
                         onSelectMember?.(alert.id)
-                        window.requestAnimationFrame(() => {
-                          window.requestAnimationFrame(() => {
-                            scrollMemberDockIntoView()
-                          })
-                        })
+                        scrollAdminMemberViewToTop()
                       }}
                     >
                       {alert.name}
@@ -11583,6 +11692,8 @@ function AdminMockPage({
           </div>
             </div>
           </AdminDashAccordion>
+        )}
+        </>
         )}
       </div>
     </section>
@@ -11974,15 +12085,20 @@ function EmployeeManagePage({
         </span>
       </p>
 
-      <div className={`employeeTable${hideGradeAndTotalScore ? ' employeeTable--yakuin' : ''}`}>
+      <div
+        className={`employeeTable${hideGradeAndTotalScore ? ' employeeTable--yakuin' : ''}`}
+        role="region"
+        aria-label="従業員管理一覧"
+      >
         <div className="row head">
+          <span className="employeeListHeadAvatar" aria-hidden />
           <span>ID</span>
           <span>名前</span>
           <span>部署</span>
           {hideGradeAndTotalScore ? null : (
             <>
-          <span>等級</span>
-          <span>総合得点</span>
+              <span>等級</span>
+              <span>総合得点</span>
             </>
           )}
           <span>役割</span>
@@ -11991,38 +12107,62 @@ function EmployeeManagePage({
         </div>
         {rows.map((row) => {
           const isExecutive = String(row.role ?? '').trim() === '役員'
+          const scoreLabel = isExecutive ? '役員' : scoreByEmployeeId[row.id] ?? '0.0点'
+          const gradeLabel = isExecutive ? '役員' : row.grade
           return (
-          <div className="row" key={row.id}>
-            <span>{formatLoginLikeCode(row.id)}</span>
-            <span>{row.name}</span>
-            <span>{row.dept}</span>
+            <div className="row employeeListRow" key={row.id}>
+              <div className="employeeListAvatar" aria-hidden>
+                {directoryNameInitial(row.name)}
+              </div>
+              <span className="employeeListColId">{formatLoginLikeCode(row.id)}</span>
+              <span className="employeeListColName">
+                <span className="employeeListNameText">{row.name}</span>
+                <p className="employeeListMetaLine">
+                  <span className="employeeListMetaId">{formatLoginLikeCode(row.id)}</span>
+                  <span className="employeeListMetaSep"> · </span>
+                  <span>
+                    <em className="roleTag">{row.role}</em>
+                  </span>
+                  <span className="employeeListMetaSep"> · </span>
+                  <span>{row.dept || '—'}</span>
+                  {hideGradeAndTotalScore ? null : (
+                    <>
+                      <span className="employeeListMetaSep"> · </span>
+                      <span className="employeeListMetaGrade">{gradeLabel}</span>
+                      <span className="employeeListMetaSep"> · </span>
+                      <span className="employeeListMetaScore">{scoreLabel}</span>
+                    </>
+                  )}
+                </p>
+              </span>
+              <span className="employeeListColDept">{row.dept}</span>
               {hideGradeAndTotalScore ? null : (
                 <>
-                  <span className="grade">{isExecutive ? '役員' : row.grade}</span>
-                  <span className="score">{isExecutive ? '役員' : scoreByEmployeeId[row.id] ?? '0.0点'}</span>
+                  <span className="grade employeeListColGrade">{gradeLabel}</span>
+                  <span className="score employeeListColScore">{scoreLabel}</span>
                 </>
               )}
-            <span>
-              <em className="roleTag">{row.role}</em>
-            </span>
-            <span className="passwordCell">
-              <span className="passwordText">{row.password ? formatLoginLikeCode(row.password) : '（未設定）'}</span>
-            </span>
-            <span className="actions">
-              <button type="button" className="actionIcon" onClick={() => handleStartEdit(row)} aria-label="編集">
-                ✎
-              </button>
-              <button
-                type="button"
-                className="delete"
-                title="削除（確認のあと実行）"
-                onClick={() => handleDeleteRow(row.id)}
-                aria-label="削除"
-              >
-                🗑
-              </button>
-            </span>
-          </div>
+              <span className="employeeListColRole">
+                <em className="roleTag">{row.role}</em>
+              </span>
+              <span className="passwordCell employeeListColPassword">
+                <span className="passwordText">{row.password ? formatLoginLikeCode(row.password) : '（未設定）'}</span>
+              </span>
+              <span className="actions employeeListColActions">
+                <button type="button" className="actionIcon" onClick={() => handleStartEdit(row)} aria-label="編集">
+                  ✎
+                </button>
+                <button
+                  type="button"
+                  className="delete"
+                  title="削除（確認のあと実行）"
+                  onClick={() => handleDeleteRow(row.id)}
+                  aria-label="削除"
+                >
+                  🗑
+                </button>
+              </span>
+            </div>
           )
         })}
       </div>
