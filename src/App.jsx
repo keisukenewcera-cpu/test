@@ -172,6 +172,27 @@ function compareEvalPeriodDesc(a, b) {
   return String(b).localeCompare(String(a))
 }
 
+/** 入社日（YYYY-MM-DD）の月初 0:00 ローカルを ms で返す。形式が合わなければ null */
+function parseEmployeeJoinAnchorMs(joinDateRaw) {
+  const s = String(joinDateRaw ?? '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null
+  const y = Number(s.slice(0, 4))
+  const m = Number(s.slice(5, 7)) - 1
+  if (!Number.isFinite(y) || !Number.isFinite(m) || m < 0 || m > 11) return null
+  const d = new Date(y, m, 1)
+  d.setHours(0, 0, 0, 0)
+  const ms = d.getTime()
+  return Number.isFinite(ms) ? ms : null
+}
+
+/** 評価期の基準月が入社月より前なら、その人には対象外（一覧・提案から除外） */
+function evalPeriodIsOnOrAfterJoin(periodKey, joinMs) {
+  if (joinMs == null) return true
+  const ms = evalPeriodAnchorMs(periodKey)
+  if (!Number.isFinite(ms)) return true
+  return ms >= joinMs
+}
+
 function buildDefaultMarSepEvalPeriods() {
   const y0 = new Date().getFullYear()
   const list = []
@@ -324,10 +345,16 @@ function pickRadarPeriodKeys({ activeKey, selfHist, bossHist, execHist, definiti
   return [...sliced.slice(0, Math.max(0, maxLen - 1)), active]
 }
 
-function getSuggestedEvalPeriodKey(definitions) {
+function getSuggestedEvalPeriodKey(definitions, joinDateRaw = null) {
+  const joinMs =
+    joinDateRaw != null && String(joinDateRaw).trim() ? parseEmployeeJoinAnchorMs(joinDateRaw) : null
   const all = definitions?.length ? definitions : []
   const globalLike = all.filter((d) => !d.onlyForEmployeeIds?.length)
-  const defs = globalLike.length ? globalLike : all
+  let defs = globalLike.length ? globalLike : all
+  if (joinMs != null) {
+    const filtered = defs.filter((d) => evalPeriodIsOnOrAfterJoin(d.key, joinMs))
+    if (filtered.length) defs = filtered
+  }
   const keys = defs.map((d) => String(d.key ?? '').trim()).filter(Boolean)
   if (!keys.length) {
     return ''
@@ -370,8 +397,13 @@ function buildEvalPeriodSelectOptionList({
   supervisorEvalHistoryByEmployee,
   extraPeriods,
   forEmployeeId,
+  forEmployeeJoinDate,
 }) {
   const fid = String(forEmployeeId ?? '').trim()
+  const joinMs =
+    fid && forEmployeeJoinDate != null && String(forEmployeeJoinDate).trim()
+      ? parseEmployeeJoinAnchorMs(forEmployeeJoinDate)
+      : null
   const fromDefs = (definitions ?? [])
     .filter((d) => {
       const ids = d.onlyForEmployeeIds
@@ -379,12 +411,14 @@ function buildEvalPeriodSelectOptionList({
       if (!fid) return false
       return ids.some((id) => String(id ?? '').trim() === fid)
     })
+    .filter((d) => evalPeriodIsOnOrAfterJoin(d.key, joinMs))
     .map((d) => {
       const restricted = Array.isArray(d.onlyForEmployeeIds) && d.onlyForEmployeeIds.length > 0
       const base = String(d.label ?? d.key ?? '').trim() || String(d.key)
       return {
         value: String(d.key ?? '').trim(),
         label: restricted ? `${base}（指定社員のみ）` : base,
+        optionGroup: 'settings',
       }
     })
     .filter((o) => o.value)
@@ -393,8 +427,13 @@ function buildEvalPeriodSelectOptionList({
   const addKey = (k, suffix) => {
     const v = String(k ?? '').trim()
     if (!v || seen.has(v)) return
+    if (!evalPeriodIsOnOrAfterJoin(v, joinMs)) return
     seen.add(v)
-    tail.push({ value: v, label: suffix ? `${v}（${suffix}）` : v })
+    tail.push({
+      value: v,
+      label: suffix ? `${v}（${suffix}）` : v,
+      optionGroup: 'history',
+    })
   }
   const scan = (hist, suffix) => {
     if (!hist || typeof hist !== 'object' || Array.isArray(hist)) return
@@ -409,15 +448,50 @@ function buildEvalPeriodSelectOptionList({
   scan(supervisorEvalHistoryByEmployee, '履歴')
   for (const row of extraPeriods ?? []) {
     if (!row?.key || seen.has(row.key)) continue
+    if (!evalPeriodIsOnOrAfterJoin(row.key, joinMs)) continue
     seen.add(row.key)
     tail.push({
       value: row.key,
       label: row.label ? `${row.label}（この人のみ）` : `${row.key}（この人のみ）`,
+      optionGroup: 'person',
     })
   }
   // Keep master order as-is; append non-master periods from history/extra after it.
   const tailSorted = [...tail].sort((a, b) => compareEvalPeriodDesc(a.value, b.value))
   return [...fromDefs, ...tailSorted]
+}
+
+/** @param {{ value: string, label: string, optionGroup?: string }[] | undefined} options */
+function evalPeriodOptionLabel(options, key) {
+  const k = String(key ?? '').trim()
+  if (!k) return '—'
+  const opt = (options ?? []).find((o) => String(o?.value ?? '').trim() === k)
+  return String(opt?.label ?? '').trim() || k
+}
+
+/** @param {{ value: string, label: string, optionGroup?: string }[] | undefined} options */
+function renderGroupedEvalPeriodOptions(options) {
+  const opts = options ?? []
+  const buckets = [
+    { id: 'settings', label: 'このアプリで設定した評価期', match: (o) => (o.optionGroup ?? 'settings') === 'settings' },
+    { id: 'history', label: 'データのみある期（設定にない過去）', match: (o) => o.optionGroup === 'history' },
+    { id: 'person', label: 'この人のみの追加期', match: (o) => o.optionGroup === 'person' },
+  ]
+  const out = []
+  for (const g of buckets) {
+    const items = opts.filter(g.match)
+    if (!items.length) continue
+    out.push(
+      <optgroup key={g.id} label={g.label}>
+        {items.map((opt) => (
+          <option key={opt.value} value={opt.value}>
+            {opt.label}
+          </option>
+        ))}
+      </optgroup>,
+    )
+  }
+  return out
 }
 
 function pruneEvalHistoryMapByAllowedKeys(historyMap, allowedKeySet) {
@@ -2468,9 +2542,34 @@ function App() {
     return employeeDirectoryRows[0] ?? null
   }, [employeeDirectoryRows, loggedInEmployeeId])
   const loggedInAccountLabel = loginMode === 'admin' ? '管理者' : loggedInEmployee?.name ?? '従業員'
+  const evalSubjectEmployee = useMemo(() => {
+    if (!employeeDirectoryRows.length) return null
+    const byTrimmedId = (targetId) => {
+      const t = String(targetId ?? '').trim()
+      if (!t) return undefined
+      return employeeDirectoryRows.find((row) => String(row?.id ?? '').trim() === t)
+    }
+    if ((workspaceView === 'bossEval' || workspaceView === 'execEval') && selectedEvalEmployeeId) {
+      const picked = byTrimmedId(selectedEvalEmployeeId)
+      if (picked) return picked
+    }
+    if (loggedInEmployeeId && loginMode !== 'admin') {
+      const own = byTrimmedId(loggedInEmployeeId)
+      if (own) return own
+    }
+    if (selectedEvalEmployeeId) {
+      const found = byTrimmedId(selectedEvalEmployeeId)
+      if (found) return found
+    }
+    return employeeDirectoryRows[0] ?? null
+  }, [employeeDirectoryRows, selectedEvalEmployeeId, loggedInEmployeeId, loginMode, workspaceView])
   const evalPeriodFallbackKey = useMemo(
-    () => getSuggestedEvalPeriodKey(evalPeriodDefinitions),
-    [evalPeriodDefinitions],
+    () =>
+      getSuggestedEvalPeriodKey(
+        evalPeriodDefinitions,
+        String(evalSubjectEmployee?.joinDate ?? '').trim() || null,
+      ),
+    [evalPeriodDefinitions, evalSubjectEmployee?.id, evalSubjectEmployee?.joinDate],
   )
   const requestEvalPeriodChange = useCallback(
     (nextKey) => {
@@ -2506,7 +2605,9 @@ function App() {
     : false
 
   const goalMgmtEmployee = loggedInEmployee
-  const goalMgmtPeriodKey = String(activeEvalPeriodKey ?? getSuggestedEvalPeriodKey(evalPeriodDefinitions) ?? '').trim()
+  const goalMgmtPeriodKey = String(
+    activeEvalPeriodKey ?? getSuggestedEvalPeriodKey(evalPeriodDefinitions, goalMgmtEmployee?.joinDate) ?? '',
+  ).trim()
   const goalMgmtGoals = useMemo(
     () => (goalMgmtEmployee && goalMgmtPeriodKey ? goalsByEmployeePeriod?.[goalMgmtEmployee.id]?.[goalMgmtPeriodKey] ?? [] : []),
     [goalMgmtEmployee, goalMgmtPeriodKey, goalsByEmployeePeriod],
@@ -2723,7 +2824,9 @@ function App() {
       if (goalMgmtSubmittedForActive) return
       setGoalsByEmployeePeriod((prev) => {
         const emp = goalMgmtEmployee
-        const periodKey = String(activeEvalPeriodKey ?? getSuggestedEvalPeriodKey(evalPeriodDefinitions) ?? '').trim()
+        const periodKey = String(
+          activeEvalPeriodKey ?? getSuggestedEvalPeriodKey(evalPeriodDefinitions, emp?.joinDate) ?? '',
+        ).trim()
         if (!emp || !periodKey) return prev
         const cur = prev?.[emp.id]?.[periodKey] ?? []
         const next = typeof updater === 'function' ? updater(cur) : updater
@@ -2743,7 +2846,9 @@ function App() {
       if (goalMgmtSubmittedForActive) return
       setGoalDirectionByEmployeePeriod((prev) => {
         const emp = goalMgmtEmployee
-        const periodKey = String(activeEvalPeriodKey ?? getSuggestedEvalPeriodKey(evalPeriodDefinitions) ?? '').trim()
+        const periodKey = String(
+          activeEvalPeriodKey ?? getSuggestedEvalPeriodKey(evalPeriodDefinitions, emp?.joinDate) ?? '',
+        ).trim()
         if (!emp || !periodKey) return prev
         const v = String(nextValue ?? '').trim()
         if (!v) {
@@ -2771,7 +2876,9 @@ function App() {
       if (goalMgmtSubmittedForActive) return
       setGoalFocusMajorByEmployeePeriod((prev) => {
         const emp = goalMgmtEmployee
-        const periodKey = String(activeEvalPeriodKey ?? getSuggestedEvalPeriodKey(evalPeriodDefinitions) ?? '').trim()
+        const periodKey = String(
+          activeEvalPeriodKey ?? getSuggestedEvalPeriodKey(evalPeriodDefinitions, emp?.joinDate) ?? '',
+        ).trim()
         if (!emp || !periodKey) return prev
         const v = String(nextValue ?? '').trim()
         if (!v) {
@@ -2794,28 +2901,6 @@ function App() {
     },
     [goalMgmtEmployee, activeEvalPeriodKey, evalPeriodDefinitions, goalMgmtSubmittedForActive],
   )
-  const evalSubjectEmployee = useMemo(() => {
-    if (!employeeDirectoryRows.length) return null
-    const byTrimmedId = (targetId) => {
-      const t = String(targetId ?? '').trim()
-      if (!t) return undefined
-      return employeeDirectoryRows.find((row) => String(row?.id ?? '').trim() === t)
-    }
-    // 上司評価・経営層評価では、管理者ダッシュから指定した対象者を優先する
-    if ((workspaceView === 'bossEval' || workspaceView === 'execEval') && selectedEvalEmployeeId) {
-      const picked = byTrimmedId(selectedEvalEmployeeId)
-      if (picked) return picked
-    }
-    if (loggedInEmployeeId && loginMode !== 'admin') {
-      const own = byTrimmedId(loggedInEmployeeId)
-      if (own) return own
-    }
-    if (selectedEvalEmployeeId) {
-      const found = byTrimmedId(selectedEvalEmployeeId)
-      if (found) return found
-    }
-    return employeeDirectoryRows[0] ?? null
-  }, [employeeDirectoryRows, selectedEvalEmployeeId, loggedInEmployeeId, loginMode, workspaceView])
 
   const evalPeriodSelectOptions = useMemo(
     () =>
@@ -2825,14 +2910,39 @@ function App() {
         supervisorEvalHistoryByEmployee,
         extraPeriods: normalizeExtraEvalPeriodsForEmployee(evalSubjectEmployee),
         forEmployeeId: evalSubjectEmployee?.id,
+        forEmployeeJoinDate: evalSubjectEmployee?.joinDate,
       }),
     [
       evalPeriodDefinitions,
       selfEvalHistoryByEmployee,
       supervisorEvalHistoryByEmployee,
-      evalSubjectEmployee,
+      evalSubjectEmployee?.id,
+      evalSubjectEmployee?.joinDate,
     ],
   )
+
+  useEffect(() => {
+    const opts = evalPeriodSelectOptions ?? []
+    const allowed = new Set(opts.map((o) => String(o?.value ?? '').trim()).filter(Boolean))
+    if (!allowed.size) return
+    const cur = String(activeEvalPeriodKey ?? '').trim()
+    if (!cur || allowed.has(cur)) return
+    const join = String(evalSubjectEmployee?.joinDate ?? '').trim() || null
+    const next = getSuggestedEvalPeriodKey(evalPeriodDefinitions, join)
+    if (next && allowed.has(next)) {
+      setActiveEvalPeriodKey(next)
+      return
+    }
+    const first = String(opts[0]?.value ?? '').trim()
+    if (first) setActiveEvalPeriodKey(first)
+  }, [
+    evalPeriodSelectOptions,
+    activeEvalPeriodKey,
+    evalSubjectEmployee?.id,
+    evalSubjectEmployee?.joinDate,
+    evalPeriodDefinitions,
+    setActiveEvalPeriodKey,
+  ])
 
   const evalGradeByEmployeeId = useMemo(() => {
     const map = {}
@@ -7880,6 +7990,11 @@ function EvalQuestionnairePage({
   const isExec = variant === 'exec'
   const evalTitle = isExec ? '2次評価(経営層)' : isBoss ? '1次評価(上司)' : '自己評価'
   const employee = useMemo(() => (employees.length ? employees[0] : null), [employees])
+  const resolvedPeriodKey = String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '').trim()
+  const resolvedPeriodLabel = useMemo(
+    () => evalPeriodOptionLabel(evalPeriodSelectOptions, resolvedPeriodKey),
+    [evalPeriodSelectOptions, resolvedPeriodKey],
+  )
 
   const scores = evalState?.scores ?? {}
   const comments = evalState?.comments ?? {}
@@ -7974,6 +8089,36 @@ function EvalQuestionnairePage({
     cat.items.filter((it) => String(scores[it.id] ?? '').trim() !== '').length
 
   const allComplete = evaluatedCount >= totalCount
+
+  const handleEvalPeriodSelectChange = useCallback(
+    (event) => {
+      const next = String(event.target.value ?? '').trim()
+      const current = String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '').trim()
+      if (!setActiveEvalPeriodKey) return
+      if (!next) {
+        setActiveEvalPeriodKey('')
+        return
+      }
+      if (next === current) return
+      const curLab = evalPeriodOptionLabel(evalPeriodSelectOptions, current)
+      const nextLab = evalPeriodOptionLabel(evalPeriodSelectOptions, next)
+      let msg = `評価期を切り替えます。\n\n● 現在: ${curLab}\n● 切替先: ${nextLab}\n\n切替先の期に保存済みの内容があればそれを表示します。\n「OK」で切り替え、「キャンセル」で取りやめます。`
+      if (!isSubmittedForPeriod && evaluatedCount > 0) {
+        msg += `\n\n【注意】この期では未提出のまま${evaluatedCount}項目へ入力があります（いま編集中なのは上記の「現在」です）。`
+      }
+      if (!window.confirm(msg)) return
+      setActiveEvalPeriodKey(next)
+    },
+    [
+      activeEvalPeriodKey,
+      evalPeriodFallbackKey,
+      evalPeriodSelectOptions,
+      setActiveEvalPeriodKey,
+      isSubmittedForPeriod,
+      evaluatedCount,
+    ],
+  )
+
   const bulkCopySourceLabel = isExec ? '1次評価(上司)' : isBoss ? '自己評価' : ''
   const bulkCopyTargetLabel = isExec ? '2次評価(経営層)' : isBoss ? '1次評価(上司)' : ''
   const bulkCopyFromCurrentPeriod = useCallback(() => {
@@ -8156,11 +8301,14 @@ function EvalQuestionnairePage({
   }
 
   const guideLinesSelf = [
+    '画面上部の「いま編集している評価期」を必ず確認してから入力してください（期を変えると確認ダイアログが出ます）',
+    '従業員管理の入社日が入っている場合、入社月より前の評価期は一覧に表示されません（入社前の期の未完了を求められることはありません）',
     '各項目について、1～5点で自己評価してください',
     '点数の基準は「詳細を表示」ボタンで確認できます',
   ]
 
   const guideLinesBoss = [
+    '画面上部の「いま編集している評価期」を必ず確認してください（期を変えると確認ダイアログが出ます）',
     '各項目について、1～5点で評価してください',
     '被評価者の自己評価点数は各項目に参考として表示されます（自己評価タブで入力）',
     '評価の根拠やコメントを入力してください',
@@ -8180,18 +8328,22 @@ function EvalQuestionnairePage({
           <span className="selfEvalPeriodFieldControl">
             <select
               value={activeEvalPeriodKey ?? evalPeriodFallbackKey ?? ''}
-              onChange={(event) => setActiveEvalPeriodKey?.(event.target.value)}
+              onChange={handleEvalPeriodSelectChange}
+              aria-describedby="eval-active-period-banner"
             >
-              {(evalPeriodSelectOptions ?? []).map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
+              {renderGroupedEvalPeriodOptions(evalPeriodSelectOptions)}
             </select>
             {isPeriodSwitching ? <span className="evalPeriodSwitchSpinner" aria-label="評価期切替中" /> : null}
           </span>
         </label>
       </header>
+      <div className="selfEvalActivePeriodBanner" id="eval-active-period-banner" role="status">
+        <span className="selfEvalActivePeriodBannerLabel">いま編集している評価期</span>
+        <span className="selfEvalActivePeriodBannerValue">{resolvedPeriodLabel}</span>
+        <code className="selfEvalActivePeriodBannerKey" title="内部キー（表記が似ている期の見分け用）">
+          {resolvedPeriodKey || '—'}
+        </code>
+      </div>
       <div className="selfEvalGuide">
         <p className="selfEvalGuideTitle">
           <span className="selfEvalGuideIcon" aria-hidden>
@@ -8379,6 +8531,13 @@ function EvalQuestionnairePage({
 
       {typeof onSubmitEvaluation === 'function' ? (
         <div className="selfEvalSubmitBar">
+          <p className="selfEvalSubmitHint selfEvalSubmitHint--periodTarget">
+            提出の対象となる評価期: <strong>{resolvedPeriodLabel}</strong>
+            <span className="selfEvalSubmitPeriodKeyWrap">
+              {' '}
+              （キー <code>{resolvedPeriodKey || '—'}</code>）
+            </span>
+          </p>
           <button
             type="button"
             className={`selfEvalSubmitBtn${isSubmittedForPeriod ? ' isLocked' : ''}`}
@@ -8737,6 +8896,41 @@ function GoalManagementPage({
   const achieved = useMemo(() => normalizedGoals.filter((g) => g.achieved).length, [normalizedGoals])
   const ratePct = total === 0 ? 0 : Math.round((achieved / total) * 100)
   const isGoalMgmtLocked = Boolean(isSubmittedForPeriod)
+  const resolvedPeriodKeyGoals = String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '').trim()
+  const resolvedPeriodLabelGoals = useMemo(
+    () => evalPeriodOptionLabel(evalPeriodSelectOptions, resolvedPeriodKeyGoals),
+    [evalPeriodSelectOptions, resolvedPeriodKeyGoals],
+  )
+  const handleGoalPeriodSelectChange = useCallback(
+    (event) => {
+      const next = String(event.target.value ?? '').trim()
+      const current = String(activeEvalPeriodKey ?? evalPeriodFallbackKey ?? '').trim()
+      if (!setActiveEvalPeriodKey) return
+      if (!next || next === current) return
+      const curLab = evalPeriodOptionLabel(evalPeriodSelectOptions, current)
+      const nextLab = evalPeriodOptionLabel(evalPeriodSelectOptions, next)
+      const dir = String(periodDirectionGoal ?? '').trim()
+      const hasDraft = !isSubmittedForPeriod && (total > 0 || Boolean(dir))
+      let msg = `評価期を切り替えます。\n\n● 現在: ${curLab}\n● 切替先: ${nextLab}\n\n目標・方針は評価期ごとに別データです。\n「OK」で切り替え、「キャンセル」で取りやめます。`
+      if (hasDraft) {
+        const parts = []
+        if (total > 0) parts.push(`この期の目標 ${total}件`)
+        if (dir) parts.push('今期の方針テキスト')
+        msg += `\n\n【注意】${parts.join('・')}があります。切替先では別の内容が表示されます。`
+      }
+      if (!window.confirm(msg)) return
+      setActiveEvalPeriodKey(next)
+    },
+    [
+      activeEvalPeriodKey,
+      evalPeriodFallbackKey,
+      evalPeriodSelectOptions,
+      setActiveEvalPeriodKey,
+      isSubmittedForPeriod,
+      total,
+      periodDirectionGoal,
+    ],
+  )
   const focusMajorOptions = useMemo(() => {
     const latestRows = Array.isArray(radarSeries?.[0]?.rows) ? radarSeries[0].rows : []
     return latestRows
@@ -8863,16 +9057,20 @@ function GoalManagementPage({
           評価期
           <select
             value={activeEvalPeriodKey ?? evalPeriodFallbackKey ?? ''}
-            onChange={(event) => setActiveEvalPeriodKey?.(event.target.value)}
+            onChange={handleGoalPeriodSelectChange}
+            aria-describedby="goal-mgmt-active-period-banner"
           >
-            {(evalPeriodSelectOptions ?? []).map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
+            {renderGroupedEvalPeriodOptions(evalPeriodSelectOptions)}
           </select>
         </label>
       </header>
+      <div className="selfEvalActivePeriodBanner goalMgmtActivePeriodBanner" id="goal-mgmt-active-period-banner" role="status">
+        <span className="selfEvalActivePeriodBannerLabel">いま編集している評価期</span>
+        <span className="selfEvalActivePeriodBannerValue">{resolvedPeriodLabelGoals}</span>
+        <code className="selfEvalActivePeriodBannerKey" title="内部キー（表記が似ている期の見分け用）">
+          {resolvedPeriodKeyGoals || '—'}
+        </code>
+      </div>
       {Array.isArray(radarSeries) && radarSeries.length > 0 ? (
         <section className="goalMgmtRadarCard">
           <MemberEvalRadarChart
@@ -9916,12 +10114,11 @@ function AdminMockPage({
         dept: row.dept,
         grade: row.grade,
         score: row.score,
-        stars: calcEmployeeSkillStars(skills, skillProgress?.[row.id] ?? {}),
         role: row.role ?? '一般従業員',
         joinDate: row.joinDate ?? '',
         retired: isEmployeeDirectoryRetired(row),
       })),
-    [directoryRows, skills, skillProgress],
+    [directoryRows],
   )
 
   const adminDeptOptions = useMemo(() => {
@@ -10088,6 +10285,7 @@ function AdminMockPage({
       supervisorEvalHistoryByEmployee,
       extraPeriods: normalizeExtraEvalPeriodsForEmployee(full),
       forEmployeeId: empId,
+      forEmployeeJoinDate: full?.joinDate,
     })
     const activeCandidate = String(activeEvalPeriodKey ?? '').trim()
     const hasActiveCandidate = memberPeriodOptions.some((opt) => String(opt?.value ?? '').trim() === activeCandidate)
@@ -10140,11 +10338,13 @@ function AdminMockPage({
       supervisorEvalHistoryByEmployee,
       extraPeriods: normalizeExtraEvalPeriodsForEmployee(full),
       forEmployeeId: selectedMember?.id,
+      forEmployeeJoinDate: full?.joinDate,
     })
   }, [
     evalPeriodDefinitions,
     directoryRows,
     selectedMember?.id,
+    selectedMember?.joinDate,
     selfEvalHistoryByEmployee,
     supervisorEvalHistoryByEmployee,
   ])
@@ -11514,7 +11714,6 @@ function AdminMockPage({
               <span>名前</span>
               <span>部署</span>
               {hideGradeSelfEvalAndGradeStats ? null : <span>等級</span>}
-              <span>★数</span>
             </div>
             {adminFilteredMemberRows.map((member) => (
               <div className={`row memberListRow${member.retired ? ' isRetiredMember' : ''}`} key={member.id}>
@@ -11522,7 +11721,7 @@ function AdminMockPage({
                   {directoryNameInitial(member.name)}
                 </div>
                 <span className="memberIdCell memberListColId" title={member.retired ? '退職扱い' : ''}>
-                  {member.id}
+                  {formatLoginLikeCode(member.id)}
                   {member.retired ? <em className="retiredBadge">退職</em> : null}
                 </span>
                 <span className="memberListColName">
@@ -11539,7 +11738,7 @@ function AdminMockPage({
                     {member.name}
                   </button>
                   <p className="memberListMetaLine">
-                    <span className="memberListMetaId">{member.id}</span>
+                    <span className="memberListMetaId">{formatLoginLikeCode(member.id)}</span>
                     {member.retired ? (
                       <>
                         <span className="memberListMetaSep"> · </span>
@@ -11556,13 +11755,10 @@ function AdminMockPage({
                         <span>等級 {member.grade}</span>
                       </>
                     )}
-                    <span className="memberListMetaSep"> · </span>
-                    <span className="memberListMetaStars">★{member.stars}</span>
                   </p>
                 </span>
                 <span className="memberListColDept">{member.dept}</span>
                 {hideGradeSelfEvalAndGradeStats ? null : <span className="memberListColGrade">{member.grade}</span>}
-                <span className="stars memberListColStars">★ {member.stars}</span>
               </div>
             ))}
           </div>
@@ -12092,7 +12288,7 @@ function EmployeeManagePage({
       >
         <div className="row head">
           <span className="employeeListHeadAvatar" aria-hidden />
-          <span>ID</span>
+          <span>社員C</span>
           <span>名前</span>
           <span>部署</span>
           {hideGradeAndTotalScore ? null : (

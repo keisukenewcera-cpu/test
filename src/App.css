@@ -1705,6 +1705,8 @@ select:focus {
 
 .filtersAdminMemberSearchLabel {
   display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 8px;
   min-width: 0;
@@ -1717,7 +1719,9 @@ select:focus {
 }
 
 .filtersAdminMemberSearchIcon {
-  flex-shrink: 0;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
   font-size: 15px;
   line-height: 1;
   opacity: 0.5;
@@ -1832,11 +1836,6 @@ select:focus {
   font-size: 11px;
 }
 
-.memberListMetaStars {
-  font-weight: 700;
-  color: #b45309;
-}
-
 .memberListColName {
   min-width: 0;
 }
@@ -1847,7 +1846,7 @@ select:focus {
 
 .memberTable .row {
   display: grid;
-  grid-template-columns: 44px minmax(0, 0.88fr) minmax(0, 1.12fr) minmax(0, 0.92fr) 0.62fr 0.62fr;
+  grid-template-columns: 44px minmax(0, 0.88fr) minmax(0, 1.12fr) minmax(0, 0.92fr) 0.62fr;
   gap: 10px;
   padding: 9px 10px;
   border-top: 1px solid #edf0f8;
@@ -1856,7 +1855,7 @@ select:focus {
 }
 
 .memberTable.memberTable--yakuin .row {
-  grid-template-columns: 44px minmax(0, 0.88fr) minmax(0, 1.28fr) minmax(0, 0.95fr) 0.62fr;
+  grid-template-columns: 44px minmax(0, 0.88fr) minmax(0, 1.28fr) minmax(0, 0.95fr);
 }
 
 .memberTable .row.isRetiredMember {
@@ -1900,11 +1899,6 @@ select:focus {
 
 .memberTable .score {
   color: #b91c1c;
-  font-weight: 700;
-}
-
-.memberTable .stars {
-  color: #b45309;
   font-weight: 700;
 }
 
@@ -4808,6 +4802,65 @@ select:focus {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+}
+
+.selfEvalActivePeriodBanner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 14px;
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid #93c5fd;
+  background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+  font-size: 13px;
+  line-height: 1.45;
+  color: #1e3a8a;
+}
+
+.goalMgmtActivePeriodBanner {
+  margin-bottom: 18px;
+}
+
+.selfEvalActivePeriodBannerLabel {
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.selfEvalActivePeriodBannerValue {
+  font-weight: 800;
+  font-size: 15px;
+  color: #0f172a;
+}
+
+.selfEvalActivePeriodBannerKey {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: #ffffffcc;
+  border: 1px solid #bfdbfe;
+  font-size: 11px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.selfEvalSubmitHint--periodTarget {
+  margin: 0 0 10px;
+  font-weight: 600;
+  color: #1e40af;
+}
+
+.selfEvalSubmitPeriodKeyWrap code {
+  font-size: 11px;
+  font-weight: 700;
+  color: #475569;
+}
+
+@media (max-width: 640px) {
+  .selfEvalActivePeriodBannerKey {
+    margin-left: 0;
+  }
 }
 
 .evalPeriodSwitchSpinner {
@@ -8239,7 +8292,7 @@ select:focus {
   }
 
   .memberTable .row {
-    grid-template-columns: 44px 0.85fr 1.1fr 0.75fr 0.55fr 0.55fr;
+    grid-template-columns: 44px 0.85fr 1.1fr 0.75fr 0.55fr;
     gap: 6px;
     font-size: 11px;
   }
@@ -8249,7 +8302,7 @@ select:focus {
   }
 
   .memberTable.memberTable--yakuin .row {
-    grid-template-columns: 44px 0.85fr 1.1fr 0.75fr 0.55fr;
+    grid-template-columns: 44px 0.85fr 1.1fr 0.75fr;
   }
 
   .listHeader h3 {
@@ -8666,21 +8719,22 @@ select:focus {
     position: relative;
     display: flex;
     flex-direction: row;
-    flex-wrap: wrap;
-    align-items: stretch;
+    flex-wrap: nowrap;
+    align-items: center;
     gap: 0;
-    margin-bottom: 14px;
+    margin-bottom: 12px;
     border: 1px solid #d1d5db;
-    border-radius: 12px;
+    border-radius: 10px;
     background: #ffffff;
     overflow: visible;
     box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+    min-height: 0;
   }
 
   .filters.filtersAdminMember > .filtersAdminMemberNarrow {
     display: block;
     flex: 0 0 auto;
-    width: min(112px, 28vw);
+    width: auto;
     min-width: 0;
     margin: 0;
     border: none;
@@ -8689,24 +8743,24 @@ select:focus {
     background: #fafafa;
     overflow: visible;
     box-shadow: none;
-    align-self: stretch;
+    align-self: center;
   }
 
   .filtersAdminMemberNarrowSummary {
     display: flex;
+    flex-direction: row;
     align-items: center;
     justify-content: center;
-    flex-direction: column;
-    gap: 0;
-    min-height: 100%;
-    padding: 6px 6px;
+    gap: 4px;
+    min-height: 0;
+    padding: 8px 12px;
     margin: 0;
     cursor: pointer;
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 700;
     color: #0f172a;
     line-height: 1.2;
-    text-align: center;
+    white-space: nowrap;
     list-style: none;
     background: #fafafa;
     border-bottom: none;
@@ -8718,15 +8772,14 @@ select:focus {
   }
 
   .filtersAdminMemberNarrowSummaryLabel {
-    display: block;
+    display: inline;
   }
 
   .filtersAdminMemberNarrowSummaryChevron {
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 700;
     color: #64748b;
     line-height: 1;
-    margin-top: 1px;
   }
 
   .filters.filtersAdminMember .filtersAdminMemberSelects {
@@ -8757,25 +8810,32 @@ select:focus {
 
   .filtersAdminMemberSearchLabel {
     flex: 1 1 auto;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 6px;
     min-width: 0;
-    padding: 0 8px 0 10px;
+    padding: 0 6px 0 10px;
     border: none;
     border-radius: 0;
     background: #ffffff;
     box-shadow: none;
     min-height: 0;
-    align-items: center;
   }
 
   .filters.filtersAdminMember .filtersAdminMemberSearchIcon {
-    font-size: 13px;
-    opacity: 0.45;
+    flex: 0 0 auto;
+    font-size: 15px;
+    line-height: 1;
+    opacity: 0.48;
   }
 
   .filtersAdminMemberSearchLabel input {
-    padding: 7px 0 7px 2px;
-    font-size: 15px;
-    line-height: 1.3;
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 8px 4px 8px 0;
+    font-size: 16px;
+    line-height: 1.25;
     min-height: 0;
   }
 
@@ -8917,8 +8977,7 @@ select:focus {
 
   .memberListColId,
   .memberListColDept,
-  .memberListColGrade,
-  .memberListColStars {
+  .memberListColGrade {
     display: none !important;
   }
 
@@ -8949,11 +9008,6 @@ select:focus {
 
   .memberListMetaLine .memberListMetaRetired {
     font-size: 10px;
-  }
-
-  .memberListMetaLine .memberListMetaStars {
-    font-size: 10px;
-    color: #ca8a04;
   }
 
   .memberListNameBtn {
